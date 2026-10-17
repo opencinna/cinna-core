@@ -101,6 +101,11 @@ SECRET = "a file that can hold a password or key, so it can't be shared."
             "This change includes the agent's app-data folder (its private working files), "
             "which can't be shared.",
         ),
+        (
+            "artifacts/q3-dashboard/index.html",
+            "This change includes the agent's artifacts folder (what it built to publish), "
+            "which stays with you and can't be shared. Share a published artifact from its page instead.",
+        ),
     ],
 )
 def test_refuses_secret_and_never_travels_paths(shared: Shared, path: str, sentence: str) -> None:

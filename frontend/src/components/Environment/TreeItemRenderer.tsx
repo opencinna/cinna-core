@@ -1,5 +1,6 @@
 import { useEffect } from "react"
-import { ChevronDown, ChevronRight, Folder, FolderOpen, Download, Table2, Loader2 } from "lucide-react"
+import { ChevronDown, ChevronRight, Folder, FolderOpen, Download, Shapes, Table2, Loader2, type LucideIcon } from "lucide-react"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { FileIcon } from "./FileIcon"
 import type { TreeItem, DatabaseTableItem } from "./types"
 
@@ -14,6 +15,40 @@ interface TreeItemRendererProps {
   databaseTables?: Record<string, { tables: DatabaseTableItem[], loading: boolean, error: string | null }>
   onFetchDatabaseTables?: (path: string) => void
   isGuest?: boolean
+  /** "Publish as artifact" (owner of the agent only); absent hides the action. */
+  onPublish?: (path: string, isFolder: boolean) => void
+}
+
+/** A hover-revealed row action: a real button with a tooltip and a label. */
+function RowIconAction({
+  icon: Icon,
+  label,
+  onClick,
+}: {
+  icon: LucideIcon
+  label: string
+  onClick: () => void
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label={label}
+          className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 shrink-0 p-0 rounded-sm hover:text-foreground text-muted-foreground transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          onClick={(e) => {
+            e.stopPropagation()
+            onClick()
+          }}
+        >
+          <Icon className="h-4 w-4" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="text-xs">
+        {label}
+      </TooltipContent>
+    </Tooltip>
+  )
 }
 
 export function TreeItemRenderer({
@@ -27,6 +62,7 @@ export function TreeItemRenderer({
   databaseTables,
   onFetchDatabaseTables,
   isGuest,
+  onPublish,
 }: TreeItemRendererProps) {
   const currentPath = path ? `${path}/${item.name}` : item.name
   const isExpanded = expandedFolders.has(currentPath)
@@ -55,16 +91,20 @@ export function TreeItemRenderer({
               {item.size}
             </span>
           </div>
-          <button
-            className="opacity-0 group-hover:opacity-100 shrink-0 p-0 hover:text-foreground text-muted-foreground transition-colors ml-1"
-            onClick={(e) => {
-              e.stopPropagation()
-              onDownload(currentPath)
-            }}
-            title="Download folder"
-          >
-            <Download className="h-4 w-4" />
-          </button>
+          <div className="flex shrink-0 items-center gap-1.5 ml-1">
+            {onPublish && !isGuest && (
+              <RowIconAction
+                icon={Shapes}
+                label="Publish as artifact"
+                onClick={() => onPublish(currentPath, true)}
+              />
+            )}
+            <RowIconAction
+              icon={Download}
+              label="Download folder"
+              onClick={() => onDownload(currentPath)}
+            />
+          </div>
         </div>
         {isExpanded && item.children.map((child, index) => (
           <TreeItemRenderer
@@ -79,6 +119,7 @@ export function TreeItemRenderer({
             databaseTables={databaseTables}
             onFetchDatabaseTables={onFetchDatabaseTables}
             isGuest={isGuest}
+            onPublish={onPublish}
           />
         ))}
       </>
@@ -158,16 +199,18 @@ export function TreeItemRenderer({
             <span className="text-xs text-muted-foreground/60 opacity-0 group-hover:opacity-100 transition-opacity shrink-0 ml-auto">
               {item.size}
             </span>
-            <button
-              className="opacity-0 group-hover:opacity-100 shrink-0 p-0 hover:text-foreground text-muted-foreground transition-colors"
-              onClick={(e) => {
-                e.stopPropagation()
-                onDownload(currentPath)
-              }}
-              title="Download"
-            >
-              <Download className="h-4 w-4" />
-            </button>
+            {onPublish && !isGuest && (
+              <RowIconAction
+                icon={Shapes}
+                label="Publish as artifact"
+                onClick={() => onPublish(currentPath, false)}
+              />
+            )}
+            <RowIconAction
+              icon={Download}
+              label="Download"
+              onClick={() => onDownload(currentPath)}
+            />
           </div>
         </div>
         {/* Render database tables when expanded */}
@@ -236,16 +279,18 @@ export function TreeItemRenderer({
         <span className="text-xs text-muted-foreground/60 opacity-0 group-hover:opacity-100 transition-opacity shrink-0 ml-auto">
           {item.size}
         </span>
-        <button
-          className="opacity-0 group-hover:opacity-100 shrink-0 p-0 hover:text-foreground text-muted-foreground transition-colors"
-          onClick={(e) => {
-            e.stopPropagation()
-            onDownload(currentPath)
-          }}
-          title="Download"
-        >
-          <Download className="h-4 w-4" />
-        </button>
+        {onPublish && !isGuest && (
+          <RowIconAction
+            icon={Shapes}
+            label="Publish as artifact"
+            onClick={() => onPublish(currentPath, false)}
+          />
+        )}
+        <RowIconAction
+          icon={Download}
+          label="Download"
+          onClick={() => onDownload(currentPath)}
+        />
       </div>
     </div>
   )

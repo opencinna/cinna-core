@@ -45,6 +45,7 @@ to stay silent about, and what to do when there is nothing to report.
 
 - Runtime output goes to `app-data/storage/`.
 - Rebuildable snapshots go to `app-data/cache/`.
+- Anything meant to be published as a Cinna artifact is built under `artifacts/<name>/`.
 - Tunable parameters are read from `config/`, never hardcoded.
 
 ## Rules

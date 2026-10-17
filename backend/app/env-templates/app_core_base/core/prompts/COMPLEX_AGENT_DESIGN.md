@@ -46,6 +46,8 @@ Everything lives under `/app/workspace/`. Keep the workspace root clean: only ad
 │   │   └── <area>/
 │   └── cache/                  #   Disposable snapshots of external data
 │       └── <area>/
+├── artifacts/                  # Per-user runtime — what the agent builds to publish (artifacts_publish), never shipped
+│   └── <name>/
 ├── credentials/                # See main prompt — access programmatically only
 ├── webapp/                     # Optional, see WEBAPP_BUILDING.md
 └── workspace_requirements.txt  # Persistent Python dependencies
@@ -54,7 +56,7 @@ Everything lives under `/app/workspace/`. Keep the workspace root clean: only ad
 Rules:
 
 - **Runtime output never goes into bundle-owned folders** (`docs/`, `skills/`, `scripts/`, `knowledge/`, `config/`, `files/`) — they are replaced whenever the publisher pushes an update. Durable results and state go to `./app-data/storage/<area>/`; anything rebuildable goes to `./app-data/cache/<area>/`.
-- **Never create `cache/` or `data/` at the workspace root**, or any other runtime-data folder beside `app-data/`.
+- **Never create `cache/` or `data/` at the workspace root**, or any other runtime-data folder beside `app-data/`. The one exception is `artifacts/<name>/`, where the agent builds what it publishes as a Cinna artifact.
 - **Do not create `.venv`, `node_modules`, or other tooling folders** — the platform manages the runtime.
 - **Do not create a `Makefile`, `pyproject.toml`, or `uv.lock`** in the workspace. Dependencies are declared in `./workspace_requirements.txt`; scripts run as `uv run --quiet python /app/workspace/scripts/...`.
 - Agents built earlier keep caches, config and results under `./files/cache/`, `./files/config/` and `./files/data/`. They still run. Move runtime output to `app-data/` when you next touch the script that writes it (an update would otherwise wipe it); shipped config may stay where it is.

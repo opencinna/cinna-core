@@ -58,8 +58,12 @@ const handleApiError = async (error: Error) => {
   if (!(error instanceof ApiError) || ![401, 403].includes(error.status)) {
     return
   }
-  // Don't redirect to login if we're on a guest share page
-  if (window.location.pathname.startsWith("/guest/")) {
+  // Don't redirect to login if we're on a guest share page, or on a public
+  // artifact link — a wrong link code answers 403 to a signed-out visitor.
+  if (
+    window.location.pathname.startsWith("/guest/") ||
+    window.location.pathname.startsWith("/s/")
+  ) {
     return
   }
   if (redirectingToLogin) return

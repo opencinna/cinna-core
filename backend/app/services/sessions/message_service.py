@@ -69,6 +69,9 @@ PRE_ALLOWED_TOOLS = frozenset([
     "mcp__cinna__tasks_comment",
     "mcp__cinna__tasks_report",
     "mcp__cinna__tasks_reply",
+    # Cinna artifacts tool (MCP server "cinna") — both forms
+    "mcp__cinna__artifacts_publish",
+    "cinna_artifacts_publish",
     # Cinna Task Protocol tools — OpenCode form ({server}_{tool})
     "cinna_tasks_targets",
     "cinna_tasks_list",

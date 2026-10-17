@@ -208,6 +208,76 @@ Auto-generated from OpenAPI spec. Tag: `cli`
 
 ---
 
+## POST `/api/v1/cli/account/artifacts`
+**Account Create Artifact**
+
+> Not available via `cinna api` (excluded_path).
+
+**Request body** (`Body_cli-account_create_artifact`):
+  - `title`: string (required)
+  - `description`: string | null
+  - `entry_path`: string | null
+  - `source_kind`: "desktop" | "cli"
+  - `source_label`: string | null
+  - `user_workspace_id`: string | null
+  - `archive`: string | null
+  - `files`: array | null
+
+**Response:** `ArtifactPublished`
+
+---
+
+## POST `/api/v1/cli/account/artifacts/{artifact_id}/revisions`
+**Account Republish Artifact**
+
+> Not available via `cinna api` (excluded_path).
+
+**Path parameters:**
+- `artifact_id`: uuid
+
+**Request body** (`Body_cli-account_republish_artifact`):
+  - `note`: string | null
+  - `entry_path`: string | null
+  - `title`: string | null
+  - `description`: string | null
+  - `archive`: string | null
+  - `files`: array | null
+
+**Response:** `ArtifactPublished`
+
+---
+
+## GET `/api/v1/cli/account/artifacts/{artifact_id}/download`
+**Account Download Artifact**
+
+> Not available via `cinna api` (excluded_path).
+
+**Path parameters:**
+- `artifact_id`: uuid
+
+**Query parameters:**
+- `rev`: integer | null
+
+---
+
+## POST `/api/v1/cli/account/artifacts/{artifact_id}/links`
+**Account Create Artifact Link**
+
+> Not available via `cinna api` (excluded_path).
+
+**Path parameters:**
+- `artifact_id`: uuid
+
+**Request body** (`ArtifactLinkCreate`):
+  - `label`: string | null
+  - `expires_at`: string | null
+  - `with_code`: boolean
+  - `pinned_revision_id`: string | null
+
+**Response:** `ArtifactLinkCreated`
+
+---
+
 ## POST `/api/v1/cli/account/agents/{agent_id}/mint`
 **Mint Child Token**
 

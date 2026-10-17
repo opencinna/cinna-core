@@ -74,6 +74,17 @@ CINNA_TASK_TOOL_NAMES_OPENCODE: tuple[str, ...] = tuple(
     f"{CINNA_TASKS_SERVER}_{name}" for name in CINNA_TASK_TOOLS
 )
 
+# The artifacts tool on the same "cinna" server (core/protocols/
+# artifacts.schema.json; asserted by test_cinna_artifacts_parity.py).
+# Served in building and conversation mode.
+CINNA_ARTIFACT_TOOLS: tuple[str, ...] = ("artifacts_publish",)
+CINNA_ARTIFACT_TOOL_NAMES_CLAUDE: tuple[str, ...] = tuple(
+    f"mcp__{CINNA_TASKS_SERVER}__{name}" for name in CINNA_ARTIFACT_TOOLS
+)
+CINNA_ARTIFACT_TOOL_NAMES_OPENCODE: tuple[str, ...] = tuple(
+    f"{CINNA_TASKS_SERVER}_{name}" for name in CINNA_ARTIFACT_TOOLS
+)
+
 # ---------------------------------------------------------------------------
 # Canonical pre-approved tools (lowercase)
 #
@@ -96,6 +107,9 @@ PRE_APPROVED_TOOLS: frozenset[str] = frozenset([
     # Cinna Task Protocol tools (server "cinna") — both forms
     *CINNA_TASK_TOOL_NAMES_CLAUDE,
     *CINNA_TASK_TOOL_NAMES_OPENCODE,
+    # Artifacts tool (server "cinna") — both forms
+    *CINNA_ARTIFACT_TOOL_NAMES_CLAUDE,
+    *CINNA_ARTIFACT_TOOL_NAMES_OPENCODE,
     # DEPRECATED: the former "agent_task" server, replaced by "cinna" above.
     # Kept only so environments built before the change are still
     # pre-approved; drop in the release after the Cinna Task Protocol.

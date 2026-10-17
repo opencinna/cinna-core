@@ -26,11 +26,13 @@ Two profiles:
   under ``app/workspace/`` **except** :data:`BUNDLE_EXCLUDED_TOPLEVEL` and the
   runtime-name-denylisted entries. ``plugins/`` keeps its special handling
   (exclude derived files; merge on seed/update). ``uploads/`` is **excluded**
-  (per-install runtime data, consistent with the App Data philosophy).
+  (per-install runtime data, consistent with the App Data philosophy), and so
+  is ``artifacts/`` (the kit's ``artifacts`` role: what the agent builds to
+  publish, one person's output — never shipped to installers).
 * ``ENV_MIGRATION`` — used by ``copy_env_to_env`` and
   ``copy_workspace_between_environments`` (same-user same-agent env switch /
   rebuild). Superset of ``BUNDLE_OWNED`` **plus** :data:`ENV_MIGRATION_EXTRA`
-  (``credentials/`` + ``uploads/``), minus only the true runtime dirs
+  (``credentials/`` + ``uploads/`` + ``artifacts/``), minus only the true runtime dirs
   ``logs/`` and ``databases/``. ``app-data/`` is a bind mount and follows the
   volume — never copied.
 
@@ -61,6 +63,13 @@ BUNDLE_EXCLUDED_TOPLEVEL: frozenset[str] = frozenset(
         "logs",  # runtime session logs
         "databases",  # runtime SQLite DBs / session state
         "uploads",  # per-install runtime user-provided files (NOT bundle-owned)
+        # Kit layout role ``artifacts`` (contract 1.13.0): what the agent builds
+        # to publish as Cinna artifacts. One person's output — never bundle
+        # content, never pushed to a team library, never seeded into an install.
+        # Lives in the workspace (not a bind mount): it survives an in-place
+        # rebuild with the workspace and is carried on env switch via
+        # ENV_MIGRATION_EXTRA; the published copy lives in the artifact store.
+        "artifacts",
         "__init__.py",  # template-created Python package marker, not agent content
     }
 )
@@ -116,10 +125,10 @@ PLUGIN_DERIVED_FILES: frozenset[str] = frozenset({"settings.json", "manifest.jso
 PLUGINS_DIRNAME = "plugins"
 
 # Extra top-level entries carried by the ENV_MIGRATION profile on top of
-# BUNDLE_OWNED. ``credentials/`` and ``uploads/`` ARE copied on a same-user
-# same-agent env migration (carrying them across is the desired behaviour) but
-# are excluded from bundle content.
-ENV_MIGRATION_EXTRA: frozenset[str] = frozenset({"credentials", "uploads"})
+# BUNDLE_OWNED. ``credentials/``, ``uploads/`` and ``artifacts/`` ARE copied on
+# a same-user same-agent env migration (carrying them across is the desired
+# behaviour) but are excluded from bundle content.
+ENV_MIGRATION_EXTRA: frozenset[str] = frozenset({"credentials", "uploads", "artifacts"})
 
 
 def is_runtime_denylisted(name: str) -> bool:
@@ -163,7 +172,7 @@ def is_env_migration_toplevel(name: str) -> bool:
     """True when a top-level entry is carried by the ENV_MIGRATION profile.
 
     Superset of :func:`is_bundle_owned_toplevel` plus
-    :data:`ENV_MIGRATION_EXTRA` (``credentials`` + ``uploads``). The runtime
+    :data:`ENV_MIGRATION_EXTRA` (``credentials`` + ``uploads`` + ``artifacts``). The runtime
     dirs ``logs`` / ``databases`` and the bind mount ``app-data`` are still
     excluded; the template marker ``__init__.py`` is still excluded.
     """

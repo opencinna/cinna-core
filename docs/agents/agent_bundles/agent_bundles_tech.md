@@ -635,21 +635,21 @@ The consumer reader dispatches on layout shape: when `snapshot_path/workspace/` 
 
 | Symbol | Description |
 |--------|-------------|
-| `BUNDLE_EXCLUDED_TOPLEVEL` | `frozenset` of top-level `app/workspace/` names that are NEVER bundle content: `app-data`, `credentials`, `logs`, `databases`, `uploads`, `__init__.py` |
+| `BUNDLE_EXCLUDED_TOPLEVEL` | `frozenset` of top-level `app/workspace/` names that are NEVER bundle content: `app-data`, `credentials`, `logs`, `databases`, `uploads`, `artifacts`, `__init__.py` |
 | `RUNTIME_NAME_DENYLIST` | `frozenset` of name patterns (any depth) that are per-env runtime/dotfile state: `.opencode`, `.cache` |
-| `ENV_MIGRATION_EXTRA` | `frozenset` of names added by the `ENV_MIGRATION` profile on top of `BUNDLE_OWNED`: `credentials`, `uploads` |
+| `ENV_MIGRATION_EXTRA` | `frozenset` of names added by the `ENV_MIGRATION` profile on top of `BUNDLE_OWNED`: `credentials`, `uploads`, `artifacts` |
 | `PLUGIN_DERIVED_FILES` | `frozenset` of plugins-root derived filenames: `settings.json`, `manifest.json` — regenerated per consumer, never snapshotted |
 | `safe_copytree(src, dst)` | `shutil.copytree` wrapper that never follows or copies symlinks at any depth. All workspace copy operations (publish, seed, apply-update, env migration) use this single primitive to prevent symlink-based denylist bypass and host-file exfiltration. Top-level symlinks are additionally skipped before reaching `safe_copytree` by the `iter_*` helpers |
 | `iter_bundle_toplevel(workspace_root)` | Yields bundle-owned top-level entries — skips `BUNDLE_EXCLUDED_TOPLEVEL`, runtime-name-denylisted names, and symlinks |
-| `iter_env_migration_toplevel(workspace_root)` | Yields `ENV_MIGRATION`-profile top-level entries — superset of `iter_bundle_toplevel` plus `credentials/` and `uploads/`; still skips `logs/`, `databases/`, `app-data/`, and symlinks |
+| `iter_env_migration_toplevel(workspace_root)` | Yields `ENV_MIGRATION`-profile top-level entries — superset of `iter_bundle_toplevel` plus `credentials/`, `uploads/` and `artifacts/`; still skips `logs/`, `databases/`, `app-data/`, and symlinks |
 | `snapshot_layout(snapshot_path)` | Returns `"v2_workspace"` when `snapshot_path/workspace/` exists and is a directory, else `"v1_flat"` |
 | `is_bundle_owned_toplevel(name)` | True when `name` is not in `BUNDLE_EXCLUDED_TOPLEVEL` and not runtime-denylisted |
 | `is_env_migration_toplevel(name)` | True when `name` passes `is_bundle_owned_toplevel` or is in `ENV_MIGRATION_EXTRA` |
 
 **Two profiles:**
 
-- **`BUNDLE_OWNED`** — used by publish (`_snapshot_workspace_tree`), install-seed (`seed_workspace_from_bundle_snapshot`), and apply-update (`replace_bundle_content`). Everything under `app/workspace/` except `BUNDLE_EXCLUDED_TOPLEVEL` and runtime-name-denylisted entries. `plugins/` keeps special derived-file exclusion and merge-on-seed semantics. `uploads/` is excluded.
-- **`ENV_MIGRATION`** — used by `copy_env_to_env` and `copy_workspace_between_environments` (env switch). Superset of `BUNDLE_OWNED` plus `credentials/` and `uploads/`. `logs/`, `databases/`, and `app-data/` are still excluded. Same-user same-agent migration carries credentials and uploads across; this is the correct and intended behaviour for env switch/rebuild.
+- **`BUNDLE_OWNED`** — used by publish (`_snapshot_workspace_tree`), install-seed (`seed_workspace_from_bundle_snapshot`), and apply-update (`replace_bundle_content`). Everything under `app/workspace/` except `BUNDLE_EXCLUDED_TOPLEVEL` and runtime-name-denylisted entries. `plugins/` keeps special derived-file exclusion and merge-on-seed semantics. `uploads/` and `artifacts/` are excluded.
+- **`ENV_MIGRATION`** — used by `copy_env_to_env` and `copy_workspace_between_environments` (env switch). Superset of `BUNDLE_OWNED` plus `credentials/`, `uploads/` and `artifacts/`. `logs/`, `databases/`, and `app-data/` are still excluded. Same-user same-agent migration carries credentials and uploads across; this is the correct and intended behaviour for env switch/rebuild.
 
 **v1/v2 dispatch in `workspace_copy.py`:**
 

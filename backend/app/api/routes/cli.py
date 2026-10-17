@@ -11,11 +11,12 @@ Live sync model (replaces tarball push/pull and local container):
 - GET  /agents/{id}/sync-runtime — pinned Mutagen version info for CLI setup
 """
 import uuid
-from typing import TYPE_CHECKING, Any, NoReturn
+from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
 from fastapi import (
     APIRouter,
     File,
+    Form,
     HTTPException,
     Query,
     Request,
@@ -24,7 +25,7 @@ from fastapi import (
     WebSocket,
     status,
 )
-from fastapi.responses import PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 
@@ -37,7 +38,14 @@ from app.api.deps import (
     CurrentUser,
     SessionDep,
 )
+from app.api.routes.artifacts import (
+    artifact_errors,
+    upload_source as artifact_upload_source,
+    zip_download_response as artifact_zip_response,
+)
 from app.models import Message
+from app.models.artifacts.artifact import ArtifactPublished
+from app.models.artifacts.artifact_link import ArtifactLinkCreate, ArtifactLinkCreated
 from app.models.agent_api.agent_api_token import (
     AgentApiKeyPublic,
     ConnectAgentApiResponse,
@@ -126,6 +134,8 @@ from app.services.cli.device_login_service import (
     DeviceLoginError,
     DeviceLoginService,
 )
+from app.services.artifacts.artifact_link_service import ArtifactLinkService
+from app.services.artifacts.artifact_service import ArtifactService
 from app.services.files.file_service import FileService
 from app.services.improvement.improvement_download_service import (
     archive_response as improvement_archive_response,
@@ -796,6 +806,107 @@ async def account_upload_file(
         status=db_file.status,
         uploaded_at=db_file.uploaded_at,
     )
+
+
+# ── Account CLI: artifacts (D12) ─────────────────────────────────────────────
+# The api-proxy is JSON-only with a 1 MiB body cap, so the multipart publish
+# routes and the binary download get dedicated account routes. They call the
+# same service as /artifacts; JSON verbs (list, detail, share, links) go through
+# the proxy.
+
+
+@router.post("/account/artifacts", response_model=ArtifactPublished)
+def account_create_artifact(
+    *,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+    title: str = Form(..., min_length=1, max_length=200),
+    description: str | None = Form(None, max_length=2000),
+    entry_path: str | None = Form(None, max_length=1024),
+    source_kind: Literal["desktop", "cli"] = Form("cli"),
+    source_label: str | None = Form(None, max_length=200),
+    user_workspace_id: uuid.UUID | None = Form(None),
+    archive: UploadFile | None = File(None),
+    files: list[UploadFile] | None = File(None),
+) -> Any:
+    """Account-CLI analogue of ``POST /artifacts`` (publish, revision 1)."""
+    if not title.strip():
+        raise HTTPException(status_code=422, detail="Title must not be blank")
+    source, declared = artifact_upload_source(archive, files)
+    with artifact_errors():
+        return ArtifactService.create_from_upload(
+            db,
+            account_ctx.user,
+            source=source,
+            declared_bytes=declared,
+            title=title,
+            description=description,
+            entry_path=entry_path,
+            source_kind=source_kind,
+            source_label=source_label,
+            user_workspace_id=user_workspace_id,
+        )
+
+
+@router.post("/account/artifacts/{artifact_id}/revisions", response_model=ArtifactPublished)
+def account_republish_artifact(
+    *,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+    artifact_id: uuid.UUID,
+    note: str | None = Form(None, max_length=2000),
+    entry_path: str | None = Form(None, max_length=1024),
+    title: str | None = Form(None, max_length=200),
+    description: str | None = Form(None, max_length=2000),
+    archive: UploadFile | None = File(None),
+    files: list[UploadFile] | None = File(None),
+) -> Any:
+    """Account-CLI analogue of ``POST /artifacts/{id}/revisions`` (owner only)."""
+    source, declared = artifact_upload_source(archive, files)
+    with artifact_errors():
+        return ArtifactService.republish(
+            db,
+            account_ctx.user,
+            artifact_id,
+            source=source,
+            declared_bytes=declared,
+            entry_path=entry_path,
+            note=note,
+            title=title,
+            description=description,
+        )
+
+
+@router.get("/account/artifacts/{artifact_id}/download")
+def account_download_artifact(
+    *,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+    artifact_id: uuid.UUID,
+    rev: int | None = None,
+) -> FileResponse:
+    """Account-CLI analogue of ``GET /artifacts/{id}/download`` (zip)."""
+    with artifact_errors():
+        download = ArtifactService.download(db, account_ctx.user, artifact_id, rev)
+    return artifact_zip_response(download)
+
+
+@router.post("/account/artifacts/{artifact_id}/links", response_model=ArtifactLinkCreated)
+def account_create_artifact_link(
+    *,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+    artifact_id: uuid.UUID,
+    body: ArtifactLinkCreate,
+) -> Any:
+    """Account-CLI analogue of ``POST /artifacts/{id}/links`` (owner only).
+
+    The api-proxy refuses link creation (the response carries the token and
+    code, C18); the CLI reaches it only here, from its interactive
+    ``link create`` verb. The token is in this response only.
+    """
+    with artifact_errors():
+        return ArtifactLinkService.create(db, account_ctx.user, artifact_id, body)
 
 
 class MintChildTokenBody(BaseModel):

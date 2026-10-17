@@ -10,6 +10,9 @@ from app.api.routes import (
     admin_routing,
     agent_api,
     agent_api_public,
+    artifact_agent_api,
+    artifact_links,
+    artifacts,
     agent_git,
     agent_skills,
     agent_status,
@@ -194,6 +197,10 @@ api_router.include_router(external_agents.router)
 api_router.include_router(external_account_config.router)
 api_router.include_router(external_credentials.router)
 api_router.include_router(external_a2a.router)
+api_router.include_router(artifacts.router)
+api_router.include_router(artifact_links.router)
+api_router.include_router(artifact_agent_api.router)
+api_router.include_router(artifact_agent_api.environment_router)
 
 
 if settings.ENVIRONMENT == "local":

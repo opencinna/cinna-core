@@ -1,6 +1,6 @@
 {
   "kit_version": "{{KIT_VERSION}}",
-  "contract_version": "1.11.0",
+  "contract_version": "1.13.0",
   "platform_url": "{{PLATFORM_URL}}",
   "kit_base_url": "{{KIT_BASE_URL}}",
   "start_url": "{{START_URL}}",
@@ -17,10 +17,12 @@
   "publications_schema": "schema/publications.schema.json",
   "marketplace_schema": "schema/cinna-marketplace.schema.json",
   "protocols": {
-    "tasks": "protocols/tasks.schema.json"
+    "tasks": "protocols/tasks.schema.json",
+    "artifacts": "protocols/artifacts.schema.json"
   },
   "platform_skills": {
-    "cinna-tasks": "skills/cinna-tasks"
+    "cinna-tasks": "skills/cinna-tasks",
+    "cinna-artifacts": "skills/cinna-artifacts"
   },
   "agent_template": "templates/agent",
   "root_template": "templates/root",

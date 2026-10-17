@@ -1,3 +1,4 @@
+import json
 import os
 import asyncio
 import httpx
@@ -29,6 +30,28 @@ async def _empty_async_iter() -> AsyncIterator[str]:
     """An async generator that yields nothing — used as a logs-follow fallback."""
     return
     yield ""  # pragma: no cover - makes this a generator
+
+
+def _error_detail(body: bytes) -> str | None:
+    """The env server's ``{"detail": ...}`` message, if it sent one."""
+    try:
+        detail = json.loads(body).get("detail")
+    except (ValueError, AttributeError):
+        return None
+    return str(detail)[:500] if detail else None
+
+
+def _parse_skipped_header(raw: str | None) -> list[str] | None:
+    """The env's ``X-Cinna-Skipped`` JSON list; None when absent or malformed."""
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(value, list):
+        return None
+    return [str(item) for item in value][:500]
 
 
 class DockerEnvironmentAdapter(EnvironmentAdapter, LocalFilesAccessInterface):
@@ -859,7 +882,17 @@ class DockerEnvironmentAdapter(EnvironmentAdapter, LocalFilesAccessInterface):
             logger.error(f"Failed to get workspace tree: {e}")
             raise Exception(f"Failed to get workspace tree: {e}")
 
-    async def fetch_workspace_item_with_meta(self, path: str) -> tuple[WorkspaceItemMeta, AsyncIterator[bytes]]:
+    async def fetch_workspace_item_for_artifact(self, path: str) -> tuple[WorkspaceItemMeta, AsyncIterator[bytes]]:
+        """Artifact pull: ``?artifact=1`` asks the env for the reporting zip mode.
+
+        An env built before that mode ignores the parameter and sends no
+        ``X-Cinna-Skipped`` header; ``meta.skipped`` is then None.
+        """
+        return await self.fetch_workspace_item_with_meta(path, _artifact=True)
+
+    async def fetch_workspace_item_with_meta(
+        self, path: str, _artifact: bool = False
+    ) -> tuple[WorkspaceItemMeta, AsyncIterator[bytes]]:
         """
         Fetch workspace item with metadata via a single HTTP request.
 
@@ -873,6 +906,8 @@ class DockerEnvironmentAdapter(EnvironmentAdapter, LocalFilesAccessInterface):
 
         encoded_path = urllib.parse.quote(path, safe='/')
         url = f"{self.base_url}/workspace/download/{encoded_path}"
+        if _artifact:
+            url += "?artifact=1"
         headers = self._get_headers()
 
         async def _empty_stream() -> AsyncIterator[bytes]:
@@ -892,9 +927,10 @@ class DockerEnvironmentAdapter(EnvironmentAdapter, LocalFilesAccessInterface):
                 return WorkspaceItemMeta(exists=False), _empty_stream()
 
             if response.status_code == 400:
+                detail = _error_detail(await response.aread())
                 await response.aclose()
                 await client.aclose()
-                raise ValueError(f"Invalid path: {path}")
+                raise ValueError(detail or f"Invalid path: {path}")
 
             response.raise_for_status()
 
@@ -912,12 +948,14 @@ class DockerEnvironmentAdapter(EnvironmentAdapter, LocalFilesAccessInterface):
             size_hdr = response.headers.get("content-length")
             size = int(size_hdr) if size_hdr and size_hdr.isdigit() else None
             content_type = response.headers.get("content-type")
+            skipped = _parse_skipped_header(response.headers.get("x-cinna-skipped")) if _artifact else None
 
             meta = WorkspaceItemMeta(
                 exists=True,
                 size=size,
                 modified_at=modified_at,
                 content_type=content_type,
+                skipped=skipped,
             )
 
             async def _stream() -> AsyncIterator[bytes]:

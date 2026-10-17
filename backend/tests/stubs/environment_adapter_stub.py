@@ -219,6 +219,15 @@ class EnvironmentTestAdapter(EnvironmentAdapter):
 
     # Content keyed by path; set in tests to simulate STATUS.md presence.
     workspace_files: dict[str, bytes] = {}
+    # Optional Content-Type per path, as the env server sends it: a folder
+    # arrives as a zip with "application/zip", a file as
+    # "application/octet-stream" (the default when unset).
+    workspace_content_types: dict[str, str] = {}
+    # What an artifact-mode folder zip reports as left out (X-Cinna-Skipped);
+    # a path absent here behaves like an env that sends no report.
+    workspace_skipped: dict[str, list[str]] = {}
+    # Paths the env server refuses in artifact mode (400 → ValueError with this detail).
+    workspace_artifact_errors: dict[str, str] = {}
 
     async def fetch_workspace_item_with_meta(self, path: str):
         from app.services.environments.adapters.base import WorkspaceItemMeta
@@ -237,7 +246,16 @@ class EnvironmentTestAdapter(EnvironmentAdapter):
             exists=True,
             size=len(content),
             modified_at=datetime.now(UTC),
+            content_type=self.workspace_content_types.get(path, "application/octet-stream"),
         ), _stream(content)
+
+    async def fetch_workspace_item_for_artifact(self, path: str):
+        if path in self.workspace_artifact_errors:
+            raise ValueError(self.workspace_artifact_errors[path])
+        meta, stream = await self.fetch_workspace_item_with_meta(path)
+        if meta.exists and path in self.workspace_skipped:
+            meta = meta.model_copy(update={"skipped": list(self.workspace_skipped[path])})
+        return meta, stream
 
     # --- Messages ---
 

@@ -1,5 +1,5 @@
 import { Link as RouterLink, useRouterState } from "@tanstack/react-router"
-import { Bot, Key, MessageSquare, Bell, ClipboardList, Home, Store } from "lucide-react"
+import { Bot, Key, MessageSquare, Bell, ClipboardList, Home, Shapes, Store } from "lucide-react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 
 import { Logo } from "@/components/Common/Logo"
@@ -34,6 +34,12 @@ const menuItems: Item[] = [
   { icon: ClipboardList, title: "Tasks", path: "/tasks" },
   { icon: Bot, title: "Agents", path: "/agents" },
   { icon: MessageSquare, title: "Sessions", path: "/sessions" },
+  {
+    icon: Shapes,
+    title: "Artifacts",
+    path: "/artifacts",
+    activePrefix: "/artifact",
+  },
   { icon: Key, title: "Credentials", path: "/credentials" },
 ]
 

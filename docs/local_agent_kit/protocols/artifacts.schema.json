@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cinna.dev/protocols/artifacts/v1/artifacts.schema.json",
+  "title": "Cinna Artifacts — MCP binding",
+  "description": "The artifact tool a Cinna host registers on the MCP server named `cinna`, beside the task tools of `tasks.schema.json`. Both hosts load this file and assert their registered tools match it. Engine-visible names are derived by the host: Claude Code `mcp__cinna__<tool>`, Codex `mcp.cinna.<tool>`, OpenCode `cinna_<tool>`; Antigravity calls its built-in `call_mcp_tool` with `ServerName: \"cinna\"` and `ToolName: \"<tool>\"`. An agent can publish and republish; it cannot share, change visibility or delete. Everything an agent publishes is private to its owner until a person shares it.",
+  "protocol_version": 1,
+  "server": "cinna",
+  "$defs": {},
+  "tools": {
+    "artifacts_publish": {
+      "description": "Publish a file or folder from your workspace as an artifact: a page your owner opens in Cinna to read a report, browse files or run a small self-contained dashboard. A folder with `index.html` at its root (or the `entry` you name) becomes a site; a single `.md`, `.csv`, `.pdf`, image or `.html` is fine on its own. Publishing the same `path` again adds a revision to the same artifact instead of creating a new one; pass `artifact_id` to update a specific artifact you published before. The result is private to your owner. Sites run sandboxed: relative paths only, every library bundled into the folder (no CDN), no localStorage/sessionStorage/IndexedDB/cookies, no `new Worker(url)`. Paths the platform never publishes (`.env`, keys, `credentials/`, `.git/`, `node_modules/`) are dropped and listed in `excluded`.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "title"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "A file or folder, relative to the workspace root. Build what you publish under `artifacts/<name>/` (`artifacts/q3-dashboard`, `artifacts/summary.md`)."
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "What a person sees in their artifact list."
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "One or two sentences on what this shows and where the data came from."
+          },
+          "entry": {
+            "type": "string",
+            "maxLength": 1024,
+            "description": "The HTML page to open first, relative to the folder. Defaults to the folder's root `index.html`."
+          },
+          "artifact_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "Republish into this artifact (an id from an earlier result). Omit to create, or to update the artifact this same `path` was published to."
+          }
+        }
+      },
+      "result": {
+        "type": "object",
+        "required": ["artifact_id", "revision", "url", "kind", "file_count", "size_bytes", "excluded"],
+        "properties": {
+          "artifact_id": { "type": "string", "description": "Pass it as `artifact_id` to republish." },
+          "revision": { "type": "integer", "minimum": 1, "description": "This publish's revision number." },
+          "url": { "type": "string", "description": "The artifact's page in Cinna. Give it to the person; it needs their sign-in." },
+          "kind": { "type": "string", "enum": ["site", "files"], "description": "`site` opens a page; `files` shows a file browser or a single-file viewer." },
+          "file_count": { "type": "integer", "minimum": 0 },
+          "size_bytes": { "type": "integer", "minimum": 0, "description": "Bytes in this revision." },
+          "excluded": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Paths dropped from this revision because they are never published (`.env`, keys, `credentials/`, …)."
+          }
+        }
+      }
+    }
+  }
+}

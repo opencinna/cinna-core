@@ -1,9 +1,10 @@
 """
 Platform-owned protocol files installed into every agent environment's core.
 
-The Cinna Task Protocol is authored once, in cinna-core's
-``docs/local_agent_kit/`` (``protocols/tasks.schema.json`` and the
-``skills/cinna-tasks/`` skill). ``docs/`` is not in the backend image; the kit
+The Cinna Task Protocol and the artifacts tool are authored once, in
+cinna-core's ``docs/local_agent_kit/`` (``protocols/tasks.schema.json`` with
+the ``skills/cinna-tasks/`` skill, ``protocols/artifacts.schema.json`` with the
+``skills/cinna-artifacts/`` skill). ``docs/`` is not in the backend image; the kit
 reaches it as the synced snapshot under the platform-knowledge-env template
 (``.cinna-core-kit/scripts/sync_platform_knowledge.py``). Whenever an
 environment's ``app/core`` is laid down — at creation and at every rebuild —
@@ -12,10 +13,12 @@ them with no second hand-edited copy in ``app_core_base``:
 
   /app/core/protocols/tasks.schema.json   — read by the `cinna` MCP server's tools
   /app/core/skills/cinna-tasks/           — the skill, for projection into the engine
+  /app/core/protocols/artifacts.schema.json — read by the `cinna` server's artifacts_publish
+  /app/core/skills/cinna-artifacts/       — its skill
 
 Paths are relative to the environment's core directory and mirrored by
 ``core/server/tools/cinna_tasks_protocol.py`` (SCHEMA_RELATIVE_PATH /
-SKILL_RELATIVE_PATH).
+SKILL_RELATIVE_PATH) and ``cinna_artifacts_protocol.py`` (the same names).
 """
 import logging
 import shutil
@@ -32,6 +35,8 @@ logger = logging.getLogger(__name__)
 PROTOCOL_FILES: tuple[str, ...] = (
     "protocols/tasks.schema.json",
     "skills/cinna-tasks",
+    "protocols/artifacts.schema.json",
+    "skills/cinna-artifacts",
 )
 
 

@@ -39,7 +39,7 @@ Define how data flows between agents, environments, and installs, ensuring consi
 
 ### Bundle-Owned Data (Replaced on apply-update)
 
-Bundle-owned data is everything under `app/workspace/` **except** the per-user/runtime/secret denylist (`app-data/`, `credentials/`, `logs/`, `databases/`, `uploads/`, and the `__init__.py` template marker). This is a denylist model, not an allowlist — any custom top-level directory or file the agent creates in its workspace is bundle-owned and will be snapshotted at publish time and restored at install/update time.
+Bundle-owned data is everything under `app/workspace/` **except** the per-user/runtime/secret denylist (`app-data/`, `credentials/`, `logs/`, `databases/`, `uploads/`, `artifacts/`, and the `__init__.py` template marker). This is a denylist model, not an allowlist — any custom top-level directory or file the agent creates in its workspace is bundle-owned and will be snapshotted at publish time and restored at install/update time.
 
 | Data | Storage | Sync Timing | Notes |
 |------|---------|-------------|-------|
@@ -120,7 +120,7 @@ App Data is **never** touched by `replace_bundle_content`, rebuild, or apply-upd
 5. Old environments stopped, target started
 6. Dynamic data synced to target
 
-**Copied during switch** (ENV_MIGRATION profile): the full bundle-owned set (`scripts/`, `docs/`, `knowledge/`, `files/`, `webapp/`, `agent_api/`, `plugins/`, any custom top-level dirs, `workspace_requirements.txt`, `workspace_system_packages.txt`) **plus** `credentials/` and `uploads/`. Custom top-level directories created by the agent are included automatically — the ENV_MIGRATION profile is denylist-driven, not allowlist-driven. `plugins/` is a straight copy here (no merge) — env switch is same-user same-agent so there are no foreign consumer plugins to preserve. Top-level and nested symlinks are never followed or copied.
+**Copied during switch** (ENV_MIGRATION profile): the full bundle-owned set (`scripts/`, `docs/`, `knowledge/`, `files/`, `webapp/`, `agent_api/`, `plugins/`, any custom top-level dirs, `workspace_requirements.txt`, `workspace_system_packages.txt`) **plus** `credentials/`, `uploads/` and `artifacts/`. Custom top-level directories created by the agent are included automatically — the ENV_MIGRATION profile is denylist-driven, not allowlist-driven. `plugins/` is a straight copy here (no merge) — env switch is same-user same-agent so there are no foreign consumer plugins to preserve. Top-level and nested symlinks are never followed or copied.
 
 **NOT copied**: `logs/`, `databases/` (runtime data), `app-data/` (bind mount, follows the volume)
 
@@ -153,7 +153,7 @@ App Data is **never** touched by `replace_bundle_content`, rebuild, or apply-upd
 
 **Pruned (v2 only)**: any install-workspace top-level entry that (a) is not present in the new snapshot, (b) is not in `BUNDLE_EXCLUDED_TOPLEVEL`, (c) is not runtime-name-denylisted, and (d) is not `plugins/` — is deleted. This removes stale bundle-owned paths (e.g. a directory the old revision shipped but the new one dropped) without touching any user data. The prune pass is best-effort per entry; a failed removal is logged and does not abort the update.
 
-**Preserved**: `app-data/` (AppDataVolume), `credentials/`, `logs/`, `databases/`, `uploads/` (all in `BUNDLE_EXCLUDED_TOPLEVEL`), and the consumer's own `plugins/` marketplace dirs (plugins are merged, never delete-swept).
+**Preserved**: `app-data/` (AppDataVolume), `credentials/`, `logs/`, `databases/`, `uploads/`, `artifacts/` (all in `BUNDLE_EXCLUDED_TOPLEVEL`), and the consumer's own `plugins/` marketplace dirs (plugins are merged, never delete-swept).
 
 **Important**: Files an agent wrote directly into a bundle-owned top-level directory (e.g. a file dropped into `scripts/`) will be overwritten or removed on apply-update because that directory is bundle-authoritative. Durable runtime output belongs in `app-data/`, which is never touched by apply-update.
 
@@ -228,6 +228,7 @@ Agent Model (DB) → Environment Lifecycle Manager → Docker Adapter → Docker
 │   ├── uploads/                 #   for files the user provides at runtime
 │   ├── cache/                   #   for cached downloads, processed output
 │   └── memory/                  #   personal per-install agent memory (*.md), injected into system prompts
+├── artifacts/                   # Agent-built outputs to publish as artifacts (kit role `artifacts`); workspace-resident, per-user, NOT bundle-owned; survives rebuild
 ├── uploads/                     # Per-install runtime user-provided files — NOT bundle-owned;
 │                                #   preserved on apply-update; copied on env migration
 ├── credentials/                 # Credentials (synced from platform on every start)

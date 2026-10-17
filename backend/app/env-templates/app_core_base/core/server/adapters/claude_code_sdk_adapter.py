@@ -63,6 +63,15 @@ def clear_current_sdk_session_id() -> None:
     logger.info("Cleared current SDK session ID")
 
 
+def cinna_toolsets_for_mode(mode: str) -> tuple[str, ...]:
+    """Which `cinna` toolsets the Claude Code binding registers in ``mode``."""
+    if mode == "conversation":
+        return ("tasks", "artifacts")
+    if mode == "building":
+        return ("artifacts",)
+    return ()
+
+
 def get_backend_session_id(sdk_session_id: str | None = None) -> str | None:
     """Get the backend session ID for a given SDK session ID."""
     if not sdk_session_id:
@@ -305,28 +314,31 @@ class ClaudeCodeAdapter(BaseSDKAdapter):
                     except Exception as e:
                         logger.warning(f"Could not setup knowledge query tool: {e}")
 
-                # Add custom tools for conversation mode: the Cinna Task
-                # Protocol's `cinna` server (tools and schemas from
-                # core/protocols/tasks.schema.json). Replaces the former
-                # `agent_task` server; its names stay pre-approved only.
-                if mode == "conversation":
+                # The `cinna` server (tools and schemas from
+                # core/protocols/*.schema.json): conversation mode serves the
+                # Cinna Task Protocol and artifacts_publish, building mode
+                # artifacts_publish only (agents assemble dashboards while
+                # building; a publish is private to the owner). Replaces the
+                # former `agent_task` server; its names stay pre-approved only.
+                cinna_toolsets = cinna_toolsets_for_mode(mode)
+                if cinna_toolsets:
                     try:
                         from ..tools.cinna_tasks_claude import build_cinna_server
 
-                        cinna_server, cinna_tool_names = build_cinna_server()
+                        cinna_server, cinna_tool_names = build_cinna_server(cinna_toolsets)
                         if options.mcp_servers:
                             options.mcp_servers["cinna"] = cinna_server
                         else:
                             options.mcp_servers = {"cinna": cinna_server}
                         options.allowed_tools.extend(cinna_tool_names)
                         logger.info(
-                            "Added cinna task tools (%s) for conversation mode",
-                            ", ".join(cinna_tool_names),
+                            "Added cinna tools (%s) for %s mode",
+                            ", ".join(cinna_tool_names), mode,
                         )
                     except ImportError as e:
-                        logger.warning(f"Could not import cinna task tools: {e}")
+                        logger.warning(f"Could not import cinna tools: {e}")
                     except Exception as e:
-                        logger.warning(f"Could not setup cinna task tools: {e}")
+                        logger.warning(f"Could not setup cinna tools: {e}")
 
                 # Load plugins for current mode
                 try:

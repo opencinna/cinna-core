@@ -9,6 +9,9 @@ from app.acp.server import router as acp_router, acp_runtime
 from app.api.main import api_router
 from app.api.routes.agent_hooks import router as agent_hooks_router
 from app.api.routes.git_http import router as git_http_router
+from app.api.routes.artifact_content import router as artifact_content_router
+from app.core.artifact_content_middleware import ArtifactContentMiddleware
+from app.core.artifact_upload_limit_middleware import ArtifactUploadLimitMiddleware
 from app.api.routes.cli import setup_router as cli_setup_router
 from app.api.routes.desktop_auth import router as desktop_auth_router  # noqa: F401 (used below)
 from app.api.routes.local_agent_kit import start_router as local_agent_kit_router
@@ -74,6 +77,8 @@ def cinna_desktop_discovery() -> dict:
         "userinfo_endpoint": f"{base}/userinfo",
         "version": "1.0",
         "desktop_auth_enabled": settings.DESKTOP_AUTH_ENABLED,
+        # Artifacts API version (D13); absent on cores without the feature.
+        "artifacts": 1,
     }
 
     # Optional local-development block. Absent => this instance does not offer
@@ -498,6 +503,15 @@ app.add_middleware(
     expose_headers=["mcp-session-id", "mcp-protocol-version", "X-Kit-Version"],
 )
 
+# Artifact content (/a/) — MUST stay registered after CORSMiddleware so it is
+# the outer layer: it answers /a/ preflights itself and rewrites the CORS
+# headers CORSMiddleware adds (reflected origin + credentials) to a bare
+# ``Access-Control-Allow-Origin: *``, and stamps the security headers on every
+# /a/ response, errors included. See app/core/artifact_content_middleware.py.
+app.add_middleware(ArtifactContentMiddleware)
+# Body cap for artifact uploads, whatever the reverse proxy allows.
+app.add_middleware(ArtifactUploadLimitMiddleware)
+
 app.include_router(api_router, prefix=settings.API_V1_STR)
 
 # Public agent webhook execution endpoint — no /api/v1 prefix, no JWT auth.
@@ -507,6 +521,10 @@ app.include_router(agent_hooks_router, prefix="/agent-hooks")
 # Desktop agents' git smart HTTP (/git/<repo_id>.git/...) — no /api/v1 prefix, not
 # in the OpenAPI schema; token auth in the route (Bearer or Basic password).
 app.include_router(git_http_router)
+
+# Artifact content (/a/v/<cap>/<path>, /a/z/<cap>) — no /api/v1 prefix, not in the
+# OpenAPI schema; the view capability in the path is the credential.
+app.include_router(artifact_content_router)
 
 # CLI setup bootstrap endpoint (top-level, short URL for curl oneliner)
 app.include_router(cli_setup_router)

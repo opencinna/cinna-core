@@ -104,8 +104,8 @@ def test_snapshot_workspace_tree_captures_full_bundle_tree(tmp_path: Path) -> No
       - scripts/, docs/, webapp/, agent_api/, custom templates/ dir,
         root notes.md, plugins/<mp>/<p>/… all appear under workspace/.
       - plugins/settings.json absent (derived file excluded).
-      - app-data/, credentials/, logs/, databases/, uploads/ absent even
-        when seeded.
+      - app-data/, credentials/, logs/, databases/, uploads/, artifacts/
+        absent even when seeded.
     """
     env_root = tmp_path / "env"
     ws_root = env_root / WORKSPACE_ROOT_REL
@@ -136,6 +136,8 @@ def test_snapshot_workspace_tree_captures_full_bundle_tree(tmp_path: Path) -> No
             "logs": {"session.log": "log line"},
             "databases": {"cache.db": "db"},
             "uploads": {"user_file.pdf": "bytes"},
+            # Kit ``artifacts`` role: one person's publishable output.
+            "artifacts": {"q3-dashboard": {"index.html": "<html>private</html>"}},
         },
     )
 
@@ -179,7 +181,7 @@ def test_snapshot_workspace_tree_captures_full_bundle_tree(tmp_path: Path) -> No
         "plugins/manifest.json (derived) must be excluded"
 
     # ── Excluded (denylist top-level entries) ─────────────────────────────
-    for excluded in ("app-data", "credentials", "logs", "databases", "uploads"):
+    for excluded in ("app-data", "credentials", "logs", "databases", "uploads", "artifacts"):
         assert excluded not in ws_entries, f"{excluded} must be excluded from snapshot"
 
 
@@ -262,7 +264,7 @@ def test_replace_bundle_content_prunes_stale_bundle_owned_dirs(tmp_path: Path) -
     """
     replace_bundle_content (apply-update) prune semantics:
       - stale bundle-owned oldfeature/ removed from install workspace.
-      - app-data/ and credentials/ always preserved.
+      - app-data/, credentials/ and artifacts/ always preserved.
       - new snapshot content (newfeature/) present after update.
       - consumer marketplace plugin under plugins/ preserved (scenario 7).
     """
@@ -294,6 +296,7 @@ def test_replace_bundle_content_prunes_stale_bundle_owned_dirs(tmp_path: Path) -
             "scripts": {"run.sh": "#!/bin/bash\nold"},
             "app-data": {"db.sqlite": "data"},
             "credentials": {"secret.json": '{"key":"val"}'},
+            "artifacts": {"report": {"index.html": "<html>mine</html>"}},
             "plugins": {
                 "settings.json": "{}",  # derived — present on consumer
                 "mkt-a": {"consumer-plugin": {"plugin.json": '{"name":"consumer"}'}},
@@ -317,6 +320,8 @@ def test_replace_bundle_content_prunes_stale_bundle_owned_dirs(tmp_path: Path) -
     # ── Denylist entries always preserved ─────────────────────────────────
     assert (ws / "app-data" / "db.sqlite").exists(), "app-data/ must not be pruned"
     assert (ws / "credentials" / "secret.json").exists(), "credentials/ must not be pruned"
+    assert (ws / "artifacts" / "report" / "index.html").read_text() == "<html>mine</html>", \
+        "artifacts/ must not be pruned"
 
     # ── plugins/: consumer marketplace dir preserved (scenario 7) ─────────
     assert (ws / "plugins" / "mkt-a" / "consumer-plugin" / "plugin.json").exists(), \

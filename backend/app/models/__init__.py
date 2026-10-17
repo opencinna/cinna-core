@@ -997,6 +997,42 @@ from .routing.routing_decision import (
     RECOMMENDATION_ADVISORY_NOTICE,
 )
 
+# Artifacts
+from .artifacts.artifact import (
+    Artifact,
+    ArtifactKind,
+    ArtifactVisibility,
+    ArtifactSourceKind,
+    ArtifactPublic,
+    ArtifactPublished,
+    ArtifactsPublic,
+    ArtifactDetailPublic,
+    ArtifactUpdate,
+    ArtifactViewPublic,
+    ArtifactsLimits,
+    ArtifactsCapabilities,
+)
+from .artifacts.artifact_revision import (
+    ArtifactRevision,
+    ArtifactFileEntry,
+    ArtifactRevisionPublic,
+)
+from .artifacts.artifact_grant import (
+    ArtifactGrant,
+    ArtifactGrantLevel,
+    ArtifactGrantIn,
+    ArtifactGrantPublic,
+)
+from .artifacts.artifact_link import (
+    ArtifactLink,
+    ArtifactLinkCreate,
+    ArtifactLinkPublic,
+    ArtifactLinkCreated,
+    ArtifactLinkInfo,
+    ArtifactLinkOpen,
+    ArtifactLinkCodeRefused,
+)
+
 __all__ = [
     # Core
     "SQLModel",
@@ -1820,4 +1856,31 @@ __all__ = [
     # Desktop agent repos
     "GitRepo",
     "GitRepoKind",
+    # Artifacts
+    "Artifact",
+    "ArtifactKind",
+    "ArtifactVisibility",
+    "ArtifactSourceKind",
+    "ArtifactPublic",
+    "ArtifactPublished",
+    "ArtifactsPublic",
+    "ArtifactDetailPublic",
+    "ArtifactUpdate",
+    "ArtifactViewPublic",
+    "ArtifactsLimits",
+    "ArtifactsCapabilities",
+    "ArtifactRevision",
+    "ArtifactFileEntry",
+    "ArtifactRevisionPublic",
+    "ArtifactGrant",
+    "ArtifactGrantLevel",
+    "ArtifactGrantIn",
+    "ArtifactGrantPublic",
+    "ArtifactLink",
+    "ArtifactLinkCreate",
+    "ArtifactLinkPublic",
+    "ArtifactLinkCreated",
+    "ArtifactLinkInfo",
+    "ArtifactLinkOpen",
+    "ArtifactLinkCodeRefused",
 ]

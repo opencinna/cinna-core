@@ -31,6 +31,7 @@ from app.services.cli.account_api_proxy_policy import (
     ApiProxyDenied,
     _segment_prefix_match,
     assert_api_proxy_allowed,
+    redact_response,
 )
 from app.services.cli.account_api_proxy_service import AccountApiProxyService
 
@@ -513,6 +514,7 @@ _POST_DENIED = [
     f"agents/{_A}/webhooks/{_A}/regenerate-token",
     f"tasks/{_A}/triggers/webhook",
     f"tasks/{_A}/triggers/{_A}/regenerate-token",
+    f"artifacts/{_A}/links",
 ]
 
 _ALLOWED = [
@@ -530,6 +532,10 @@ _ALLOWED = [
     ("GET", f"agents/{_A}/webhooks"),
     ("GET", f"tasks/{_A}/triggers"),
     ("POST", f"tasks/{_A}/triggers/schedule"),
+    ("GET", "artifacts"),
+    ("GET", f"artifacts/{_A}"),
+    ("DELETE", f"artifacts/{_A}/links/{_A}"),
+    ("PUT", f"artifacts/{_A}/grants"),
 ]
 
 
@@ -701,3 +707,22 @@ class TestCinnaApiNote:
         from app.services.cli.platform_knowledge_assets import cinna_api_note
 
         assert cinna_api_note("GET", "/health") is None
+
+
+class TestResponseRedaction:
+    def test_artifact_detail_link_codes_are_blanked(self) -> None:
+        payload = {"id": _A, "links": [{"id": _A, "code": "1234"}, {"id": _A, "code": None}]}
+        assert redact_response("GET", f"artifacts/{_A}", payload) is True
+        assert [link["code"] for link in payload["links"]] == [None, None]
+
+    @pytest.mark.parametrize(
+        ("method", "rel"),
+        [("GET", "artifacts"), ("GET", f"artifacts/{_A}/links"), ("PATCH", f"artifacts/{_A}"), ("GET", f"agents/{_A}")],
+    )
+    def test_other_routes_untouched(self, method: str, rel: str) -> None:
+        payload = {"links": [{"code": "1234"}]}
+        assert redact_response(method, rel, payload) is False
+        assert payload["links"][0]["code"] == "1234"
+
+    def test_non_dict_payload_is_safe(self) -> None:
+        assert redact_response("GET", f"artifacts/{_A}", [1, 2]) is True

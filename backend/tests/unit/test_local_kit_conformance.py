@@ -132,7 +132,7 @@ def _load(rel: str):
 def test_contract_version_is_coherent_across_the_four_carriers() -> None:
     # LocalAgentKitService 503s the contract when these disagree.
     file_version = (KIT_DIR / "CONTRACT_VERSION").read_text(encoding="utf-8").strip()
-    assert file_version == "1.11.0"
+    assert file_version == "1.13.0"
     assert _load("kit.json")["contract_version"] == file_version
     assert _load("layout.json")["contract_version"] == file_version
     changelog = (KIT_DIR / "CHANGELOG.md").read_text(encoding="utf-8")
@@ -151,13 +151,14 @@ def test_layout_declares_the_shared_remote_section() -> None:
     assert remote["one_branch"] is True
     never = remote["never_travels"]
     assert never["secret_rule"] == "secret_files"
-    assert set(never["roles"]) == {"credentials", "runtime_data"}
-    # the directory paths are derived from those two roles, not free text;
+    assert set(never["roles"]) == {"credentials", "runtime_data", "artifacts"}
+    # the directory paths are derived from those roles, not free text;
     # the one file entry (1.9.0) belongs to no role
     roles = {r["role"]: r["path"] for r in layout["agent"]["roles"]}
     assert set(never["paths"]) == {
         roles["credentials"] + "/",
         roles["runtime_data"] + "/",
+        roles["artifacts"] + "/",
         ".claude/settings.local.json",
     }
     agent_ignore = (KIT_DIR / "templates" / "agent" / "gitignore").read_text(encoding="utf-8")

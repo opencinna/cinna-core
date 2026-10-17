@@ -232,6 +232,8 @@ def test_new_restores_the_dot_on_every_scaffold_ignore_file(
 
     root_ignore = (scaffolded_agent / ".gitignore").read_text(encoding="utf-8")
     assert "credentials/.env" in root_ignore
+    # Contract 1.13.0: the `artifacts` role is runtime-only, like app-data/.
+    assert "artifacts/" in root_ignore.splitlines()
     # `*` + `!.gitignore` only re-includes itself once the dot is back.
     cache_ignore = (scaffolded_agent / "app-data" / "cache" / ".gitignore").read_text(
         encoding="utf-8"
@@ -679,6 +681,9 @@ def test_export_excludes_local_only_paths_and_copies_the_manifest_unchanged(
     venv_marker = scaffolded_agent / ".venv" / "pyvenv.cfg"
     venv_marker.parent.mkdir(parents=True, exist_ok=True)
     venv_marker.write_text("home = /nowhere\n", encoding="utf-8")
+    built = scaffolded_agent / "artifacts" / "q3-dashboard" / "index.html"
+    built.parent.mkdir(parents=True, exist_ok=True)
+    built.write_text("<html>one person's output</html>\n", encoding="utf-8")
 
     manifest_path = scaffolded_agent / "cinna-agent.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -701,6 +706,7 @@ def test_export_excludes_local_only_paths_and_copies_the_manifest_unchanged(
     assert not (destination / "CLAUDE.md").exists()
     assert not (destination / ".claude").exists()
     assert not (destination / "app-data").exists()
+    assert not (destination / "artifacts").exists()
     assert not (destination / ".venv").exists()
 
     # The tool names what it left behind — nothing disappears silently.
@@ -1864,6 +1870,39 @@ def test_content_hash_neither_follows_nor_lists_a_symlink(kit_module, hash_tree:
 
     assert kit_module.collect_export_files(hash_tree, []) == ["keep.txt"]
     assert kit_module.content_hash(hash_tree, []) == expected_digest(hash_tree, ["keep.txt"])
+
+
+def test_artifacts_folder_never_travels_but_a_nested_namesake_does(
+    kit_module, hash_tree: Path
+) -> None:
+    """Contract 1.13.0: `artifacts/` is root-anchored, exactly like `app-data/`.
+
+    The agent-root folder (what one person's runs built to publish) is excluded
+    from cloud import and from the content hash; a user's own `docs/artifacts/`
+    is definitional content and must still travel.
+    """
+    (hash_tree / "keep.txt").write_text("keep\n", encoding="utf-8")
+    (hash_tree / "artifacts" / "q3-dashboard").mkdir(parents=True)
+    (hash_tree / "artifacts" / "q3-dashboard" / "index.html").write_text("<html/>\n", encoding="utf-8")
+    (hash_tree / "artifacts" / "summary.md").write_text("# s\n", encoding="utf-8")
+    (hash_tree / "docs" / "artifacts").mkdir(parents=True)
+    (hash_tree / "docs" / "artifacts" / "notes.md").write_text("n\n", encoding="utf-8")
+
+    assert "artifacts/" in kit_module.DEFAULT_EXCLUDES
+    patterns = kit_module._with_always_excluded(list(kit_module.DEFAULT_EXCLUDES))
+    files = kit_module.collect_export_files(hash_tree, patterns)
+    assert files == ["docs/artifacts/notes.md", "keep.txt"], files
+    assert kit_module.content_hash(hash_tree, patterns) == expected_digest(hash_tree, files)
+
+
+def test_validate_accepts_an_agent_with_built_artifacts(scaffolded_agent: Path) -> None:
+    """Writing under `artifacts/` (the second writable place) keeps validate clean."""
+    built = scaffolded_agent / "artifacts" / "q3-dashboard" / "index.html"
+    built.parent.mkdir(parents=True)
+    built.write_text("<html/>\n", encoding="utf-8")
+    (scaffolded_agent / "artifacts" / "summary.md").write_text("# s\n", encoding="utf-8")
+    result = run_kit("validate", str(scaffolded_agent))
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
 
 
 def test_always_exclude_changes_no_files_fate(kit_module) -> None:

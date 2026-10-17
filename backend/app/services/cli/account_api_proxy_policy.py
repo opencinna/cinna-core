@@ -144,6 +144,17 @@ EXCLUDED_WRITE_PATTERNS: tuple[tuple[str, str], ...] = (
     ("POST", r"agents/[^/]+/webhooks/[^/]+/regenerate-token"),
     ("POST", r"tasks/[^/]+/triggers/webhook"),
     ("POST", r"tasks/[^/]+/triggers/[^/]+/regenerate-token"),
+    # Artifact public link: the token (and code) are returned once (C18, A8).
+    # The CLI creates links on the dedicated, interactive
+    # ``/cli/account/artifacts/{id}/links`` route instead.
+    ("POST", r"artifacts/[^/]+/links"),
+)
+
+# Allowed routes whose response passes through with fields blanked, because
+# they carry a share code (C18): ``(method, path pattern, list key, field)`` —
+# ``payload[list key][*][field]`` is set to None.
+REDACTED_RESPONSE_FIELDS: tuple[tuple[str, str, str, str], ...] = (
+    ("GET", r"artifacts/[^/]+", "links", "code"),
 )
 
 # The dedicated CLI verb that replaces a denied route, by pattern.
@@ -238,6 +249,26 @@ def route_refusal(method: str, relative_path: str) -> ApiProxyDenied | None:
         if method == denied_method and re.fullmatch(pattern, path):
             return ApiProxyDenied("excluded_path", _SECRET_ROUTE_MESSAGE)
     return None
+
+
+def redact_response(method: str, relative_path: str, payload: object) -> bool:
+    """Blank the share-code fields of a mirrored JSON body in place.
+
+    Returns True when a rule matched (the caller re-serialises the body).
+    Pure; ``relative_path`` as for :func:`route_refusal`.
+    """
+    method = (method or "").upper()
+    path = relative_path.strip("/")
+    matched = False
+    for rule_method, pattern, list_key, field in REDACTED_RESPONSE_FIELDS:
+        if method != rule_method or not re.fullmatch(pattern, path):
+            continue
+        matched = True
+        items = payload.get(list_key) if isinstance(payload, dict) else None
+        for item in items or []:
+            if isinstance(item, dict) and field in item:
+                item[field] = None
+    return matched
 
 
 def dedicated_verb(relative_path: str) -> str | None:

@@ -58,6 +58,7 @@ def test_instance_discovery(client: TestClient) -> None:
     assert "userinfo_endpoint" in data
     assert "version" in data
     assert data["desktop_auth_enabled"] is True
+    assert data["artifacts"] == 1
     assert "/desktop-auth/authorize" in data["authorization_endpoint"]
     assert "/desktop-auth/token" in data["token_endpoint"]
     assert "/desktop-auth/userinfo" in data["userinfo_endpoint"]

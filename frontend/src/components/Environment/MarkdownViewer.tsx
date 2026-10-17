@@ -1,18 +1,54 @@
-import ReactMarkdown from "react-markdown"
+import type { MouseEvent } from "react"
+import ReactMarkdown, { type UrlTransform } from "react-markdown"
 import remarkGfm from "remark-gfm"
+
+import { cn } from "@/lib/utils"
 
 interface MarkdownViewerProps {
   content: string
   className?: string
+  /**
+   * Rewrites every link and image URL before render (react-markdown's own
+   * hook). The artifact viewer points relative paths at its capability URLs;
+   * the caller is responsible for ending in `defaultUrlTransform`.
+   */
+  urlTransform?: UrlTransform
+  /**
+   * Called for a click on a rendered link, with its href (after
+   * `urlTransform`). Return
+   * true to say the click was handled in-app (the default navigation is then
+   * prevented).
+   */
+  onLinkClick?: (href: string) => boolean
 }
 
-export function MarkdownViewer({ content, className }: MarkdownViewerProps) {
+export function MarkdownViewer({
+  content,
+  className,
+  urlTransform,
+  onLinkClick,
+}: MarkdownViewerProps) {
   return (
     <div className="h-full overflow-auto p-6">
-      <article className={`prose prose-slate dark:prose-invert max-w-none ${className ?? ""}`}>
+      <article
+        className={cn("prose prose-slate dark:prose-invert max-w-none", className)}
+      >
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
+          urlTransform={urlTransform}
           components={{
+            a({ node: _node, href, children, ...rest }) {
+              const onClick = (e: MouseEvent<HTMLAnchorElement>) => {
+                if (onLinkClick && href && onLinkClick(href)) {
+                  e.preventDefault()
+                }
+              }
+              return (
+                <a href={href} onClick={onClick} {...rest}>
+                  {children}
+                </a>
+              )
+            },
             code(props) {
               const { className, children, ...rest } = props as any
               const match = /language-(\w+)/.exec(className || "")

@@ -1,0 +1,12 @@
+body { font-family: system-ui, sans-serif; margin: 0; color: #1f2328; background: #fff; }
+main { max-width: 960px; margin: 0 auto; padding: 24px; }
+.muted { color: #656d76; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin: 16px 0; }
+.tile { border: 1px solid #d0d7de; border-radius: 8px; padding: 12px; }
+.tile .value { font-size: 1.6rem; font-weight: 600; }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #d0d7de; }
+@media (prefers-color-scheme: dark) {
+  body { color: #e6edf3; background: #0d1117; }
+  .tile, th, td { border-color: #30363d; }
+}

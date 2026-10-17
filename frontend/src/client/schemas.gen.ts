@@ -6533,6 +6533,117 @@ export const AgentApiScopeCatalogSchema = {
     description: "The available-scope catalog offered to the owner's scope picker."
 } as const;
 
+export const AgentArtifactPublishRequestSchema = {
+    properties: {
+        path: {
+            type: 'string',
+            maxLength: 1024,
+            minLength: 1,
+            title: 'Path'
+        },
+        title: {
+            type: 'string',
+            maxLength: 200,
+            minLength: 1,
+            title: 'Title'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 2000
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        entry: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 1024
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Entry'
+        },
+        artifact_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Artifact Id'
+        },
+        source_session_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Source Session Id'
+        }
+    },
+    additionalProperties: false,
+    type: 'object',
+    required: ['path', 'title'],
+    title: 'AgentArtifactPublishRequest'
+} as const;
+
+export const AgentArtifactPublishedSchema = {
+    properties: {
+        artifact_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Artifact Id'
+        },
+        revision: {
+            type: 'integer',
+            title: 'Revision'
+        },
+        url: {
+            type: 'string',
+            title: 'Url'
+        },
+        kind: {
+            type: 'string',
+            enum: ['site', 'files'],
+            title: 'Kind'
+        },
+        file_count: {
+            type: 'integer',
+            title: 'File Count'
+        },
+        size_bytes: {
+            type: 'integer',
+            title: 'Size Bytes'
+        },
+        excluded: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Excluded'
+        }
+    },
+    type: 'object',
+    required: ['artifact_id', 'revision', 'url', 'kind', 'file_count', 'size_bytes', 'excluded'],
+    title: 'AgentArtifactPublished',
+    description: 'The ``artifacts_publish`` result, exactly as the schema declares it.'
+} as const;
+
 export const AgentBundlePublicSchema = {
     properties: {
         id: {
@@ -12256,6 +12367,1355 @@ export const ArticleListItemSchema = {
     description: 'Article metadata for discovery step.'
 } as const;
 
+export const ArtifactDetailPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        title: {
+            type: 'string',
+            title: 'Title'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        kind: {
+            type: 'string',
+            enum: ['site', 'files'],
+            title: 'Kind'
+        },
+        entry_path: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Entry Path'
+        },
+        visibility: {
+            type: 'string',
+            enum: ['private', 'instance'],
+            title: 'Visibility'
+        },
+        source_kind: {
+            type: 'string',
+            enum: ['desktop', 'core_agent', 'cli', 'upload'],
+            title: 'Source Kind'
+        },
+        source_label: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Source Label'
+        },
+        source_agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Source Agent Id'
+        },
+        source_session_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Source Session Id'
+        },
+        user_workspace_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'User Workspace Id'
+        },
+        current_revision_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Current Revision Id'
+        },
+        current_revision_number: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Current Revision Number'
+        },
+        revision_count: {
+            type: 'integer',
+            title: 'Revision Count',
+            default: 0
+        },
+        file_count: {
+            type: 'integer',
+            title: 'File Count',
+            default: 0
+        },
+        size_bytes: {
+            type: 'integer',
+            title: 'Size Bytes',
+            default: 0
+        },
+        owner_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Owner Id'
+        },
+        owner_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Owner Name'
+        },
+        is_owner: {
+            type: 'boolean',
+            title: 'Is Owner',
+            default: false
+        },
+        grant_count: {
+            type: 'integer',
+            title: 'Grant Count',
+            default: 0
+        },
+        live_link_count: {
+            type: 'integer',
+            title: 'Live Link Count',
+            default: 0
+        },
+        url: {
+            type: 'string',
+            title: 'Url'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        },
+        revisions: {
+            items: {
+                '$ref': '#/components/schemas/ArtifactRevisionPublic'
+            },
+            type: 'array',
+            title: 'Revisions',
+            default: []
+        },
+        grants: {
+            anyOf: [
+                {
+                    items: {
+                        '$ref': '#/components/schemas/ArtifactGrantPublic'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Grants'
+        },
+        links: {
+            anyOf: [
+                {
+                    items: {
+                        '$ref': '#/components/schemas/ArtifactLinkPublic'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Links'
+        }
+    },
+    type: 'object',
+    required: ['id', 'title', 'kind', 'visibility', 'source_kind', 'owner_id', 'url', 'created_at', 'updated_at'],
+    title: 'ArtifactDetailPublic'
+} as const;
+
+export const ArtifactFileEntrySchema = {
+    properties: {
+        path: {
+            type: 'string',
+            title: 'Path'
+        },
+        size: {
+            type: 'integer',
+            title: 'Size'
+        },
+        sha256: {
+            type: 'string',
+            title: 'Sha256'
+        },
+        mime: {
+            type: 'string',
+            title: 'Mime'
+        }
+    },
+    type: 'object',
+    required: ['path', 'size', 'sha256', 'mime'],
+    title: 'ArtifactFileEntry',
+    description: 'One file of a revision manifest.'
+} as const;
+
+export const ArtifactFromEnvironmentRequestSchema = {
+    properties: {
+        path: {
+            type: 'string',
+            maxLength: 1024,
+            minLength: 1,
+            title: 'Path'
+        },
+        title: {
+            type: 'string',
+            maxLength: 200,
+            minLength: 1,
+            title: 'Title'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 2000
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        entry: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 1024
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Entry'
+        },
+        artifact_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Artifact Id'
+        },
+        environment_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Environment Id'
+        }
+    },
+    additionalProperties: false,
+    type: 'object',
+    required: ['path', 'title', 'environment_id'],
+    title: 'ArtifactFromEnvironmentRequest'
+} as const;
+
+export const ArtifactGrantInSchema = {
+    properties: {
+        principal: {
+            '$ref': '#/components/schemas/CatalogPrincipalUser'
+        },
+        access: {
+            type: 'string',
+            const: 'view',
+            title: 'Access',
+            default: 'view'
+        }
+    },
+    type: 'object',
+    required: ['principal'],
+    title: 'ArtifactGrantIn',
+    description: 'One entry of ``PUT /artifacts/{id}/grants`` (full replace).'
+} as const;
+
+export const ArtifactGrantPublicSchema = {
+    properties: {
+        principal: {
+            '$ref': '#/components/schemas/CatalogPrincipalUser'
+        },
+        access: {
+            type: 'string',
+            const: 'view',
+            title: 'Access',
+            default: 'view'
+        },
+        display_name: {
+            type: 'string',
+            title: 'Display Name'
+        },
+        email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Email'
+        },
+        granted_by: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/CatalogPerson'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        }
+    },
+    type: 'object',
+    required: ['principal', 'display_name', 'created_at'],
+    title: 'ArtifactGrantPublic'
+} as const;
+
+export const ArtifactLinkCreateSchema = {
+    properties: {
+        label: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 200
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Label'
+        },
+        expires_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Expires At'
+        },
+        with_code: {
+            type: 'boolean',
+            title: 'With Code',
+            default: false
+        },
+        pinned_revision_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Pinned Revision Id'
+        }
+    },
+    type: 'object',
+    title: 'ArtifactLinkCreate'
+} as const;
+
+export const ArtifactLinkCreatedSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        token_prefix: {
+            type: 'string',
+            title: 'Token Prefix'
+        },
+        label: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Label'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        expires_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Expires At'
+        },
+        revoked_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Revoked At'
+        },
+        pinned_revision_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Pinned Revision Id'
+        },
+        pinned_revision_number: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Pinned Revision Number'
+        },
+        needs_code: {
+            type: 'boolean',
+            title: 'Needs Code',
+            default: false
+        },
+        code: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Code'
+        },
+        failed_attempts: {
+            type: 'integer',
+            title: 'Failed Attempts',
+            default: 0
+        },
+        expired: {
+            type: 'boolean',
+            title: 'Expired',
+            default: false
+        },
+        blocked: {
+            type: 'boolean',
+            title: 'Blocked',
+            default: false
+        },
+        token: {
+            type: 'string',
+            title: 'Token'
+        },
+        url: {
+            type: 'string',
+            title: 'Url'
+        }
+    },
+    type: 'object',
+    required: ['id', 'token_prefix', 'created_at', 'token', 'url'],
+    title: 'ArtifactLinkCreated',
+    description: 'Creation response: the only time the plaintext token is returned.'
+} as const;
+
+export const ArtifactLinkInfoSchema = {
+    properties: {
+        title: {
+            type: 'string',
+            title: 'Title'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        owner_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Owner Name'
+        },
+        source_kind: {
+            type: 'string',
+            title: 'Source Kind'
+        },
+        needs_code: {
+            type: 'boolean',
+            title: 'Needs Code'
+        },
+        expired: {
+            type: 'boolean',
+            title: 'Expired'
+        },
+        blocked: {
+            type: 'boolean',
+            title: 'Blocked'
+        }
+    },
+    type: 'object',
+    required: ['title', 'source_kind', 'needs_code', 'expired', 'blocked'],
+    title: 'ArtifactLinkInfo',
+    description: `\`\`GET /artifact-links/{token}/info\`\` — no auth.`
+} as const;
+
+export const ArtifactLinkOpenSchema = {
+    properties: {
+        code: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 16
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Code'
+        }
+    },
+    type: 'object',
+    title: 'ArtifactLinkOpen'
+} as const;
+
+export const ArtifactLinkPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        token_prefix: {
+            type: 'string',
+            title: 'Token Prefix'
+        },
+        label: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Label'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        expires_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Expires At'
+        },
+        revoked_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Revoked At'
+        },
+        pinned_revision_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Pinned Revision Id'
+        },
+        pinned_revision_number: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Pinned Revision Number'
+        },
+        needs_code: {
+            type: 'boolean',
+            title: 'Needs Code',
+            default: false
+        },
+        code: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Code'
+        },
+        failed_attempts: {
+            type: 'integer',
+            title: 'Failed Attempts',
+            default: 0
+        },
+        expired: {
+            type: 'boolean',
+            title: 'Expired',
+            default: false
+        },
+        blocked: {
+            type: 'boolean',
+            title: 'Blocked',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['id', 'token_prefix', 'created_at'],
+    title: 'ArtifactLinkPublic'
+} as const;
+
+export const ArtifactPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        title: {
+            type: 'string',
+            title: 'Title'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        kind: {
+            type: 'string',
+            enum: ['site', 'files'],
+            title: 'Kind'
+        },
+        entry_path: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Entry Path'
+        },
+        visibility: {
+            type: 'string',
+            enum: ['private', 'instance'],
+            title: 'Visibility'
+        },
+        source_kind: {
+            type: 'string',
+            enum: ['desktop', 'core_agent', 'cli', 'upload'],
+            title: 'Source Kind'
+        },
+        source_label: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Source Label'
+        },
+        source_agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Source Agent Id'
+        },
+        source_session_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Source Session Id'
+        },
+        user_workspace_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'User Workspace Id'
+        },
+        current_revision_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Current Revision Id'
+        },
+        current_revision_number: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Current Revision Number'
+        },
+        revision_count: {
+            type: 'integer',
+            title: 'Revision Count',
+            default: 0
+        },
+        file_count: {
+            type: 'integer',
+            title: 'File Count',
+            default: 0
+        },
+        size_bytes: {
+            type: 'integer',
+            title: 'Size Bytes',
+            default: 0
+        },
+        owner_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Owner Id'
+        },
+        owner_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Owner Name'
+        },
+        is_owner: {
+            type: 'boolean',
+            title: 'Is Owner',
+            default: false
+        },
+        grant_count: {
+            type: 'integer',
+            title: 'Grant Count',
+            default: 0
+        },
+        live_link_count: {
+            type: 'integer',
+            title: 'Live Link Count',
+            default: 0
+        },
+        url: {
+            type: 'string',
+            title: 'Url'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        }
+    },
+    type: 'object',
+    required: ['id', 'title', 'kind', 'visibility', 'source_kind', 'owner_id', 'url', 'created_at', 'updated_at'],
+    title: 'ArtifactPublic'
+} as const;
+
+export const ArtifactPublishedSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        title: {
+            type: 'string',
+            title: 'Title'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        kind: {
+            type: 'string',
+            enum: ['site', 'files'],
+            title: 'Kind'
+        },
+        entry_path: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Entry Path'
+        },
+        visibility: {
+            type: 'string',
+            enum: ['private', 'instance'],
+            title: 'Visibility'
+        },
+        source_kind: {
+            type: 'string',
+            enum: ['desktop', 'core_agent', 'cli', 'upload'],
+            title: 'Source Kind'
+        },
+        source_label: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Source Label'
+        },
+        source_agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Source Agent Id'
+        },
+        source_session_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Source Session Id'
+        },
+        user_workspace_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'User Workspace Id'
+        },
+        current_revision_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Current Revision Id'
+        },
+        current_revision_number: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Current Revision Number'
+        },
+        revision_count: {
+            type: 'integer',
+            title: 'Revision Count',
+            default: 0
+        },
+        file_count: {
+            type: 'integer',
+            title: 'File Count',
+            default: 0
+        },
+        size_bytes: {
+            type: 'integer',
+            title: 'Size Bytes',
+            default: 0
+        },
+        owner_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Owner Id'
+        },
+        owner_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Owner Name'
+        },
+        is_owner: {
+            type: 'boolean',
+            title: 'Is Owner',
+            default: false
+        },
+        grant_count: {
+            type: 'integer',
+            title: 'Grant Count',
+            default: 0
+        },
+        live_link_count: {
+            type: 'integer',
+            title: 'Live Link Count',
+            default: 0
+        },
+        url: {
+            type: 'string',
+            title: 'Url'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        },
+        revision_number: {
+            type: 'integer',
+            title: 'Revision Number'
+        },
+        excluded: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Excluded',
+            default: []
+        }
+    },
+    type: 'object',
+    required: ['id', 'title', 'kind', 'visibility', 'source_kind', 'owner_id', 'url', 'created_at', 'updated_at', 'revision_number'],
+    title: 'ArtifactPublished',
+    description: 'Create / republish response: the artifact plus what this publish did.'
+} as const;
+
+export const ArtifactRevisionPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        number: {
+            type: 'integer',
+            title: 'Number'
+        },
+        size_bytes: {
+            type: 'integer',
+            title: 'Size Bytes'
+        },
+        file_count: {
+            type: 'integer',
+            title: 'File Count'
+        },
+        files: {
+            items: {
+                '$ref': '#/components/schemas/ArtifactFileEntry'
+            },
+            type: 'array',
+            title: 'Files'
+        },
+        excluded: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Excluded'
+        },
+        note: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Note'
+        },
+        created_by: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Created By'
+        },
+        created_by_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Created By Name'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        is_current: {
+            type: 'boolean',
+            title: 'Is Current',
+            default: false
+        },
+        pinned: {
+            type: 'boolean',
+            title: 'Pinned',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['id', 'number', 'size_bytes', 'file_count', 'files', 'excluded', 'created_at'],
+    title: 'ArtifactRevisionPublic'
+} as const;
+
+export const ArtifactUpdateSchema = {
+    properties: {
+        title: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 200,
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Title'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 2000
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        entry_path: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 1024
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Entry Path'
+        },
+        visibility: {
+            anyOf: [
+                {
+                    type: 'string',
+                    enum: ['private', 'instance']
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Visibility'
+        }
+    },
+    type: 'object',
+    title: 'ArtifactUpdate'
+} as const;
+
+export const ArtifactViewPublicSchema = {
+    properties: {
+        content_base: {
+            type: 'string',
+            title: 'Content Base'
+        },
+        entry: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Entry'
+        },
+        files: {
+            items: {
+                '$ref': '#/components/schemas/ArtifactFileEntry'
+            },
+            type: 'array',
+            title: 'Files'
+        },
+        revision_number: {
+            type: 'integer',
+            title: 'Revision Number'
+        },
+        expires_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Expires At'
+        },
+        download_url: {
+            type: 'string',
+            title: 'Download Url'
+        }
+    },
+    type: 'object',
+    required: ['content_base', 'files', 'revision_number', 'expires_at', 'download_url'],
+    title: 'ArtifactViewPublic',
+    description: "A view capability: where the revision's files are served from."
+} as const;
+
+export const ArtifactsCapabilitiesSchema = {
+    properties: {
+        version: {
+            type: 'integer',
+            title: 'Version',
+            default: 1
+        },
+        limits: {
+            '$ref': '#/components/schemas/ArtifactsLimits'
+        }
+    },
+    type: 'object',
+    required: ['limits'],
+    title: 'ArtifactsCapabilities'
+} as const;
+
+export const ArtifactsLimitsSchema = {
+    properties: {
+        max_revision_bytes: {
+            type: 'integer',
+            title: 'Max Revision Bytes'
+        },
+        max_revision_files: {
+            type: 'integer',
+            title: 'Max Revision Files'
+        },
+        max_file_bytes: {
+            type: 'integer',
+            title: 'Max File Bytes'
+        },
+        user_quota_bytes: {
+            type: 'integer',
+            title: 'User Quota Bytes'
+        }
+    },
+    type: 'object',
+    required: ['max_revision_bytes', 'max_revision_files', 'max_file_bytes', 'user_quota_bytes'],
+    title: 'ArtifactsLimits'
+} as const;
+
+export const ArtifactsPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/ArtifactPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'ArtifactsPublic'
+} as const;
+
 export const AutoInstallBundleAddSchema = {
     properties: {
         bundle_uuid: {
@@ -12391,6 +13851,360 @@ export const BlockLayoutUpdateSchema = {
     type: 'object',
     required: ['block_id', 'grid_x', 'grid_y', 'grid_w', 'grid_h'],
     title: 'BlockLayoutUpdate'
+} as const;
+
+export const Body_artifacts_create_artifactSchema = {
+    properties: {
+        title: {
+            type: 'string',
+            maxLength: 200,
+            minLength: 1,
+            title: 'Title'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 2000
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        entry_path: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 1024
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Entry Path'
+        },
+        source_kind: {
+            type: 'string',
+            enum: ['desktop', 'cli', 'upload'],
+            title: 'Source Kind',
+            default: 'upload'
+        },
+        source_label: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 200
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Source Label'
+        },
+        user_workspace_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'User Workspace Id'
+        },
+        archive: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'binary'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Archive'
+        },
+        files: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string',
+                        format: 'binary'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Files'
+        }
+    },
+    type: 'object',
+    required: ['title'],
+    title: 'Body_artifacts-create_artifact'
+} as const;
+
+export const Body_artifacts_republish_artifactSchema = {
+    properties: {
+        note: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 2000
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Note'
+        },
+        entry_path: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 1024
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Entry Path'
+        },
+        title: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 200
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Title'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 2000
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        archive: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'binary'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Archive'
+        },
+        files: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string',
+                        format: 'binary'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Files'
+        }
+    },
+    type: 'object',
+    title: 'Body_artifacts-republish_artifact'
+} as const;
+
+export const Body_cli_account_create_artifactSchema = {
+    properties: {
+        title: {
+            type: 'string',
+            maxLength: 200,
+            minLength: 1,
+            title: 'Title'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 2000
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        entry_path: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 1024
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Entry Path'
+        },
+        source_kind: {
+            type: 'string',
+            enum: ['desktop', 'cli'],
+            title: 'Source Kind',
+            default: 'cli'
+        },
+        source_label: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 200
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Source Label'
+        },
+        user_workspace_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'User Workspace Id'
+        },
+        archive: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'binary'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Archive'
+        },
+        files: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string',
+                        format: 'binary'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Files'
+        }
+    },
+    type: 'object',
+    required: ['title'],
+    title: 'Body_cli-account_create_artifact'
+} as const;
+
+export const Body_cli_account_republish_artifactSchema = {
+    properties: {
+        note: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 2000
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Note'
+        },
+        entry_path: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 1024
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Entry Path'
+        },
+        title: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 200
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Title'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 2000
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        archive: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'binary'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Archive'
+        },
+        files: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string',
+                        format: 'binary'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Files'
+        }
+    },
+    type: 'object',
+    title: 'Body_cli-account_republish_artifact'
 } as const;
 
 export const Body_cli_account_upload_fileSchema = {

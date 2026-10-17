@@ -86,6 +86,20 @@ location /api/v1/env-console/ {
 
 **Upstream:** backend.
 
+### `~ ^/api/v1/(cli/account/)?artifacts(/|$)`
+
+**Feature:** artifact publish/republish uploads, including the account-CLI routes - see [Artifacts](../application/artifacts/artifacts.md).
+**Why a dedicated block:** uploads are multipart up to 50 MiB plus form overhead; the generic `/api/` block keeps nginx's 1 MB default and would return an nginx HTML 413.
+**Special requirements:** `client_max_body_size 55m` (the backend enforces `ARTIFACT_MAX_REVISION_BYTES + ARTIFACT_UPLOAD_OVERHEAD_BYTES` itself via `ArtifactUploadLimitMiddleware`), forwarded headers. A regex location wins over the `/api/v1/cli/` prefix, so CLI uploads land here. **A production reverse proxy needs the same limit on this path.**
+**Upstream:** backend.
+
+### `/a/`
+
+**Feature:** artifact content (`/a/v/<cap>/<path>`, `/a/z/<cap>`) - see [Artifacts](../application/artifacts/artifacts.md).
+**Why a dedicated block:** the backend serves these with its own CSP sandbox and CORS headers; without the block they fall through to the SPA `try_files`.
+**Special requirements:** `proxy_buffering off` so large files and ranges stream; forwarded headers; no body-size override. **A production reverse proxy must forward `/a/` to the backend** (and must not add or override CSP/CORS headers on it). The per-request capability check means the proxy must not cache `/a/` responses. Note that the capability token is part of the URL path, so it appears in nginx access logs; treat those logs as sensitive (caps are short-lived and re-checked per request). Rule: never add a cookie-authenticated API with `SameSite=None`; artifact content is credential-free by design.
+**Upstream:** backend.
+
 ### `/.well-known/oauth-protected-resource`
 
 **Feature:** RFC 9728 Protected Resource Metadata for MCP OAuth — see [MCP Integration](../application/mcp_integration/agent_mcp_architecture.md) and [MCP Connector Setup](../application/mcp_integration/mcp_connector_setup.md).
@@ -161,6 +175,7 @@ When a new feature introduces a `/.well-known/*` endpoint:
 - [MCP Integration](../application/mcp_integration/agent_mcp_architecture.md) — uses `/mcp/`, `/.well-known/oauth-protected-resource`, `/.well-known/oauth-authorization-server`
 - [App MCP Server](../application/app_mcp_server/app_mcp_server.md) — shares the `/mcp/` routing with per-agent MCP servers
 - [Desktop App Authentication](../application/desktop_auth/desktop_auth.md) — uses `/.well-known/cinna-desktop`
+- [Artifacts](../application/artifacts/artifacts.md) — uses `/a/` and the artifact upload body-size block
 - [Realtime Events](../application/realtime_events/event_bus_system.md) — uses `/ws/`
 - [Cinna CLI Integration](../application/cinna_cli_integration/cinna_cli_integration.md) — uses `/api/v1/cli/` (WebSocket sync tunnel + SSE exec stream)
 - [Agent Environment Console](../agents/agent_environments/agent_env_console.md) — uses `/api/v1/env-console/` (`WS .../{id}/terminal` + `WS .../{id}/logs/stream`, web terminal + live logs follow)

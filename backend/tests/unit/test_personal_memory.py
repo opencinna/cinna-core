@@ -406,3 +406,32 @@ class TestLoadPersonalMemoryDefensive:
         pg = _make_pg(tmp_path)
         result = pg._load_personal_memory()
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# 10. Environment context names the writable locations (memory + artifacts)
+# ---------------------------------------------------------------------------
+
+
+class TestEnvironmentContextLocations:
+    """The env context lists ``app-data/memory`` and (kit contract 1.13.0) the
+    ``artifacts/`` folder — where anything meant for ``artifacts_publish`` is built.
+    """
+
+    def test_env_context_has_artifacts_location_line(self, tmp_path: Path) -> None:
+        ctx = _make_pg(tmp_path)._get_environment_context()
+        assert "**Personal memory location**: `./app-data/memory/`" in ctx
+        assert "**Artifacts location**: `./artifacts/<name>/`" in ctx
+        # The f-string braces render literally, not as a Python set/format slot.
+        assert '{path: "artifacts/<name>"}' in ctx
+        assert "Republishing the same path updates the same artifact." in ctx
+        assert "`./app-data/`, which is never published" in ctx
+
+    def test_conversation_and_building_prompts_carry_the_artifacts_line(
+        self, tmp_path: Path
+    ) -> None:
+        pg = _make_pg(tmp_path)
+        assert "**Artifacts location**" in pg.generate_conversation_mode_prompt()
+        pg.building_agent_prompt = "You build agents."
+        building = pg.generate_building_mode_prompt()
+        assert "**Artifacts location**" in building["append"]

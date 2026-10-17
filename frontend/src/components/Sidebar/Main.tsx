@@ -14,6 +14,11 @@ export type Item = {
   icon: LucideIcon
   title: string
   path: string
+  /**
+   * Also lit on every path under this prefix (the artifact list lights on
+   * `/artifact/<id>` too). Equality on `path` stays the default.
+   */
+  activePrefix?: string
 }
 
 interface MainProps {
@@ -36,7 +41,10 @@ export function Main({ items }: MainProps) {
       <SidebarGroupContent>
         <SidebarMenu>
           {items.map((item) => {
-            const isActive = currentPath === item.path
+            const isActive =
+              currentPath === item.path ||
+              (item.activePrefix !== undefined &&
+                currentPath.startsWith(item.activePrefix))
 
             return (
               <SidebarMenuItem key={item.title}>

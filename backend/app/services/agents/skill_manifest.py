@@ -150,7 +150,7 @@ RESERVED_SKILL_NAMES: frozenset[str] = frozenset(
 #: parsed with ``source="platform"`` may carry one. Their frontmatter may hold
 #: keys this module does not interpret (``when_to_use``, ``compatibility``, a
 #: ``metadata`` map); like every unknown key they are kept verbatim.
-PLATFORM_SKILL_NAMES: frozenset[str] = frozenset({"cinna-tasks"})
+PLATFORM_SKILL_NAMES: frozenset[str] = frozenset({"cinna-tasks", "cinna-artifacts"})
 
 #: ``SkillEntry.source`` of a platform-owned skill.
 PLATFORM_SKILL_SOURCE = "platform"

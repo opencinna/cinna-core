@@ -7,62 +7,15 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { parseCsv } from "@/utils/csv"
 
 interface CSVViewerProps {
   content: string
 }
 
-function parseCSV(csvText: string): string[][] {
-  const rows: string[][] = []
-  let currentRow: string[] = []
-  let currentCell = ""
-  let insideQuotes = false
-
-  for (let i = 0; i < csvText.length; i++) {
-    const char = csvText[i]
-    const nextChar = csvText[i + 1]
-
-    if (char === '"') {
-      if (insideQuotes && nextChar === '"') {
-        // Escaped quote
-        currentCell += '"'
-        i++ // Skip next quote
-      } else {
-        // Toggle quote state
-        insideQuotes = !insideQuotes
-      }
-    } else if (char === "," && !insideQuotes) {
-      // End of cell
-      currentRow.push(currentCell)
-      currentCell = ""
-    } else if ((char === "\n" || char === "\r") && !insideQuotes) {
-      // End of row
-      if (char === "\r" && nextChar === "\n") {
-        i++ // Skip \n in \r\n
-      }
-      if (currentCell || currentRow.length > 0) {
-        currentRow.push(currentCell)
-        rows.push(currentRow)
-        currentRow = []
-        currentCell = ""
-      }
-    } else {
-      currentCell += char
-    }
-  }
-
-  // Add last cell and row if not empty
-  if (currentCell || currentRow.length > 0) {
-    currentRow.push(currentCell)
-    rows.push(currentRow)
-  }
-
-  return rows
-}
-
 export function CSVViewer({ content }: CSVViewerProps) {
   const { headers, rows } = useMemo(() => {
-    const parsed = parseCSV(content)
+    const parsed = parseCsv(content).rows
     if (parsed.length === 0) {
       return { headers: [], rows: [] }
     }

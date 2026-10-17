@@ -48,6 +48,18 @@ def _ensure_test_engine():
 
 
 @pytest.fixture(autouse=True)
+def artifact_storage_dir(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch):
+    """No test writes into the real ``ARTIFACT_STORAGE_DIR`` bind mount.
+
+    Artifact files land wherever a publish or a user deletion touches them, so
+    the redirect is suite-wide rather than per-domain. Yields the per-test root.
+    """
+    root = tmp_path_factory.mktemp("artifacts")
+    monkeypatch.setattr(settings, "ARTIFACT_STORAGE_DIR", str(root))
+    yield root
+
+
+@pytest.fixture(autouse=True)
 def block_llm_provider() -> Generator[None, None, None]:
     """No test may reach a real LLM provider through the routing classifier.
 

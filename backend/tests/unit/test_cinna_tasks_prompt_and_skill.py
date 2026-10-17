@@ -237,7 +237,8 @@ def test_platform_skill_is_projected_beside_workspace_skills(tmp_path: Path) -> 
 
     projected = home / "skills"
     assert result.errors == []
-    assert sorted(p.name for p in projected.iterdir()) == ["cinna-tasks", "pdf-report"]
+    # Every platform skill rides along (cinna-tasks, cinna-artifacts).
+    assert sorted(p.name for p in projected.iterdir()) == ["cinna-artifacts", "cinna-tasks", "pdf-report"]
     assert (projected / "cinna-tasks" / skills_projection.PROJECTION_MARKER).is_file()
     assert (projected / "cinna-tasks" / "SKILL.md").read_bytes() == (
         _KIT_SKILLS / "cinna-tasks" / "SKILL.md"
@@ -271,7 +272,7 @@ def test_platform_skill_survives_refreshes_and_workspace_removals(tmp_path: Path
     # Removing every workspace skill prunes those, never the platform one.
     shutil.rmtree(workspace / "skills" / "pdf-report")
     after_removal = skills_projection.refresh(workspace, home, platform)
-    assert sorted(p.name for p in (home / "skills").iterdir()) == ["cinna-tasks"]
+    assert sorted(p.name for p in (home / "skills").iterdir()) == ["cinna-artifacts", "cinna-tasks"]
     assert after_removal.identity != first.identity
 
     # A platform skill change (an image upgrade) re-projects it.

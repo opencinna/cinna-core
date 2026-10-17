@@ -995,6 +995,19 @@ Behavioural notes:
   `delete` verb — consent to share is final, raised only from the web UI or
   `/session-improve`, and only the recipient can act on a request once raised.
 
+### 7h. Artifacts (`/cli/account/artifacts`)
+
+Publishing and downloading artifacts needs multipart and binary transport, which the JSON-only api-proxy (1 MiB body cap) cannot carry. Four account-token routes (`backend/app/api/routes/cli.py`) call the same services as the JWT routes in [Artifacts](../artifacts/artifacts.md):
+
+| Route | Purpose |
+|-------|---------|
+| `POST /cli/account/artifacts` | publish (multipart `archive` xor `files[]`), revision 1 |
+| `POST /cli/account/artifacts/{id}/revisions` | republish (owner only) |
+| `GET /cli/account/artifacts/{id}/download` | zip of a revision |
+| `POST /cli/account/artifacts/{id}/links` | create a public link; the only way the CLI creates one |
+
+List, detail, edit, delete, grants, link revoke and `GET /artifacts/capabilities` go through the api-proxy. The api-proxy **refuses** `POST artifacts/{id}/links` (403 pointing at the dedicated route) and **redacts** link codes: `links[*].code` in `GET artifacts/{id}` is set to null (house rule C18, one-time secrets are not relayed through the generic hatch). The nginx body limit for these routes is in [nginx_setup.md](../../infrastructure/nginx_setup.md).
+
 ### 7g. Exchanging the Account Token for a Desktop Session
 
 `POST /api/v1/cli/account/desktop-token` — used by **Cinna Desktop**, not by the

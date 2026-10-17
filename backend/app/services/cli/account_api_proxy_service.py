@@ -21,9 +21,10 @@ and multipart are out of scope (denied by the chokepoint / response-type guard).
 """
 from __future__ import annotations
 
+import json
 import logging
 from datetime import timedelta
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 import httpx
 from fastapi import Request, Response
@@ -42,6 +43,7 @@ from app.models.users.user import User
 from app.services.cli.account_api_proxy_policy import (
     ApiProxyDenied,
     assert_api_proxy_allowed,
+    redact_response,
 )
 from app.services.common.rate_limiter import RateLimiter
 from app.services.events.security_event_service import SecurityEventService
@@ -255,12 +257,29 @@ class AccountApiProxyService:
             if k.lower() in _FORWARDED_RESPONSE_HEADERS
         }
         forwarded[_PROXIED_MARKER_HEADER] = "1"
+        body = AccountApiProxyService._redact(req.method, normalized_path, body, content_type)
         return Response(
             content=body,
             status_code=inner.status_code,
             media_type=inner.headers.get("content-type"),
             headers=forwarded,
         )
+
+    @staticmethod
+    def _redact(method: str, normalized_path: str, body: bytes, content_type: str) -> bytes:
+        """Blank share codes in a mirrored JSON body (``redact_response``)."""
+        if not content_type.startswith("application/json") or not body:
+            return body
+        base = settings.API_V1_STR.rstrip("/") + "/"
+        decoded = unquote(normalized_path)
+        relative = decoded[len(base):] if decoded.startswith(base) else ""
+        try:
+            payload = json.loads(body)
+        except ValueError:
+            return body
+        if not redact_response(method, relative, payload):
+            return body
+        return json.dumps(payload).encode()
 
     # ── Audit ────────────────────────────────────────────────────────────
     @staticmethod

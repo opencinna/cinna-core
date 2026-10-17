@@ -192,7 +192,9 @@ AI credentials (LLM provider keys) follow the same 409 / force pattern but have 
 
 ## Credentials Page: Filter Tabs and Category Assignment
 
-The `/credentials` page organises credentials into three **filter tabs** (mirroring the Catalog page's filter-pill idiom): **My Credentials** (default), **Automatic Credentials**, and **Bundle Credentials**. The old stacked "My Credentials / Automatic Credentials / Shared with Me" sections are replaced by this single tab bar.
+The `/credentials` page is a table (the manage-list pattern, `DataTable`) organised by a segmented control with per-section counts: **My Credentials** (default), **Automatic Credentials**, and **Bundle Credentials**. The old stacked "My Credentials / Automatic Credentials / Shared with Me" sections are replaced by this single control.
+
+The table has two content columns plus a row menu (Copy ID; Delete on owned rows): Name (type glyph, name, key-status badge, incomplete and bundle icons) and a right-aligned badge cluster — a type badge, a share count and an agent count. Each count badge opens a popover (on hover, click, keyboard or tap) that loads its details lazily: shares from `GET /credentials/{id}/shares`, agents from the deletion-impact `affected_own_agents` on owned rows ("Used by N of your agents" on rows shared with you; a shared row's share badge shows the owner). Each list shows 5 names, then "and N more". Below 1024 px only the type badge shows. The column header row is visually hidden (kept for screen readers). Clicking a row opens `/credential/$id`. A search box filters by name, notes, type and owner; paging is client-side at 30 rows per page; loading, error, empty and no-match states are shown in place of the table. The owned list is fetched in full (all pages), no longer capped at 100.
 
 Tab membership is driven by a server-computed `category` field (`"mine"` | `"automatic"` | `"bundle"`) returned on every `CredentialPublic` and `SharedCredentialPublic` response. The frontend filters the merged owned+shared list purely on this field — no client-side re-derivation.
 
@@ -292,3 +294,4 @@ Publisher sets allow_template_sharing=true + marks private fields
 ## Changelog
 
 - Owner removal of a share is recorded in `credential_share_revocation`; a skill-installer share persists across skill versions; share and deletion-impact payloads list agent and local-skill usages; delete is Tier 2 for active local skill installs.
+- `/credentials` list moved from a card grid to a searchable, paged table with a counted segmented section control; editing happens on the credential page (`/credential/$id`).

@@ -14,6 +14,11 @@ import useWorkspace from "@/hooks/useWorkspace"
 import useCustomToast from "@/hooks/useCustomToast"
 import { handleError, saveBlobAs } from "@/utils"
 import { useGuestShare } from "@/hooks/useGuestShare"
+import type { UserPublic } from "@/client"
+import {
+  PublishFromWorkspaceDialog,
+  type PublishTarget,
+} from "@/components/Artifacts/PublishFromWorkspaceDialog"
 
 interface WorkspaceTreeResponse {
   files?: FileNode
@@ -45,6 +50,31 @@ export function EnvironmentPanel({ isOpen, environmentId, agentId }: Environment
   const { showSuccessToast, showErrorToast } = useCustomToast()
   const { workspaceFilter } = useWorkspace()
   const { isGuest } = useGuestShare()
+  const [publishTarget, setPublishTarget] = useState<PublishTarget | null>(null)
+
+  // "Publish as artifact" is the agent owner's (D20): the signed-in user from
+  // the shared `currentUser` cache, the agent from the page's own `["agent"]`.
+  const { data: agentForPublish } = useQuery({
+    queryKey: ["agent", agentId],
+    queryFn: () => AgentsService.readAgent({ id: agentId! }),
+    enabled: !isGuest && !!agentId,
+  })
+  // Subscribed, never fetched here: `useAuth()` would fetch /users/me, and on
+  // the guest share page (which renders this panel with a guest JWT) that
+  // 404s and useAuth's handler sends the guest to /login.
+  const { data: currentUser } = useQuery<UserPublic | null>({
+    queryKey: ["currentUser"],
+    enabled: false,
+  })
+  const canPublish =
+    !isGuest &&
+    !!environmentId &&
+    !!currentUser &&
+    agentForPublish?.owner_id === currentUser.id
+  const handlePublish = useCallback(
+    (path: string, isFolder: boolean) => setPublishTarget({ path, isFolder }),
+    [],
+  )
 
   // Fetch agent credentials
   const {
@@ -312,6 +342,7 @@ export function EnvironmentPanel({ isOpen, environmentId, agentId }: Environment
                 databaseTables={databaseTables}
                 onFetchDatabaseTables={handleFetchDatabaseTables}
                 isGuest={isGuest}
+                onPublish={canPublish ? handlePublish : undefined}
               />
               <WorkspaceTabContent
                 value="scripts"
@@ -324,6 +355,7 @@ export function EnvironmentPanel({ isOpen, environmentId, agentId }: Environment
                 databaseTables={databaseTables}
                 onFetchDatabaseTables={handleFetchDatabaseTables}
                 isGuest={isGuest}
+                onPublish={canPublish ? handlePublish : undefined}
               />
               <WorkspaceTabContent
                 value="logs"
@@ -336,6 +368,7 @@ export function EnvironmentPanel({ isOpen, environmentId, agentId }: Environment
                 databaseTables={databaseTables}
                 onFetchDatabaseTables={handleFetchDatabaseTables}
                 isGuest={isGuest}
+                onPublish={canPublish ? handlePublish : undefined}
               />
               <WorkspaceTabContent
                 value="docs"
@@ -348,6 +381,7 @@ export function EnvironmentPanel({ isOpen, environmentId, agentId }: Environment
                 databaseTables={databaseTables}
                 onFetchDatabaseTables={handleFetchDatabaseTables}
                 isGuest={isGuest}
+                onPublish={canPublish ? handlePublish : undefined}
               />
               <WorkspaceTabContent
                 value="app_data"
@@ -360,6 +394,7 @@ export function EnvironmentPanel({ isOpen, environmentId, agentId }: Environment
                 databaseTables={databaseTables}
                 onFetchDatabaseTables={handleFetchDatabaseTables}
                 isGuest={isGuest}
+                onPublish={canPublish ? handlePublish : undefined}
               />
               {webappData.length > 0 && (
                 <WorkspaceTabContent
@@ -373,6 +408,7 @@ export function EnvironmentPanel({ isOpen, environmentId, agentId }: Environment
                   databaseTables={databaseTables}
                   onFetchDatabaseTables={handleFetchDatabaseTables}
                   isGuest={isGuest}
+                  onPublish={canPublish ? handlePublish : undefined}
                 />
               )}
               {agentApiData.length > 0 && (
@@ -387,6 +423,7 @@ export function EnvironmentPanel({ isOpen, environmentId, agentId }: Environment
                   databaseTables={databaseTables}
                   onFetchDatabaseTables={handleFetchDatabaseTables}
                   isGuest={isGuest}
+                  onPublish={canPublish ? handlePublish : undefined}
                 />
               )}
             </>
@@ -406,6 +443,14 @@ export function EnvironmentPanel({ isOpen, environmentId, agentId }: Environment
             <span>{environmentData.agent_sdk_building || DEFAULT_SDK}</span>
           </div>
         </div>
+      )}
+      {canPublish && environmentId && agentId && (
+        <PublishFromWorkspaceDialog
+          environmentId={environmentId}
+          agentId={agentId}
+          target={publishTarget}
+          onClose={() => setPublishTarget(null)}
+        />
       )}
     </div>
   )

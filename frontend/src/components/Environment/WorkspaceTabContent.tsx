@@ -1,7 +1,7 @@
 import { TabsContent } from "@/components/ui/tabs"
-import { TreeItemRenderer } from "./TreeItemRenderer"
 import { EmptyState } from "./StateComponents"
-import type { TreeItem, DatabaseTableItem } from "./types"
+import { TreeItemRenderer } from "./TreeItemRenderer"
+import type { DatabaseTableItem, TreeItem } from "./types"
 
 interface WorkspaceTabContentProps {
   value: string
@@ -11,9 +11,13 @@ interface WorkspaceTabContentProps {
   onDownload: (fileName: string) => void
   pathPrefix: string
   envId?: string
-  databaseTables?: Record<string, { tables: DatabaseTableItem[], loading: boolean, error: string | null }>
+  databaseTables?: Record<
+    string,
+    { tables: DatabaseTableItem[]; loading: boolean; error: string | null }
+  >
   onFetchDatabaseTables?: (path: string) => void
   isGuest?: boolean
+  onPublish?: (path: string, isFolder: boolean) => void
 }
 
 export function WorkspaceTabContent({
@@ -27,9 +31,11 @@ export function WorkspaceTabContent({
   databaseTables,
   onFetchDatabaseTables,
   isGuest,
+  onPublish,
 }: WorkspaceTabContentProps) {
   const firstItem = data[0]
-  const hasContent = firstItem && firstItem.type === "folder" && firstItem.children.length > 0
+  const hasContent =
+    firstItem && firstItem.type === "folder" && firstItem.children.length > 0
 
   return (
     <TabsContent value={value} className="flex-1 overflow-auto px-4 pb-4">
@@ -48,6 +54,7 @@ export function WorkspaceTabContent({
               databaseTables={databaseTables}
               onFetchDatabaseTables={onFetchDatabaseTables}
               isGuest={isGuest}
+              onPublish={onPublish}
             />
           ))}
         </div>

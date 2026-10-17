@@ -56,6 +56,7 @@ make help
 | `files/` | Static assets shipped with the agent. |
 | `credentials/` | `.env` (git-ignored) and a redacted `README.md`. |
 | `app-data/` | Runtime output, caches and uploads. Not part of the definition. |
+| `artifacts/` | What the agent builds to publish as Cinna artifacts. Not part of the definition. |
 
 ## Scripts
 

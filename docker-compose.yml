@@ -74,6 +74,11 @@ services:
       # backend container recreation: they ARE the shared agents (Postgres only
       # caches head_sha). Multi-replica deployments need a shared volume.
       - ${HOST_GIT_STORAGE_DIR:-./backend/data/git}:/app/data/git
+      # Published artifacts (ARTIFACT_STORAGE_DIR) — must persist across
+      # backend container recreation: the files ARE the artifact (Postgres
+      # holds only the manifest), and ingest scratch lives under .tmp/ on the
+      # same volume so a revision is promoted with one atomic rename
+      - ${HOST_ARTIFACT_STORAGE_DIR:-./backend/data/artifacts}:/app/data/artifacts
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/utils/health-check/"]
       interval: 10s

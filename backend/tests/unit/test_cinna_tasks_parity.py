@@ -169,6 +169,9 @@ def test_opencode_bridge_lists_exactly_the_schema(expected):
     result = asyncio.run(handler(mcp_types.ListToolsRequest(method="tools/list")))
     tools = result.root.tools
 
+    # The bridge also serves artifacts_publish after the task tools
+    # (test_cinna_artifacts_parity.py); the task tools come first, exactly.
+    tools = [t for t in tools if t.name.startswith("tasks_")]
     assert [t.name for t in tools] == EXPECTED_TOOLS
     for listed in tools:
         assert listed.description == expected[listed.name]["description"]
@@ -223,7 +226,7 @@ def test_environment_receives_byte_identical_protocol_files(tmp_path):
 
     installed = install_platform_protocol(core, _TEMPLATES)
 
-    assert installed == ["protocols/tasks.schema.json", "skills/cinna-tasks"]
+    assert installed[:2] == ["protocols/tasks.schema.json", "skills/cinna-tasks"]
     assert not stale.exists(), "a rebuild must replace the skill wholesale"
     kit_files = sorted(
         p.relative_to(_KIT_SNAPSHOT) for p in (_KIT_SNAPSHOT / "skills" / "cinna-tasks").rglob("*") if p.is_file()

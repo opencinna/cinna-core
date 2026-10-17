@@ -1066,10 +1066,31 @@ async def get_workspace_tree() -> WorkspaceTreeResponse:
         )
 
 
+# Artifact pulls report what the zip left out in this header (JSON list,
+# ASCII-escaped, capped so it fits any proxy's header limit).
+SKIPPED_HEADER = "X-Cinna-Skipped"
+_SKIPPED_HEADER_MAX_CHARS = 8000
+
+
+def _skipped_header_value(skipped: list[str]) -> str:
+    listed: list[str] = []
+    for index, item in enumerate(skipped):
+        candidate = json.dumps(listed + [item], ensure_ascii=True)
+        if len(candidate) > _SKIPPED_HEADER_MAX_CHARS - 40:
+            listed.append(f"…and {len(skipped) - index} more")
+            break
+        listed.append(item)
+    return json.dumps(listed, ensure_ascii=True)
+
+
 @router.get("/workspace/download/{path:path}", dependencies=[Depends(verify_auth_token)])
-async def download_workspace_item(path: str):
+async def download_workspace_item(path: str, artifact: bool = Query(False)):
     """
     Download a file or folder from workspace.
+
+    ``?artifact=1`` (artifact publish only): a folder is zipped by
+    ``create_artifact_zip``, which also skips symlinks pointing outside the
+    folder, and every omission is listed in the ``X-Cinna-Skipped`` header.
 
     Args:
         path: Relative path from workspace root (e.g., "files/data.csv" or "logs")
@@ -1094,7 +1115,11 @@ async def download_workspace_item(path: str):
     """
     try:
         # Validate path
-        absolute_path = agent_env_service.validate_workspace_path(path)
+        absolute_path = (
+            agent_env_service.validate_artifact_path(path)
+            if artifact
+            else agent_env_service.validate_workspace_path(path)
+        )
 
         if not absolute_path.exists():
             raise HTTPException(status_code=404, detail=f"Path not found: {path}")
@@ -1118,7 +1143,12 @@ async def download_workspace_item(path: str):
             )
         else:
             # Create zip and stream
-            zip_path = agent_env_service.create_workspace_zip(path)
+            extra_headers: dict[str, str] = {}
+            if artifact:
+                zip_path, skipped = agent_env_service.create_artifact_zip(path)
+                extra_headers[SKIPPED_HEADER] = _skipped_header_value(skipped)
+            else:
+                zip_path = agent_env_service.create_workspace_zip(path)
             folder_name = absolute_path.name or "workspace"
 
             async def zip_stream():
@@ -1136,7 +1166,8 @@ async def download_workspace_item(path: str):
                 media_type="application/zip",
                 headers={
                     "Content-Disposition": f'attachment; filename="{folder_name}.zip"',
-                    "Content-Length": str(zip_path.stat().st_size)
+                    "Content-Length": str(zip_path.stat().st_size),
+                    **extra_headers,
                 }
             )
 

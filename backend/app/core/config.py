@@ -1055,6 +1055,34 @@ class Settings(BaseSettings):
     # receive-pack subprocess).
     GIT_HTTP_TIMEOUT_SECONDS: int = 600
 
+    # Artifacts — published sites / file sets, immutable per revision.
+    #   <ARTIFACT_STORAGE_DIR>/<artifact_id>/<revision_id>/<relative paths>
+    #   <ARTIFACT_STORAGE_DIR>/.tmp/<uuid>/   ingest scratch (same filesystem,
+    #                                         so promotion is one atomic rename)
+    # MUST be a persisted mount (see the backend volume in docker-compose.yml):
+    # the files ARE the artifact, the DB holds only the manifest.
+    ARTIFACT_STORAGE_DIR: str = "/app/data/artifacts"
+    ARTIFACT_MAX_REVISION_BYTES: int = 50 * 1024 * 1024
+    ARTIFACT_MAX_REVISION_FILES: int = 2000
+    ARTIFACT_MAX_FILE_BYTES: int = 25 * 1024 * 1024
+    # Multipart framing allowance on top of ARTIFACT_MAX_REVISION_BYTES for the
+    # backend-side request body cap (keep nginx's client_max_body_size above it).
+    ARTIFACT_UPLOAD_OVERHEAD_BYTES: int = 5 * 1024 * 1024
+    # Counts every revision of every artifact the user owns.
+    ARTIFACT_USER_QUOTA_BYTES: int = 2 * 1024 * 1024 * 1024
+    # Per zip entry: decompressed / compressed above this is a zip bomb.
+    ARTIFACT_MAX_COMPRESSION_RATIO: int = 100
+    ARTIFACT_VIEW_CAP_TTL_SECONDS: int = 8 * 60 * 60
+    ARTIFACT_LINK_MAX_CODE_ATTEMPTS: int = 3
+    # Origin serving ``/a/`` content. Empty = ``backend_base_url``; set it on
+    # split-host deployments where the SPA origin has no backend behind it.
+    ARTIFACTS_CONTENT_ORIGIN: str | None = None
+
+    @property
+    def artifacts_content_origin(self) -> str:
+        """Origin artifact content URLs are built on, no trailing slash."""
+        return (self.ARTIFACTS_CONTENT_ORIGIN or self.backend_base_url).rstrip("/")
+
     # Host-side path to ``APP_DATA_STORAGE_DIR`` for docker-compose volume
     # mounts. Mirrors ``HOST_AGENT_ENVIRONMENTS_DIR`` for Docker-in-Docker
     # setups; falls back to ``APP_DATA_STORAGE_DIR`` when None (local dev,

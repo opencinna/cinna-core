@@ -29,4 +29,8 @@ __pycache__/
 app-data/
 temp/
 
+# What the agent builds to publish as Cinna artifacts — one person's output,
+# never committed and never shared (layout.json → shared_remote.never_travels)
+artifacts/
+
 .DS_Store

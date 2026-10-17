@@ -15,6 +15,7 @@ backend/data/agents/
 backend/data/bundles/
 backend/data/skills/
 backend/data/git/
+backend/data/artifacts/
 notes.txt
 
 # The Local Agent Kit ships a scaffold whose `.claude/` contents are CONTENT,
@@ -52,3 +53,6 @@ frontend/.ui-shots/
 # artifact of `npm run dev`, unlike the generated routeTree.gen.ts, which IS
 # committed
 frontend/.tanstack/
+
+# Working plans and progress logs stay local
+docs/plans/

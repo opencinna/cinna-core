@@ -250,7 +250,9 @@ content.
 
 ### Persistence Rules (CRITICAL)
 
-- **Conversation-mode runs** SHOULD only write to `/tmp` or `/app/workspace/app-data/`. Anything written to
+- **Conversation-mode runs** SHOULD only write to `/tmp`, `/app/workspace/app-data/`, or
+  `/app/workspace/artifacts/<name>/` (only what is built to publish with `artifacts_publish`).
+  Build publishable output under `artifacts/<name>/`, because `app-data/` is never published. Anything written to
   `/app/workspace/scripts/`, `/app/workspace/docs/`, `/app/workspace/skills/`, `/app/workspace/knowledge/`, or `/app/workspace/files/` during a conversation will be lost the
   next time the publisher pushes an update.
 - **Building-mode runs** MAY write anywhere. The publisher's working install is what gets

@@ -80,7 +80,11 @@ from .opencode_event_transformer import (
     OpenCodeEventTransformer,
     OPENCODE_QUESTION_REQUEST_ID_KEY,
 )
-from .tool_name_registry import CINNA_TASK_TOOL_NAMES_CLAUDE, normalize_tool_name
+from .tool_name_registry import (
+    CINNA_ARTIFACT_TOOL_NAMES_CLAUDE,
+    CINNA_TASK_TOOL_NAMES_CLAUDE,
+    normalize_tool_name,
+)
 from ..prompt_generator import PromptGenerator
 from ..active_session_manager import active_session_manager
 from ..agent_env_service import AgentEnvService
@@ -993,6 +997,7 @@ class OpenCodeAdapter(BaseSDKAdapter):
             mcp_tool_names = [
                 "mcp__knowledge__query_integration_knowledge",
                 *CINNA_TASK_TOOL_NAMES_CLAUDE,
+                *CINNA_ARTIFACT_TOOL_NAMES_CLAUDE,
             ]
             for key in self._active_plugin_mcp_keys():
                 mcp_tool_names.append(f"mcp__{key}")

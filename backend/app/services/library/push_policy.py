@@ -59,6 +59,10 @@ MSG_APP_DATA = (
     "This change includes the agent's app-data folder (its private working files), "
     "which can't be shared."
 )
+MSG_ARTIFACTS = (
+    "This change includes the agent's artifacts folder (what it built to publish), "
+    "which stays with you and can't be shared. Share a published artifact from its page instead."
+)
 MSG_CLAUDE_SETTINGS = (
     "This change includes the agent's Claude permission settings "
     "(.claude/settings.local.json), which never leave your computer."
@@ -89,6 +93,7 @@ WARN_CONTRACT_MINOR_NEWER = (
 _NEVER_TRAVELS_SENTENCES = {
     "credentials/": MSG_CREDENTIALS,
     "app-data/": MSG_APP_DATA,
+    "artifacts/": MSG_ARTIFACTS,
     ".claude/settings.local.json": MSG_CLAUDE_SETTINGS,
 }
 

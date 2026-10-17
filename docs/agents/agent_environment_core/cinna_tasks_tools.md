@@ -71,6 +71,10 @@ Only for a task this conversation created (`task.source_session_id`).
 - If its result is a `blocked` question not yet answered (or the same answer is being retried), the reply goes through the delegation-reply path (`DelegationService.reply`, `require_delegation=False`), limited to 10,000 characters; the result says whether it was delivered or is uncertain.
 - Otherwise it is a follow-up: the message is sent into the executor's linked conversation (`SessionService.send_session_message`). Its `client_message_id` is derived from the task, the message and the requester's latest user message, so a retry in the same turn is deduplicated while the same words in a later turn are a new message. A task with no conversation yet is refused.
 
+## artifacts_publish
+
+The `cinna` server also carries one non-task tool, `artifacts_publish(path, title, description?, entry?, artifact_id?)`, which publishes a workspace file or folder as a private artifact (part of the Artifacts feature, kit contract 1.12.0, protocol `protocols/artifacts.schema.json`). Unlike the task tools it is available in **building mode too**: Claude Code building mode registers `cinna` with artifacts only, conversation mode with tasks and artifacts; the OpenCode bridge serves both in both modes. Behaviour, errors and safety rules: [Artifacts](../../application/artifacts/artifacts.md#5-publishing-from-an-agent-or-workspace).
+
 ## The report rule
 
 From protocol version 1, agent- or automation-given work must end with `tasks_report`. When an environment's `task_protocol_version` is at least 1 and the task came from `delegation_metadata`, `agent_initiated`, `source_session_id`, `created_by_node_id` or a trigger row (not `auto_execute` alone), a session that would auto-complete the task without a final report leaves it **blocked** with "Ended without reporting". See [Input Tasks — Report rule](../../application/input_tasks/input_tasks.md#report-rule-task-protocol-v1).

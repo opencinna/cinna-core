@@ -745,6 +745,7 @@ class PromptGenerator:
             f"**WORKING_DIRECTORY**: `/app/workspace` (all relative paths are from here)\n\n"
             f"**Uploaded files location**: `./app-data/uploads/` (user-uploaded files are here, access them with relative path `./app-data/uploads/filename`)\n\n"
             f"**Personal memory location**: `./app-data/memory/` (canonical file `MEMORY.md`) — the user's private, per-install personal preferences for this agent. Honor anything stored here; create/update `MEMORY.md` with your file tools when the user asks you to remember a personal preference. Personalization only — never workflow logic.\n"
+            f"\n**Artifacts location**: `./artifacts/<name>/` — build anything meant to be published with `artifacts_publish` here, one subfolder (or a single file) per artifact, then publish `{{path: \"artifacts/<name>\"}}`. Republishing the same path updates the same artifact. It stays with this user: never shipped with the agent. Scratch work and durable state stay in `./app-data/`, which is never published.\n"
             f"\n\n### Attaching files to your reply\n\n"
             f"To attach a file you created to your reply, emit a `<cinna_attach>` tag whose body is the "
             f"**absolute container path** of the file (always rooted at `/app/workspace`):\n\n"

@@ -23,6 +23,7 @@ import { Route as LoginIndexRouteImport } from './routes/login/index'
 import { Route as AcceptInviteIndexRouteImport } from './routes/accept-invite/index'
 import { Route as LayoutIndexRouteImport } from './routes/_layout/index'
 import { Route as WebappWebappTokenRouteImport } from './routes/webapp/$webappToken'
+import { Route as SLinkTokenRouteImport } from './routes/s/$linkToken'
 import { Route as OauthMcpConsentRouteImport } from './routes/oauth/mcp-consent'
 import { Route as LoginMfaRouteImport } from './routes/login/mfa'
 import { Route as GuestFileViewerRouteImport } from './routes/guest/file-viewer'
@@ -37,6 +38,7 @@ import { Route as LayoutSessionsRouteImport } from './routes/_layout/sessions'
 import { Route as LayoutKnowledgeSourcesRouteImport } from './routes/_layout/knowledge-sources'
 import { Route as LayoutCredentialsRouteImport } from './routes/_layout/credentials'
 import { Route as LayoutCatalogRouteImport } from './routes/_layout/catalog'
+import { Route as LayoutArtifactsRouteImport } from './routes/_layout/artifacts'
 import { Route as LayoutAgentsRouteImport } from './routes/_layout/agents'
 import { Route as LayoutActivitiesAllRouteImport } from './routes/_layout/activities-all'
 import { Route as LayoutActivitiesRouteImport } from './routes/_layout/activities'
@@ -54,6 +56,7 @@ import { Route as LayoutKnowledgeSourceSourceIdRouteImport } from './routes/_lay
 import { Route as LayoutDashboardsDashboardIdRouteImport } from './routes/_layout/dashboards/$dashboardId'
 import { Route as LayoutCredentialCredentialIdRouteImport } from './routes/_layout/credential/$credentialId'
 import { Route as LayoutCatalogAgentsRouteImport } from './routes/_layout/catalog/agents'
+import { Route as LayoutArtifactArtifactIdRouteImport } from './routes/_layout/artifact/$artifactId'
 import { Route as LayoutAgenticTeamsTeamIdRouteImport } from './routes/_layout/agentic-teams/$teamId'
 import { Route as LayoutAgentCreatingRouteImport } from './routes/_layout/agent/creating'
 import { Route as LayoutAgentAgentIdRouteImport } from './routes/_layout/agent/$agentId'
@@ -146,6 +149,11 @@ const WebappWebappTokenRoute = WebappWebappTokenRouteImport.update({
   path: '/webapp/$webappToken',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SLinkTokenRoute = SLinkTokenRouteImport.update({
+  id: '/s/$linkToken',
+  path: '/s/$linkToken',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const OauthMcpConsentRoute = OauthMcpConsentRouteImport.update({
   id: '/oauth/mcp-consent',
   path: '/oauth/mcp-consent',
@@ -215,6 +223,11 @@ const LayoutCredentialsRoute = LayoutCredentialsRouteImport.update({
 const LayoutCatalogRoute = LayoutCatalogRouteImport.update({
   id: '/catalog',
   path: '/catalog',
+  getParentRoute: () => LayoutRoute,
+} as any)
+const LayoutArtifactsRoute = LayoutArtifactsRouteImport.update({
+  id: '/artifacts',
+  path: '/artifacts',
   getParentRoute: () => LayoutRoute,
 } as any)
 const LayoutAgentsRoute = LayoutAgentsRouteImport.update({
@@ -307,6 +320,12 @@ const LayoutCatalogAgentsRoute = LayoutCatalogAgentsRouteImport.update({
   path: '/agents',
   getParentRoute: () => LayoutCatalogRoute,
 } as any)
+const LayoutArtifactArtifactIdRoute =
+  LayoutArtifactArtifactIdRouteImport.update({
+    id: '/artifact/$artifactId',
+    path: '/artifact/$artifactId',
+    getParentRoute: () => LayoutRoute,
+  } as any)
 const LayoutAgenticTeamsTeamIdRoute =
   LayoutAgenticTeamsTeamIdRouteImport.update({
     id: '/agentic-teams/$teamId',
@@ -445,6 +464,7 @@ export interface FileRoutesByFullPath {
   '/activities': typeof LayoutActivitiesRoute
   '/activities-all': typeof LayoutActivitiesAllRoute
   '/agents': typeof LayoutAgentsRoute
+  '/artifacts': typeof LayoutArtifactsRoute
   '/catalog': typeof LayoutCatalogRouteWithChildren
   '/credentials': typeof LayoutCredentialsRoute
   '/knowledge-sources': typeof LayoutKnowledgeSourcesRoute
@@ -459,6 +479,7 @@ export interface FileRoutesByFullPath {
   '/guest/file-viewer': typeof GuestFileViewerRoute
   '/login/mfa': typeof LoginMfaRoute
   '/oauth/mcp-consent': typeof OauthMcpConsentRoute
+  '/s/$linkToken': typeof SLinkTokenRoute
   '/webapp/$webappToken': typeof WebappWebappTokenRoute
   '/': typeof LayoutIndexRoute
   '/accept-invite/': typeof AcceptInviteIndexRoute
@@ -474,6 +495,7 @@ export interface FileRoutesByFullPath {
   '/agent/$agentId': typeof LayoutAgentAgentIdRouteWithChildren
   '/agent/creating': typeof LayoutAgentCreatingRoute
   '/agentic-teams/$teamId': typeof LayoutAgenticTeamsTeamIdRoute
+  '/artifact/$artifactId': typeof LayoutArtifactArtifactIdRoute
   '/catalog/agents': typeof LayoutCatalogAgentsRouteWithChildren
   '/credential/$credentialId': typeof LayoutCredentialCredentialIdRoute
   '/dashboards/$dashboardId': typeof LayoutDashboardsDashboardIdRoute
@@ -511,6 +533,7 @@ export interface FileRoutesByTo {
   '/activities': typeof LayoutActivitiesRoute
   '/activities-all': typeof LayoutActivitiesAllRoute
   '/agents': typeof LayoutAgentsRoute
+  '/artifacts': typeof LayoutArtifactsRoute
   '/credentials': typeof LayoutCredentialsRoute
   '/knowledge-sources': typeof LayoutKnowledgeSourcesRoute
   '/settings': typeof LayoutSettingsRoute
@@ -523,6 +546,7 @@ export interface FileRoutesByTo {
   '/guest/file-viewer': typeof GuestFileViewerRoute
   '/login/mfa': typeof LoginMfaRoute
   '/oauth/mcp-consent': typeof OauthMcpConsentRoute
+  '/s/$linkToken': typeof SLinkTokenRoute
   '/webapp/$webappToken': typeof WebappWebappTokenRoute
   '/': typeof LayoutIndexRoute
   '/accept-invite': typeof AcceptInviteIndexRoute
@@ -538,6 +562,7 @@ export interface FileRoutesByTo {
   '/agent/$agentId': typeof LayoutAgentAgentIdRouteWithChildren
   '/agent/creating': typeof LayoutAgentCreatingRoute
   '/agentic-teams/$teamId': typeof LayoutAgenticTeamsTeamIdRoute
+  '/artifact/$artifactId': typeof LayoutArtifactArtifactIdRoute
   '/catalog/agents': typeof LayoutCatalogAgentsRouteWithChildren
   '/credential/$credentialId': typeof LayoutCredentialCredentialIdRoute
   '/dashboards/$dashboardId': typeof LayoutDashboardsDashboardIdRoute
@@ -579,6 +604,7 @@ export interface FileRoutesById {
   '/_layout/activities': typeof LayoutActivitiesRoute
   '/_layout/activities-all': typeof LayoutActivitiesAllRoute
   '/_layout/agents': typeof LayoutAgentsRoute
+  '/_layout/artifacts': typeof LayoutArtifactsRoute
   '/_layout/catalog': typeof LayoutCatalogRouteWithChildren
   '/_layout/credentials': typeof LayoutCredentialsRoute
   '/_layout/knowledge-sources': typeof LayoutKnowledgeSourcesRoute
@@ -593,6 +619,7 @@ export interface FileRoutesById {
   '/guest/file-viewer': typeof GuestFileViewerRoute
   '/login/mfa': typeof LoginMfaRoute
   '/oauth/mcp-consent': typeof OauthMcpConsentRoute
+  '/s/$linkToken': typeof SLinkTokenRoute
   '/webapp/$webappToken': typeof WebappWebappTokenRoute
   '/_layout/': typeof LayoutIndexRoute
   '/accept-invite/': typeof AcceptInviteIndexRoute
@@ -608,6 +635,7 @@ export interface FileRoutesById {
   '/_layout/agent/$agentId': typeof LayoutAgentAgentIdRouteWithChildren
   '/_layout/agent/creating': typeof LayoutAgentCreatingRoute
   '/_layout/agentic-teams/$teamId': typeof LayoutAgenticTeamsTeamIdRoute
+  '/_layout/artifact/$artifactId': typeof LayoutArtifactArtifactIdRoute
   '/_layout/catalog/agents': typeof LayoutCatalogAgentsRouteWithChildren
   '/_layout/credential/$credentialId': typeof LayoutCredentialCredentialIdRoute
   '/_layout/dashboards/$dashboardId': typeof LayoutDashboardsDashboardIdRoute
@@ -649,6 +677,7 @@ export interface FileRouteTypes {
     | '/activities'
     | '/activities-all'
     | '/agents'
+    | '/artifacts'
     | '/catalog'
     | '/credentials'
     | '/knowledge-sources'
@@ -663,6 +692,7 @@ export interface FileRouteTypes {
     | '/guest/file-viewer'
     | '/login/mfa'
     | '/oauth/mcp-consent'
+    | '/s/$linkToken'
     | '/webapp/$webappToken'
     | '/'
     | '/accept-invite/'
@@ -678,6 +708,7 @@ export interface FileRouteTypes {
     | '/agent/$agentId'
     | '/agent/creating'
     | '/agentic-teams/$teamId'
+    | '/artifact/$artifactId'
     | '/catalog/agents'
     | '/credential/$credentialId'
     | '/dashboards/$dashboardId'
@@ -715,6 +746,7 @@ export interface FileRouteTypes {
     | '/activities'
     | '/activities-all'
     | '/agents'
+    | '/artifacts'
     | '/credentials'
     | '/knowledge-sources'
     | '/settings'
@@ -727,6 +759,7 @@ export interface FileRouteTypes {
     | '/guest/file-viewer'
     | '/login/mfa'
     | '/oauth/mcp-consent'
+    | '/s/$linkToken'
     | '/webapp/$webappToken'
     | '/'
     | '/accept-invite'
@@ -742,6 +775,7 @@ export interface FileRouteTypes {
     | '/agent/$agentId'
     | '/agent/creating'
     | '/agentic-teams/$teamId'
+    | '/artifact/$artifactId'
     | '/catalog/agents'
     | '/credential/$credentialId'
     | '/dashboards/$dashboardId'
@@ -782,6 +816,7 @@ export interface FileRouteTypes {
     | '/_layout/activities'
     | '/_layout/activities-all'
     | '/_layout/agents'
+    | '/_layout/artifacts'
     | '/_layout/catalog'
     | '/_layout/credentials'
     | '/_layout/knowledge-sources'
@@ -796,6 +831,7 @@ export interface FileRouteTypes {
     | '/guest/file-viewer'
     | '/login/mfa'
     | '/oauth/mcp-consent'
+    | '/s/$linkToken'
     | '/webapp/$webappToken'
     | '/_layout/'
     | '/accept-invite/'
@@ -811,6 +847,7 @@ export interface FileRouteTypes {
     | '/_layout/agent/$agentId'
     | '/_layout/agent/creating'
     | '/_layout/agentic-teams/$teamId'
+    | '/_layout/artifact/$artifactId'
     | '/_layout/catalog/agents'
     | '/_layout/credential/$credentialId'
     | '/_layout/dashboards/$dashboardId'
@@ -856,6 +893,7 @@ export interface RootRouteChildren {
   GuestGuestShareTokenRoute: typeof GuestGuestShareTokenRoute
   GuestFileViewerRoute: typeof GuestFileViewerRoute
   OauthMcpConsentRoute: typeof OauthMcpConsentRoute
+  SLinkTokenRoute: typeof SLinkTokenRoute
   WebappWebappTokenRoute: typeof WebappWebappTokenRoute
   CredentialsOauthCallbackRoute: typeof CredentialsOauthCallbackRoute
   McpProvidersOauthCallbackRoute: typeof McpProvidersOauthCallbackRoute
@@ -961,6 +999,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof WebappWebappTokenRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/s/$linkToken': {
+      id: '/s/$linkToken'
+      path: '/s/$linkToken'
+      fullPath: '/s/$linkToken'
+      preLoaderRoute: typeof SLinkTokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/oauth/mcp-consent': {
       id: '/oauth/mcp-consent'
       path: '/oauth/mcp-consent'
@@ -1057,6 +1102,13 @@ declare module '@tanstack/react-router' {
       path: '/catalog'
       fullPath: '/catalog'
       preLoaderRoute: typeof LayoutCatalogRouteImport
+      parentRoute: typeof LayoutRoute
+    }
+    '/_layout/artifacts': {
+      id: '/_layout/artifacts'
+      path: '/artifacts'
+      fullPath: '/artifacts'
+      preLoaderRoute: typeof LayoutArtifactsRouteImport
       parentRoute: typeof LayoutRoute
     }
     '/_layout/agents': {
@@ -1177,6 +1229,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/catalog/agents'
       preLoaderRoute: typeof LayoutCatalogAgentsRouteImport
       parentRoute: typeof LayoutCatalogRoute
+    }
+    '/_layout/artifact/$artifactId': {
+      id: '/_layout/artifact/$artifactId'
+      path: '/artifact/$artifactId'
+      fullPath: '/artifact/$artifactId'
+      preLoaderRoute: typeof LayoutArtifactArtifactIdRouteImport
+      parentRoute: typeof LayoutRoute
     }
     '/_layout/agentic-teams/$teamId': {
       id: '/_layout/agentic-teams/$teamId'
@@ -1410,6 +1469,7 @@ interface LayoutRouteChildren {
   LayoutActivitiesRoute: typeof LayoutActivitiesRoute
   LayoutActivitiesAllRoute: typeof LayoutActivitiesAllRoute
   LayoutAgentsRoute: typeof LayoutAgentsRoute
+  LayoutArtifactsRoute: typeof LayoutArtifactsRoute
   LayoutCatalogRoute: typeof LayoutCatalogRouteWithChildren
   LayoutCredentialsRoute: typeof LayoutCredentialsRoute
   LayoutKnowledgeSourcesRoute: typeof LayoutKnowledgeSourcesRoute
@@ -1427,6 +1487,7 @@ interface LayoutRouteChildren {
   LayoutAgentAgentIdRoute: typeof LayoutAgentAgentIdRouteWithChildren
   LayoutAgentCreatingRoute: typeof LayoutAgentCreatingRoute
   LayoutAgenticTeamsTeamIdRoute: typeof LayoutAgenticTeamsTeamIdRoute
+  LayoutArtifactArtifactIdRoute: typeof LayoutArtifactArtifactIdRoute
   LayoutCredentialCredentialIdRoute: typeof LayoutCredentialCredentialIdRoute
   LayoutDashboardsDashboardIdRoute: typeof LayoutDashboardsDashboardIdRoute
   LayoutKnowledgeSourceSourceIdRoute: typeof LayoutKnowledgeSourceSourceIdRoute
@@ -1446,6 +1507,7 @@ const LayoutRouteChildren: LayoutRouteChildren = {
   LayoutActivitiesRoute: LayoutActivitiesRoute,
   LayoutActivitiesAllRoute: LayoutActivitiesAllRoute,
   LayoutAgentsRoute: LayoutAgentsRoute,
+  LayoutArtifactsRoute: LayoutArtifactsRoute,
   LayoutCatalogRoute: LayoutCatalogRouteWithChildren,
   LayoutCredentialsRoute: LayoutCredentialsRoute,
   LayoutKnowledgeSourcesRoute: LayoutKnowledgeSourcesRoute,
@@ -1463,6 +1525,7 @@ const LayoutRouteChildren: LayoutRouteChildren = {
   LayoutAgentAgentIdRoute: LayoutAgentAgentIdRouteWithChildren,
   LayoutAgentCreatingRoute: LayoutAgentCreatingRoute,
   LayoutAgenticTeamsTeamIdRoute: LayoutAgenticTeamsTeamIdRoute,
+  LayoutArtifactArtifactIdRoute: LayoutArtifactArtifactIdRoute,
   LayoutCredentialCredentialIdRoute: LayoutCredentialCredentialIdRoute,
   LayoutDashboardsDashboardIdRoute: LayoutDashboardsDashboardIdRoute,
   LayoutKnowledgeSourceSourceIdRoute: LayoutKnowledgeSourceSourceIdRoute,
@@ -1527,6 +1590,7 @@ const rootRouteChildren: RootRouteChildren = {
   GuestGuestShareTokenRoute: GuestGuestShareTokenRoute,
   GuestFileViewerRoute: GuestFileViewerRoute,
   OauthMcpConsentRoute: OauthMcpConsentRoute,
+  SLinkTokenRoute: SLinkTokenRoute,
   WebappWebappTokenRoute: WebappWebappTokenRoute,
   CredentialsOauthCallbackRoute: CredentialsOauthCallbackRoute,
   McpProvidersOauthCallbackRoute: McpProvidersOauthCallbackRoute,

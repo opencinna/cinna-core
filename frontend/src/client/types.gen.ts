@@ -1255,6 +1255,30 @@ export type AgentApiScopeCatalog = {
 };
 
 /**
+ * The ``artifacts_publish`` result, exactly as the schema declares it.
+ */
+export type AgentArtifactPublished = {
+    artifact_id: string;
+    revision: number;
+    url: string;
+    kind: 'site' | 'files';
+    file_count: number;
+    size_bytes: number;
+    excluded: Array<(string)>;
+};
+
+export type kind = 'site' | 'files';
+
+export type AgentArtifactPublishRequest = {
+    path: string;
+    title: string;
+    description?: (string | null);
+    entry?: (string | null);
+    artifact_id?: (string | null);
+    source_session_id?: (string | null);
+};
+
+/**
  * Response schema for ``GET /bundles/...``.
  */
 export type AgentBundlePublic = {
@@ -2803,6 +2827,247 @@ export type ArticleListItem = {
     git_repo_id: string;
 };
 
+export type ArtifactDetailPublic = {
+    id: string;
+    title: string;
+    description?: (string | null);
+    kind: 'site' | 'files';
+    entry_path?: (string | null);
+    visibility: 'private' | 'instance';
+    source_kind: 'desktop' | 'core_agent' | 'cli' | 'upload';
+    source_label?: (string | null);
+    source_agent_id?: (string | null);
+    source_session_id?: (string | null);
+    user_workspace_id?: (string | null);
+    current_revision_id?: (string | null);
+    current_revision_number?: (number | null);
+    revision_count?: number;
+    file_count?: number;
+    size_bytes?: number;
+    owner_id: string;
+    owner_name?: (string | null);
+    is_owner?: boolean;
+    grant_count?: number;
+    live_link_count?: number;
+    url: string;
+    created_at: string;
+    updated_at: string;
+    revisions?: Array<ArtifactRevisionPublic>;
+    grants?: (Array<ArtifactGrantPublic> | null);
+    links?: (Array<ArtifactLinkPublic> | null);
+};
+
+export type visibility = 'private' | 'instance';
+
+export type source_kind = 'desktop' | 'core_agent' | 'cli' | 'upload';
+
+/**
+ * One file of a revision manifest.
+ */
+export type ArtifactFileEntry = {
+    path: string;
+    size: number;
+    sha256: string;
+    mime: string;
+};
+
+export type ArtifactFromEnvironmentRequest = {
+    path: string;
+    title: string;
+    description?: (string | null);
+    entry?: (string | null);
+    artifact_id?: (string | null);
+    environment_id: string;
+};
+
+/**
+ * One entry of ``PUT /artifacts/{id}/grants`` (full replace).
+ */
+export type ArtifactGrantIn = {
+    principal: CatalogPrincipalUser;
+    access?: "view";
+};
+
+export type ArtifactGrantPublic = {
+    principal: CatalogPrincipalUser;
+    access?: "view";
+    display_name: string;
+    email?: (string | null);
+    granted_by?: (CatalogPerson | null);
+    created_at: string;
+};
+
+export type ArtifactLinkCreate = {
+    label?: (string | null);
+    expires_at?: (string | null);
+    with_code?: boolean;
+    pinned_revision_id?: (string | null);
+};
+
+/**
+ * Creation response: the only time the plaintext token is returned.
+ */
+export type ArtifactLinkCreated = {
+    id: string;
+    token_prefix: string;
+    label?: (string | null);
+    created_at: string;
+    expires_at?: (string | null);
+    revoked_at?: (string | null);
+    pinned_revision_id?: (string | null);
+    pinned_revision_number?: (number | null);
+    needs_code?: boolean;
+    code?: (string | null);
+    failed_attempts?: number;
+    expired?: boolean;
+    blocked?: boolean;
+    token: string;
+    url: string;
+};
+
+/**
+ * ``GET /artifact-links/{token}/info`` — no auth.
+ */
+export type ArtifactLinkInfo = {
+    title: string;
+    description?: (string | null);
+    owner_name?: (string | null);
+    source_kind: string;
+    needs_code: boolean;
+    expired: boolean;
+    blocked: boolean;
+};
+
+export type ArtifactLinkOpen = {
+    code?: (string | null);
+};
+
+export type ArtifactLinkPublic = {
+    id: string;
+    token_prefix: string;
+    label?: (string | null);
+    created_at: string;
+    expires_at?: (string | null);
+    revoked_at?: (string | null);
+    pinned_revision_id?: (string | null);
+    pinned_revision_number?: (number | null);
+    needs_code?: boolean;
+    code?: (string | null);
+    failed_attempts?: number;
+    expired?: boolean;
+    blocked?: boolean;
+};
+
+export type ArtifactPublic = {
+    id: string;
+    title: string;
+    description?: (string | null);
+    kind: 'site' | 'files';
+    entry_path?: (string | null);
+    visibility: 'private' | 'instance';
+    source_kind: 'desktop' | 'core_agent' | 'cli' | 'upload';
+    source_label?: (string | null);
+    source_agent_id?: (string | null);
+    source_session_id?: (string | null);
+    user_workspace_id?: (string | null);
+    current_revision_id?: (string | null);
+    current_revision_number?: (number | null);
+    revision_count?: number;
+    file_count?: number;
+    size_bytes?: number;
+    owner_id: string;
+    owner_name?: (string | null);
+    is_owner?: boolean;
+    grant_count?: number;
+    live_link_count?: number;
+    url: string;
+    created_at: string;
+    updated_at: string;
+};
+
+/**
+ * Create / republish response: the artifact plus what this publish did.
+ */
+export type ArtifactPublished = {
+    id: string;
+    title: string;
+    description?: (string | null);
+    kind: 'site' | 'files';
+    entry_path?: (string | null);
+    visibility: 'private' | 'instance';
+    source_kind: 'desktop' | 'core_agent' | 'cli' | 'upload';
+    source_label?: (string | null);
+    source_agent_id?: (string | null);
+    source_session_id?: (string | null);
+    user_workspace_id?: (string | null);
+    current_revision_id?: (string | null);
+    current_revision_number?: (number | null);
+    revision_count?: number;
+    file_count?: number;
+    size_bytes?: number;
+    owner_id: string;
+    owner_name?: (string | null);
+    is_owner?: boolean;
+    grant_count?: number;
+    live_link_count?: number;
+    url: string;
+    created_at: string;
+    updated_at: string;
+    revision_number: number;
+    excluded?: Array<(string)>;
+};
+
+export type ArtifactRevisionPublic = {
+    id: string;
+    number: number;
+    size_bytes: number;
+    file_count: number;
+    files: Array<ArtifactFileEntry>;
+    excluded: Array<(string)>;
+    note?: (string | null);
+    created_by?: (string | null);
+    created_by_name?: (string | null);
+    created_at: string;
+    is_current?: boolean;
+    pinned?: boolean;
+};
+
+export type ArtifactsCapabilities = {
+    version?: number;
+    limits: ArtifactsLimits;
+};
+
+export type ArtifactsLimits = {
+    max_revision_bytes: number;
+    max_revision_files: number;
+    max_file_bytes: number;
+    user_quota_bytes: number;
+};
+
+export type ArtifactsPublic = {
+    data: Array<ArtifactPublic>;
+    count: number;
+};
+
+export type ArtifactUpdate = {
+    title?: (string | null);
+    description?: (string | null);
+    entry_path?: (string | null);
+    visibility?: ('private' | 'instance' | null);
+};
+
+/**
+ * A view capability: where the revision's files are served from.
+ */
+export type ArtifactViewPublic = {
+    content_base: string;
+    entry?: (string | null);
+    files: Array<ArtifactFileEntry>;
+    revision_number: number;
+    expires_at: string;
+    download_url: string;
+};
+
 /**
  * Admin request body for adding a bundle to the auto-install list.
  */
@@ -2853,6 +3118,50 @@ export type BlockLayoutUpdate = {
     grid_y: number;
     grid_w: number;
     grid_h: number;
+};
+
+export type Body_artifacts_create_artifact = {
+    title: string;
+    description?: (string | null);
+    entry_path?: (string | null);
+    source_kind?: 'desktop' | 'cli' | 'upload';
+    source_label?: (string | null);
+    user_workspace_id?: (string | null);
+    archive?: ((Blob | File) | null);
+    files?: (Array<((Blob | File))> | null);
+};
+
+export type source_kind2 = 'desktop' | 'cli' | 'upload';
+
+export type Body_artifacts_republish_artifact = {
+    note?: (string | null);
+    entry_path?: (string | null);
+    title?: (string | null);
+    description?: (string | null);
+    archive?: ((Blob | File) | null);
+    files?: (Array<((Blob | File))> | null);
+};
+
+export type Body_cli_account_create_artifact = {
+    title: string;
+    description?: (string | null);
+    entry_path?: (string | null);
+    source_kind?: 'desktop' | 'cli';
+    source_label?: (string | null);
+    user_workspace_id?: (string | null);
+    archive?: ((Blob | File) | null);
+    files?: (Array<((Blob | File))> | null);
+};
+
+export type source_kind3 = 'desktop' | 'cli';
+
+export type Body_cli_account_republish_artifact = {
+    note?: (string | null);
+    entry_path?: (string | null);
+    title?: (string | null);
+    description?: (string | null);
+    archive?: ((Blob | File) | null);
+    files?: (Array<((Blob | File))> | null);
 };
 
 export type Body_cli_account_upload_file = {
@@ -3168,7 +3477,7 @@ export type CatalogItem = {
     skill?: (CatalogSkillContent | null);
 };
 
-export type kind = 'agent' | 'skill';
+export type kind2 = 'agent' | 'skill';
 
 /**
  * ``GET /catalog/items/{uuid}``: the item and its versions, newest first.
@@ -3975,7 +4284,7 @@ export type DelegationArtifact = {
     ref?: (string | null);
 };
 
-export type kind2 = 'file' | 'link';
+export type kind3 = 'file' | 'link';
 
 /**
  * Which parts of the delegation contract this server supports.
@@ -4065,7 +4374,7 @@ export type DesktopAgentCreate = {
     grants?: Array<CatalogGrantIn>;
 };
 
-export type visibility = 'private' | 'users' | 'public';
+export type visibility2 = 'private' | 'users' | 'public';
 
 export type DesktopCredentialList = {
     items: Array<DesktopCredentialListItem>;
@@ -7967,7 +8276,7 @@ export type TaskTarget = {
     requires_approval?: boolean;
 };
 
-export type kind3 = 'folder' | 'kit' | 'cinna' | 'desktop' | 'external';
+export type kind4 = 'folder' | 'kit' | 'cinna' | 'desktop' | 'external';
 
 export type location = 'local' | 'remote';
 
@@ -9175,6 +9484,13 @@ export type AgentApiPublicConsumerSpecData = {
 
 export type AgentApiPublicConsumerSpecResponse = (unknown);
 
+export type AgentArtifactsAgentPublishArtifactData = {
+    requestBody: AgentArtifactPublishRequest;
+    xAgentEnvId?: (string | null);
+};
+
+export type AgentArtifactsAgentPublishArtifactResponse = (AgentArtifactPublished);
+
 export type AgentCredentialsAgentCredentialAccessTokenData = {
     credentialId: string;
     requestBody: AgentCredentialAccessTokenRequest;
@@ -10110,6 +10426,112 @@ export type AppSyncPairingRevealData = {
 
 export type AppSyncPairingRevealResponse = (Message);
 
+export type ArtifactLinksGetArtifactLinkInfoData = {
+    token: string;
+};
+
+export type ArtifactLinksGetArtifactLinkInfoResponse = (ArtifactLinkInfo);
+
+export type ArtifactLinksOpenArtifactLinkData = {
+    requestBody?: (ArtifactLinkOpen | null);
+    token: string;
+};
+
+export type ArtifactLinksOpenArtifactLinkResponse = (ArtifactViewPublic);
+
+export type ArtifactsGetArtifactsCapabilitiesResponse = (ArtifactsCapabilities);
+
+export type ArtifactsCreateArtifactData = {
+    formData: Body_artifacts_create_artifact;
+};
+
+export type ArtifactsCreateArtifactResponse = (ArtifactPublished);
+
+export type ArtifactsListArtifactsData = {
+    limit?: number;
+    q?: (string | null);
+    scope?: 'mine' | 'shared_with_me';
+    skip?: number;
+    sourceKey?: (string | null);
+    userWorkspaceId?: (string | null);
+};
+
+export type ArtifactsListArtifactsResponse = (ArtifactsPublic);
+
+export type ArtifactsRepublishArtifactData = {
+    artifactId: string;
+    formData?: Body_artifacts_republish_artifact;
+};
+
+export type ArtifactsRepublishArtifactResponse = (ArtifactPublished);
+
+export type ArtifactsGetArtifactData = {
+    artifactId: string;
+};
+
+export type ArtifactsGetArtifactResponse = (ArtifactDetailPublic);
+
+export type ArtifactsUpdateArtifactData = {
+    artifactId: string;
+    requestBody: ArtifactUpdate;
+};
+
+export type ArtifactsUpdateArtifactResponse = (ArtifactPublic);
+
+export type ArtifactsDeleteArtifactData = {
+    artifactId: string;
+};
+
+export type ArtifactsDeleteArtifactResponse = (Message);
+
+export type ArtifactsDeleteArtifactRevisionData = {
+    artifactId: string;
+    number: number;
+};
+
+export type ArtifactsDeleteArtifactRevisionResponse = (Message);
+
+export type ArtifactsDownloadArtifactData = {
+    artifactId: string;
+    rev?: (number | null);
+};
+
+export type ArtifactsDownloadArtifactResponse = (unknown);
+
+export type ArtifactsViewArtifactData = {
+    artifactId: string;
+    rev?: (number | null);
+};
+
+export type ArtifactsViewArtifactResponse = (ArtifactViewPublic);
+
+export type ArtifactsReplaceArtifactGrantsData = {
+    artifactId: string;
+    requestBody: Array<ArtifactGrantIn>;
+};
+
+export type ArtifactsReplaceArtifactGrantsResponse = (Array<ArtifactGrantPublic>);
+
+export type ArtifactsCreateArtifactLinkData = {
+    artifactId: string;
+    requestBody: ArtifactLinkCreate;
+};
+
+export type ArtifactsCreateArtifactLinkResponse = (ArtifactLinkCreated);
+
+export type ArtifactsRevokeArtifactLinkData = {
+    artifactId: string;
+    linkId: string;
+};
+
+export type ArtifactsRevokeArtifactLinkResponse = (Message);
+
+export type ArtifactsPublishArtifactFromEnvironmentData = {
+    requestBody: ArtifactFromEnvironmentRequest;
+};
+
+export type ArtifactsPublishArtifactFromEnvironmentResponse = (ArtifactPublished);
+
 export type BundlesListBundlesResponse = (AgentBundlesPublic);
 
 export type BundlesGetBundleData = {
@@ -10346,6 +10768,33 @@ export type CliAccountUploadFileData = {
 };
 
 export type CliAccountUploadFileResponse = (FileUploadPublic);
+
+export type CliAccountCreateArtifactData = {
+    formData: Body_cli_account_create_artifact;
+};
+
+export type CliAccountCreateArtifactResponse = (ArtifactPublished);
+
+export type CliAccountRepublishArtifactData = {
+    artifactId: string;
+    formData?: Body_cli_account_republish_artifact;
+};
+
+export type CliAccountRepublishArtifactResponse = (ArtifactPublished);
+
+export type CliAccountDownloadArtifactData = {
+    artifactId: string;
+    rev?: (number | null);
+};
+
+export type CliAccountDownloadArtifactResponse = (unknown);
+
+export type CliAccountCreateArtifactLinkData = {
+    artifactId: string;
+    requestBody: ArtifactLinkCreate;
+};
+
+export type CliAccountCreateArtifactLinkResponse = (ArtifactLinkCreated);
 
 export type CliMintChildTokenData = {
     agentId: string;

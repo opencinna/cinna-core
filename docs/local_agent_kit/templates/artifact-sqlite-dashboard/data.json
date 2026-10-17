@@ -1,0 +1,15 @@
+{
+  "title": "Weekly summary",
+  "subtitle": "Replace data.json with the numbers your agent computed.",
+  "tiles": [
+    { "label": "Orders", "value": "1,284" },
+    { "label": "Revenue", "value": "$48,210" },
+    { "label": "Refunds", "value": "12" }
+  ],
+  "columns": ["Region", "Orders", "Revenue"],
+  "rows": [
+    ["North", "512", "$19,804"],
+    ["South", "431", "$15,990"],
+    ["West", "341", "$12,416"]
+  ]
+}

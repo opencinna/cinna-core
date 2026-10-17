@@ -3034,7 +3034,8 @@ MODEL_CONVERSATION={model_conversation}
         the volume, not the copy), and the ``__init__.py`` template marker. This
         means the bundle-owned set (``scripts/``, ``docs/``, ``knowledge/``,
         ``files/``, ``webapp/``, ``agent_api/``, ``plugins/``, the two
-        ``workspace_*.txt`` files) PLUS ``credentials/`` + ``uploads/`` PLUS any
+        ``workspace_*.txt`` files) PLUS ``credentials/`` + ``uploads/`` +
+        ``artifacts/`` PLUS any
         custom top-level dir the agent created — the old static list missed
         custom dirs.
 
@@ -3103,7 +3104,7 @@ MODEL_CONVERSATION={model_conversation}
         ``workspace_copy.replace_bundle_content`` which copies/overwrites the
         new snapshot content **and** prunes stale bundle-owned top-level entries
         (D5). Preserves the denylist (``credentials/``, ``app-data/``,
-        ``logs/``, ``databases/``, ``uploads/``) and the consumer's own
+        ``logs/``, ``databases/``, ``uploads/``, ``artifacts/``) and the consumer's own
         ``plugins/`` marketplace dirs. Runs the blocking I/O in a thread pool to
         keep the event loop free.
         """

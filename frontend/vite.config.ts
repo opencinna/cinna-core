@@ -20,6 +20,12 @@ export default defineConfig(({ mode }) => {
           target: apiUrl,
           changeOrigin: true,
         },
+        // Artifact content (/a/v/<cap>/…) is served by the backend with its own
+        // sandbox CSP; see docs/infrastructure/nginx_setup.md.
+        "^/a/": {
+          target: apiUrl,
+          changeOrigin: true,
+        },
       },
     },
     resolve: {

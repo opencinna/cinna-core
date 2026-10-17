@@ -7,6 +7,8 @@ import json
 import logging
 import os
 import re
+import shutil
+import stat
 import tarfile
 import zipfile
 import uuid
@@ -997,6 +999,80 @@ class AgentEnvService:
                 zip_path.unlink()
             logger.error(f"Failed to create zip archive: {e}")
             raise IOError(f"Failed to create zip archive: {str(e)}")
+
+    def validate_artifact_path(self, relative_path: str) -> Path:
+        """``validate_workspace_path`` plus: no component of the path is a symlink.
+
+        A10 drops symlinks from artifacts; a requested path that is, or runs
+        through, a link (``report.json -> credentials/x.json``,
+        ``site -> credentials``) would otherwise publish its target.
+        """
+        resolved = self.validate_workspace_path(relative_path)
+        literal = Path(os.path.normpath(self.workspace_dir.resolve() / relative_path))
+        if literal != resolved:
+            raise ValueError(f"Symlinks are not published: {relative_path}")
+        return resolved
+
+    def create_artifact_zip(self, relative_path: str) -> tuple[Path, list[str]]:
+        """Zip a workspace folder for an artifact publish; also return what was left out.
+
+        Unlike ``create_workspace_zip`` (downloads, task attachments), every
+        omission is reported so the backend can list it in the artifact's
+        ``excluded``: dot-named files and folders, ``__pycache__``, and every
+        symlink (A10: publishers drop them; a link inside the folder could
+        point at an excluded file). Files are opened with ``O_NOFOLLOW`` so a
+        file swapped for a link after the walk is refused, not followed.
+        Paths are relative to the folder; folders end in ``/``.
+        """
+        root = self.validate_artifact_path(relative_path)
+        if not root.is_dir():
+            raise IOError(f"Not a folder: {relative_path}")
+
+        skipped: list[str] = []
+        zip_path = Path(f"/tmp/artifact_{uuid.uuid4().hex[:12]}.zip")
+
+        def _rel(path: Path) -> str:
+            return path.relative_to(root).as_posix()
+
+        try:
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+                for current, dirnames, filenames in os.walk(root, followlinks=False):
+                    current_path = Path(current)
+                    kept_dirs = []
+                    for name in sorted(dirnames):
+                        child = current_path / name
+                        if name.startswith(".") or name == "__pycache__" or child.is_symlink():
+                            skipped.append(_rel(child) + "/")
+                        else:
+                            kept_dirs.append(name)
+                    dirnames[:] = kept_dirs
+                    for name in sorted(filenames):
+                        child = current_path / name
+                        if name.startswith(".") or child.is_symlink():
+                            skipped.append(_rel(child))
+                            continue
+                        if not self._zip_regular_file(zipf, child, _rel(child)):
+                            skipped.append(_rel(child))
+            return zip_path, skipped
+        except Exception as e:
+            if zip_path.exists():
+                zip_path.unlink()
+            logger.error(f"Failed to create artifact zip: {e}")
+            raise IOError(f"Failed to create artifact zip: {str(e)}")
+
+    @staticmethod
+    def _zip_regular_file(zipf: zipfile.ZipFile, path: Path, arcname: str) -> bool:
+        """Add ``path`` if it is still a regular file, never following a link."""
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        except OSError:  # ELOOP: became a symlink; or vanished
+            return False
+        with os.fdopen(fd, "rb") as source:
+            if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                return False
+            with zipf.open(arcname, "w") as target:
+                shutil.copyfileobj(source, target, 1024 * 1024)
+        return True
 
     @staticmethod
     def sanitize_filename(filename: str) -> str:

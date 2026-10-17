@@ -12,7 +12,8 @@ Cleaned, keyed by the deleted rows:
 - every environment of every agent the user owned: its container (compose
   down) and ``<ENV_INSTANCES_DIR>/<env_id>/``;
 - ``<APP_DATA_STORAGE_DIR>/<user_id>/`` (all the user's app-data volumes);
-- ``<UPLOAD_BASE_PATH>/<user_id>/`` (all the user's file uploads).
+- ``<UPLOAD_BASE_PATH>/<user_id>/`` (all the user's file uploads);
+- ``<ARTIFACT_STORAGE_DIR>/<artifact_id>/`` for every artifact the user owned.
 
 Deliberately left: skill packages the user published (``publisher_user_id``
 is SET NULL, the package lives on, so does ``SKILL_STORAGE_DIR/<uuid>/``),
@@ -27,7 +28,9 @@ from sqlmodel import Session, col, select
 
 from app.core.config import settings
 from app.models.agents.agent import Agent
+from app.models.artifacts.artifact import Artifact
 from app.models.environments.environment import AgentEnvironment
+from app.services.artifacts.artifact_storage import ArtifactStorage
 from app.services.common.data_dirs import remove_data_subdir
 
 logger = logging.getLogger(__name__)
@@ -39,6 +42,7 @@ class UserDataCleanup:
 
     user_id: uuid.UUID
     environment_ids: list[uuid.UUID] = field(default_factory=list)
+    artifact_ids: list[uuid.UUID] = field(default_factory=list)
 
 
 class UserDataCleanupService:
@@ -50,7 +54,14 @@ class UserDataCleanupService:
             .join(Agent, col(Agent.id) == col(AgentEnvironment.agent_id))
             .where(Agent.owner_id == user_id)
         ).all()
-        return UserDataCleanup(user_id=user_id, environment_ids=list(env_ids))
+        artifact_ids = session.exec(
+            select(Artifact.id).where(Artifact.owner_id == user_id)
+        ).all()
+        return UserDataCleanup(
+            user_id=user_id,
+            environment_ids=list(env_ids),
+            artifact_ids=list(artifact_ids),
+        )
 
     @staticmethod
     async def run(cleanup: UserDataCleanup) -> None:
@@ -73,3 +84,5 @@ class UserDataCleanupService:
         await asyncio.to_thread(
             remove_data_subdir, settings.UPLOAD_BASE_PATH, user_dir, what="uploads"
         )
+        for artifact_id in cleanup.artifact_ids:
+            await asyncio.to_thread(ArtifactStorage.remove_artifact, artifact_id)

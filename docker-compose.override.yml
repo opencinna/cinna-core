@@ -10,7 +10,8 @@ services:
     # command: sleep infinity  # Infinite loop to keep container alive doing nothing
     # uvicorn directly (not `fastapi run --reload`): fastapi-cli cannot narrow
     # the reload watch, so it watches all of /app, including the mounted data
-    # dirs (data/skills, data/bundles, data/git, data/app-data, data/uploads).
+    # dirs (data/skills, data/bundles, data/git, data/artifacts, data/app-data,
+    # data/uploads).
     # Publishing a skill that contains a .py file then restarted the server.
     # Only the code under app/ triggers a reload.
     command:

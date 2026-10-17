@@ -116,6 +116,10 @@ class WorkspaceItemMeta(BaseModel):
     size: int | None = None
     modified_at: datetime | None = None   # tz-aware UTC
     content_type: str | None = None
+    # Artifact pulls only: what the env's zipper left out of a folder (dotfiles,
+    # outside-pointing symlinks), relative to the folder. None when the env
+    # predates the report (or for a single file).
+    skipped: list[str] | None = None
 
 
 class EnvInitConfig(BaseModel):
@@ -529,6 +533,17 @@ class EnvironmentAdapter(ABC):
             Tuple of (WorkspaceItemMeta, AsyncIterator[bytes])
         """
         pass
+
+    async def fetch_workspace_item_for_artifact(
+        self, path: str
+    ) -> tuple["WorkspaceItemMeta", AsyncIterator[bytes]]:
+        """Like :meth:`fetch_workspace_item_with_meta`, for an artifact publish.
+
+        An adapter that can ask the environment for the artifact zip mode
+        (outside-pointing symlinks skipped, omissions reported in
+        ``meta.skipped``) overrides this; the default is the plain fetch.
+        """
+        return await self.fetch_workspace_item_with_meta(path)
 
     # === Message Communication ===
 

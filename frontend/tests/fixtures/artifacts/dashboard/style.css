@@ -1,0 +1,15 @@
+body {
+  font-family: system-ui, sans-serif;
+  margin: 2rem;
+  color: #111;
+}
+table {
+  border-collapse: collapse;
+  min-width: 20rem;
+}
+th,
+td {
+  border-bottom: 1px solid #ddd;
+  padding: 0.4rem 0.8rem;
+  text-align: left;
+}

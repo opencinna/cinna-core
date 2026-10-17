@@ -263,7 +263,7 @@ def replace_bundle_content(snapshot_path: Path, env_id: UUID) -> None:
        runtime-denylisted, and NOT ``plugins/``.
 
     Always preserved: ``app-data/``, ``credentials/``, ``logs/``,
-    ``databases/``, ``uploads/`` (the denylist) and the consumer's own
+    ``databases/``, ``uploads/``, ``artifacts/`` (the denylist) and the consumer's own
     ``plugins/`` marketplace dirs (plugins are merged, never delete-swept).
 
     v1 (legacy) snapshots skip the prune pass to keep today's overwrite-only
@@ -295,7 +295,7 @@ def _prune_stale_bundle_content(snapshot_workspace: Path, dst_root: Path) -> Non
 
     Only genuinely stale **bundle-owned** paths are removed: anything in the
     denylist (``app-data/``, ``credentials/``, ``logs/``, ``databases/``,
-    ``uploads/``, ``__init__.py``), any runtime dotfile, and ``plugins/`` are
+    ``uploads/``, ``artifacts/``, ``__init__.py``), any runtime dotfile, and ``plugins/`` are
     always preserved.
     """
     dst_workspace = dst_root / WORKSPACE_ROOT_REL

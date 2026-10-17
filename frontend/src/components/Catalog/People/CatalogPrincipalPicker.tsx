@@ -18,8 +18,14 @@ const MIN_QUERY_LENGTH = 2
 interface CatalogPrincipalPickerProps {
   /** `principalKey`s already on the list; they are not offered again. */
   grantedKeys: Set<string>
-  onPick: (principal: CatalogPrincipal, title: string) => void
+  /** `email` is passed for a person, so a list can tell two people apart. */
+  onPick: (principal: CatalogPrincipal, title: string, email?: string) => void
   disabled?: boolean
+  /**
+   * Offer the role group. Off for surfaces whose grants are people only
+   * (artifacts, D21: a role principal is a 422) — the copy then says "people".
+   */
+  allowRoles?: boolean
 }
 
 function GroupHeading({ children }: { children: ReactNode }) {
@@ -68,6 +74,7 @@ export function CatalogPrincipalPicker({
   grantedKeys,
   onPick,
   disabled = false,
+  allowRoles = true,
 }: CatalogPrincipalPickerProps) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState("")
@@ -90,6 +97,7 @@ export function CatalogPrincipalPicker({
 
   const roles = USER_ROLE_OPTIONS.filter(
     (r) =>
+      allowRoles &&
       !grantedKeys.has(`role:${r.value}`) &&
       r.label.toLowerCase().includes(lowered),
   )
@@ -101,8 +109,8 @@ export function CatalogPrincipalPicker({
     isFetching ||
     (debounced.length >= MIN_QUERY_LENGTH && data === undefined && !isError)
 
-  const pick = (principal: CatalogPrincipal, title: string) => {
-    onPick(principal, title)
+  const pick = (principal: CatalogPrincipal, title: string, email?: string) => {
+    onPick(principal, title, email)
     setOpen(false)
     setQuery("")
   }
@@ -140,7 +148,7 @@ export function CatalogPrincipalPicker({
         icon={<User className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
         label={u.full_name || u.email}
         detail={u.full_name ? u.email : null}
-        onClick={() => pick({ user_id: u.id }, u.full_name || u.email)}
+        onClick={() => pick({ user_id: u.id }, u.full_name || u.email, u.email)}
       />
     ))
   }
@@ -162,16 +170,18 @@ export function CatalogPrincipalPicker({
           data-add-principal
         >
           <Plus className="mr-1 h-4 w-4" />
-          Add people or roles
+          {allowRoles ? "Add people or roles" : "Add people"}
         </Button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-80 p-2">
         <Input
           autoFocus
-          placeholder="Search people or roles..."
+          placeholder={
+            allowRoles ? "Search people or roles..." : "Search people..."
+          }
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          aria-label="Search people or roles"
+          aria-label={allowRoles ? "Search people or roles" : "Search people"}
         />
         <div className="mt-1 max-h-[40vh] overflow-y-auto pr-2">
           {roles.length > 0 && (
@@ -189,7 +199,7 @@ export function CatalogPrincipalPicker({
               ))}
             </>
           )}
-          <GroupHeading>People</GroupHeading>
+          {allowRoles && <GroupHeading>People</GroupHeading>}
           {peopleBody}
         </div>
       </PopoverContent>

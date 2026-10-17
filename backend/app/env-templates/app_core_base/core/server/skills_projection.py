@@ -20,8 +20,8 @@ Design constraints this module exists to satisfy:
   directories whose name already passed the skill-name regex. Symlinks are
   refused on both sides.
 * **Platform skills ride along.** The image's platform-owned skills
-  (``/app/core/skills/<name>/``, today only ``cinna-tasks``, the task protocol
-  skill) are projected into the same root beside the workspace's, with the
+  (``/app/core/skills/<name>/``: ``cinna-tasks``, the task protocol
+  skill, and ``cinna-artifacts``) are projected into the same root beside the workspace's, with the
   same marker, on every refresh. A workspace skill may not take a platform
   name (``skill_manifest`` refuses it as ``reserved_name``), so the platform
   copy is never replaced. Both trees feed the state hash, so an image upgrade

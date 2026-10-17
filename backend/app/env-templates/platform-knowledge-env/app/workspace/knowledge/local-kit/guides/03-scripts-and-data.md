@@ -52,6 +52,7 @@ expensive.
 | `app-data/storage/` | runtime | results the agent produces, `STATUS.md` | yes, per install |
 | `app-data/cache/` | runtime | disposable, rebuildable snapshots | yes, per install |
 | `app-data/uploads/` | runtime | files the user attached | yes, per install |
+| `artifacts/` | runtime | what the agent builds to publish as Cinna artifacts, one subfolder per artifact | yes, per install; never shared or copied to the cloud |
 
 The rule that matters: **`files/` is what the author ships; `app-data/storage/` is
 what the agent produces.** Writing runtime output to `files/` means it is silently

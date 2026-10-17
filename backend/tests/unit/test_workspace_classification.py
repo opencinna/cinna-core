@@ -42,8 +42,8 @@ def test_plugins_dirname_and_derived_files() -> None:
     assert PLUGIN_DERIVED_FILES == frozenset({"settings.json", "manifest.json"})
 
 
-def test_env_migration_extra_is_credentials_and_uploads() -> None:
-    assert ENV_MIGRATION_EXTRA == frozenset({"credentials", "uploads"})
+def test_env_migration_extra_is_credentials_uploads_and_artifacts() -> None:
+    assert ENV_MIGRATION_EXTRA == frozenset({"credentials", "uploads", "artifacts"})
 
 
 # ── is_bundle_owned_toplevel ────────────────────────────────────────
@@ -61,6 +61,7 @@ def test_specific_excluded_names() -> None:
         "logs",
         "databases",
         "uploads",
+        "artifacts",
         "__init__.py",
     ):
         assert is_bundle_owned_toplevel(name) is False, name
@@ -156,6 +157,12 @@ def test_env_migration_includes_credentials_and_uploads() -> None:
     assert is_env_migration_toplevel("uploads") is True
 
 
+def test_env_migration_carries_artifacts_folder() -> None:
+    """Kit ``artifacts`` role: never bundle content, but carried on env switch."""
+    assert is_bundle_owned_toplevel("artifacts") is False
+    assert is_env_migration_toplevel("artifacts") is True
+
+
 def test_env_migration_excludes_runtime_and_appdata_and_marker() -> None:
     for name in ("logs", "databases", "app-data", "__init__.py"):
         assert is_env_migration_toplevel(name) is False, name
@@ -207,6 +214,7 @@ def test_iter_bundle_toplevel_filters_denylist(tmp_path: Path) -> None:
             "logs",  # excluded
             "databases",  # excluded
             "uploads",  # excluded from bundle
+            "artifacts",  # excluded from bundle (kit artifacts role)
             "__init__.py",  # excluded marker
             ".cache",  # runtime denylisted
         ],
@@ -236,6 +244,7 @@ def test_iter_env_migration_toplevel_includes_extra(tmp_path: Path) -> None:
             "webapp",
             "credentials",  # env-migration extra
             "uploads",  # env-migration extra
+            "artifacts",  # env-migration extra
             "logs",  # never
             "databases",  # never
             "app-data",  # never
@@ -243,7 +252,7 @@ def test_iter_env_migration_toplevel_includes_extra(tmp_path: Path) -> None:
         ],
     )
     got = {p.name for p in iter_env_migration_toplevel(ws)}
-    assert got == {"scripts", "webapp", "credentials", "uploads"}
+    assert got == {"scripts", "webapp", "credentials", "uploads", "artifacts"}
 
 
 # ── snapshot_layout ─────────────────────────────────────────────────

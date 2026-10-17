@@ -15,7 +15,8 @@ instructions live in `docs/WORKFLOW_PROMPT.md` and nowhere else.
 4. Get credentials through `scripts/cinna_credentials.py` — inside a script, never in
    the conversation. **Never print, echo or log a credential value.**
 5. Write runtime output to `app-data/storage/`. Disposable snapshots go to
-   `app-data/cache/`. Never write to `docs/`, `skills/`, `scripts/`, `knowledge/`
+   `app-data/cache/`. Build anything meant to be published as a Cinna artifact under
+   `artifacts/<name>/` (the `cinna-artifacts` skill). Never write to `docs/`, `skills/`, `scripts/`, `knowledge/`
    or `files/` while acting as the agent.
 6. Read tunable parameters from `config/`, not from hardcoded values in scripts.
 
