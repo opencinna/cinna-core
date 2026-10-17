@@ -1,11 +1,11 @@
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
 from sqlmodel import select
 from pydantic import BaseModel
 
-from app.api.deps import CurrentUser, SessionDep
+from app.api.deps import CurrentUser, OptionalCurrentUser, SessionDep
 from app.models import Credential
 from app.services.credentials.oauth_credentials_service import OAuthCredentialsService
 from app.services.credentials.credentials_service import CredentialsService
@@ -28,6 +28,12 @@ class OAuthCallbackRequest(BaseModel):
 class OAuthCallbackResponse(BaseModel):
     credential_id: uuid.UUID
     message: str
+    # Where the flow was started; the SPA picks its terminal view from it.
+    origin: Literal["web", "desktop"] = "web"
+    # Masked email of the Cinna account that owns the credential
+    # ("ev•••@example.com"), so a user who completed someone else's
+    # authorization link notices the account is not theirs.
+    owner_email_masked: str | None = None
 
 
 class OAuthMetadataResponse(BaseModel):
@@ -86,20 +92,26 @@ def oauth_authorize(
 async def oauth_callback(
     session: SessionDep,
     callback_data: OAuthCallbackRequest,
+    signed_in_user: OptionalCurrentUser,
 ) -> Any:
     """
     Handle OAuth callback from Google.
 
     Exchanges authorization code for access/refresh tokens and stores them.
-    This is a public endpoint (no auth required) as it's called by Google redirect.
+    Public: a desktop-started flow completes in a browser with no Cinna
+    session. When the browser is signed in, the state must belong to that
+    account (403 otherwise, state consumed). The response names the owning
+    account (masked email) so the page can show it.
     """
     try:
         # Handle OAuth callback using service
-        credential = await OAuthCredentialsService.handle_oauth_callback(
+        result = await OAuthCredentialsService.handle_oauth_callback(
             session=session,
             code=callback_data.code,
-            state=callback_data.state
+            state=callback_data.state,
+            signed_in_user_id=signed_in_user.id if signed_in_user else None,
         )
+        credential = result.credential
 
         # Trigger credential sync to affected agent environments
         await CredentialsService.event_credential_updated(
@@ -109,7 +121,9 @@ async def oauth_callback(
 
         return OAuthCallbackResponse(
             credential_id=credential.id,
-            message="OAuth authorization successful"
+            message="OAuth authorization successful",
+            origin=result.origin,
+            owner_email_masked=result.owner_email_masked,
         )
     except HTTPException:
         raise

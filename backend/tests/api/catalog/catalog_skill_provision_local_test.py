@@ -319,7 +319,8 @@ def test_provision_local_outcomes_for_grantee_publisher_and_stranger(
     """
     1. Publisher names three shareable credentials (local use on / off, an
        OAuth type) and a template one; one slot is installer-filled
-    2. ``use`` grantee: shared (with id) / not_allowed_locally ×2 /
+    2. ``use`` grantee: shared ×2 (with id; the OAuth type is locally
+       compatible) / not_allowed_locally ×1 /
        user_provides ×2; ids only on shared; no secrets
     3. Second call: shared → already_shared, same id; exactly one share
        row for the grantee, source ``skill_local_install``
@@ -365,7 +366,7 @@ def test_provision_local_outcomes_for_grantee_publisher_and_stranger(
     assert _outcomes(first) == {
         "svc-local": ("shared", local["id"]),
         "svc-no-local": ("not_allowed_locally", None),
-        "svc-oauth": ("not_allowed_locally", None),
+        "svc-oauth": ("shared", oauth["id"]),
         "svc-tpl": ("user_provides", None),
         "svc-user": ("user_provides", None),
     }
@@ -378,14 +379,18 @@ def test_provision_local_outcomes_for_grantee_publisher_and_stranger(
     # ── Phase 3: idempotent ──────────────────────────────────────────
     second = _provision(client, grantee.headers, pkg, secrets=secrets)
     assert _outcomes(second) == {
-        **_outcomes(first), "svc-local": ("already_shared", local["id"]),
+        **_outcomes(first),
+        "svc-local": ("already_shared", local["id"]),
+        "svc-oauth": ("already_shared", oauth["id"]),
     }
     rows = [s for s in _shares_of(client, pub.headers, local["id"])
             if s["shared_with_user_id"] == grantee.id]
     assert len(rows) == 1
     assert rows[0]["source"] == "skill_local_install"
     assert _shares_of(client, pub.headers, no_local["id"]) == []
-    assert _shares_of(client, pub.headers, oauth["id"]) == []
+    oauth_rows = [s for s in _shares_of(client, pub.headers, oauth["id"])
+                  if s["shared_with_user_id"] == grantee.id]
+    assert len(oauth_rows) == 1 and oauth_rows[0]["source"] == "skill_local_install"
 
     # ── Phase 4: the publisher holds them already ────────────────────
     own = _provision(client, pub.headers, pkg, secrets=secrets)

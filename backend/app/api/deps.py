@@ -118,6 +118,32 @@ def get_current_user(session: SessionDep, token: TokenDep) -> User:
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
 
+optional_oauth2 = OAuth2PasswordBearer(
+    tokenUrl=f"{settings.API_V1_STR}/login/access-token", auto_error=False
+)
+
+
+def get_optional_current_user(
+    session: SessionDep,
+    token: Annotated[str | None, Depends(optional_oauth2)],
+) -> User | None:
+    """The signed-in user when the request carries a token ``CurrentUser`` accepts.
+
+    For public endpoints that behave differently for a signed-in caller. A
+    missing token, or one ``get_current_user`` rejects (expired, revoked,
+    agent-env, inactive user), resolves to None: the caller is treated as
+    anonymous, never failed.
+    """
+    if not token:
+        return None
+    try:
+        return get_current_user(session, token)
+    except HTTPException:
+        return None
+
+
+OptionalCurrentUser = Annotated[User | None, Depends(get_optional_current_user)]
+
 
 def get_current_active_superuser(current_user: CurrentUser) -> User:
     if not current_user.is_superuser:

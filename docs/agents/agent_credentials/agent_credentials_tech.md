@@ -136,8 +136,8 @@ New service responsible for the `current_user` credentials.json block and the "U
 - `event_user_details_updated(session, user_id)` — `async`; enumerates all `Agent` rows where `owner_id == user_id` and calls `CredentialsService.sync_credentials_to_agent_environments` per agent (which filters to running envs). Imports `CredentialsService` locally to avoid a circular import. Mirrors `event_credential_updated` but with a broader enumeration root.
 
 ### OAuthCredentialsService (`backend/app/services/credentials/oauth_credentials_service.py`)
-- `initiate_oauth_flow()` - Generates state token, builds Google authorization URL with type-specific scopes
-- `handle_oauth_callback()` - Validates state token, exchanges code for tokens, stores encrypted in credential
+- `initiate_oauth_flow()` - Generates state token (stored hashed in `credential_oauth_state`, single-use; see [OAuth Credentials Tech](oauth_credentials_tech.md)), builds Google authorization URL with type-specific scopes
+- `handle_oauth_callback()` - Consumes state token (403 on signed-in account mismatch), exchanges code for tokens, stores encrypted in credential
 - `refresh_oauth_token()` - Refreshes OAuth access token using stored refresh token
 - `get_oauth_scopes_for_type()` - Maps credential type to required Google OAuth scopes
 - `get_oauth_metadata()` - Extracts non-sensitive metadata (email, scopes, expiration) for display

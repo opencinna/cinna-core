@@ -1,7 +1,7 @@
 ---
 feature: desktop_credentials
 domain: application
-one_liner: "Lets a signed-in Cinna Desktop session copy an owner's locally-compatible cloud credentials onto a local agent, gated by owner consent and a fixed type allowlist."
+one_liner: "Lets a signed-in Cinna Desktop copy locally-compatible cloud credentials onto a local agent, gated by owner consent, and create and use Core-brokered Google OAuth credentials."
 docs:
   tech: desktop_credentials_tech.md
 affects: [local_agent_kit]
@@ -35,11 +35,14 @@ plain computer are ever eligible, and only with the credential owner's explicit,
 - **Locally compatible type** — one of a fixed, small allowlist of credential types that are
   self-contained enough to work on a plain computer: `email_imap`, `email_smtp`, `odoo`,
   `api_token`, `google_service_account` (its full service-account key JSON is delivered alongside
-  the entry). Every other type is refused, listed nowhere, and delivered to no one — see Business
+  the entry), and the eight Google OAuth types (`gmail_oauth`, `gdrive_oauth`, `gcalendar_oauth`,
+  `gmeet_oauth` and their `_readonly` variants), which are Core-brokered (see Google OAuth below).
+  Every other type is refused, listed nowhere, and delivered to no one — see Business
   Rules.
 - **Refusal reason** — materialization is per-item, never batch-fatal: each requested credential
   either comes back with a value or a typed reason (`not_found`, `no_access`,
-  `not_local_category`, `local_use_not_allowed`, `unsupported_type`, plus the issued-key reasons
+  `not_local_category`, `local_use_not_allowed`, `unsupported_type`, the Google OAuth reasons `pending_authorization`, `reauthorization_required`
+  and `token_unavailable`, plus the issued-key reasons
   `key_revoked`, `key_expired`, `key_paused`). A Local Agent Kit script sees the same reason as
   `unavailable_reason` on the entry.
 - **Issued API key (`agent_api`, opt-in)** — a key a producer's owner issued *to the caller* (see
@@ -104,17 +107,15 @@ plain computer are ever eligible, and only with the credential owner's explicit,
   runs first.
 - **Superuser status is not a bypass.** Every rule above applies the same way to a superuser as to
   anyone else; there is no admin override for exporting another user's credential values.
-- **The compatible-type allowlist is small and deliberate.** The six Google OAuth types (Gmail,
-  Drive, Calendar and their read-only variants) are excluded because refreshing their access token
-  needs the OAuth client secret, which only the backend server holds — a copied OAuth entry would
-  simply stop working once its access token expired, with no way for the local machine to renew
-  it. SSH keys are excluded because the private key material never leaves Core in the first place.
-  Agent API **connection** credentials and MCP provider credentials are excluded because they are
-  not portable credential files: a connection is bound to the platform's anonymous agent-to-agent
-  model, and an MCP provider credential is an SDK MCP-server manifest entry, not
-  something a local script can read a value out of. **Desktop credential delivery never refreshes
-  an OAuth token as part of materialization** — the question does not arise, because OAuth types
-  are never listed or delivered at all.
+- **The compatible-type allowlist is small and deliberate.** The eight Google OAuth types used to be
+  excluded because refreshing their access token needs the OAuth client secret, which only the
+  backend holds. They are now eligible because Core brokers them: the refresh token and client
+  secret never leave Core, and Desktop receives only a short-lived access token (see Google OAuth
+  below). SSH keys are excluded because the private key material never leaves Core in the first
+  place. Agent API **connection** credentials and MCP provider credentials are excluded because they
+  are not portable credential files: a connection is bound to the platform's anonymous
+  agent-to-agent model, and an MCP provider credential is an SDK MCP-server manifest entry, not
+  something a local script can read a value out of.
 - **Issued keys: eligibility and delivery.** An `agent_api` credential is eligible only when the
   client opted in, the caller **owns** it, it is an issued key (never a connection) and it was
   **issued to the caller**; every other `agent_api` credential is `unsupported_type` and never
@@ -150,6 +151,62 @@ plain computer are ever eligible, and only with the credential owner's explicit,
   the sharing UI and this doc are explicit about that: consent gates future materialization, it is
   not a remote wipe.
 
+## Google OAuth Credentials on Desktop
+
+Desktop can create a Google OAuth credential, have the user authorize it in a browser, and use it
+on a local agent, without Core ever handing out the refresh token.
+
+- **Create / reconnect / token.** `POST /api/v1/external/credentials/oauth` (201) creates an owned
+  credential of a Google type (Default workspace, `allow_local_use=true`) and returns
+  `{credential_id, authorization_url, expires_at}`; `POST /api/v1/external/credentials/{id}/oauth/authorize`
+  starts a new authorization for one the caller **owns**; `POST /api/v1/external/credentials/{id}/access-token`
+  returns a Google access token valid for `min_ttl` seconds. All three need a live, interactive,
+  non-CLI-exchanged Desktop client. Errors carry `detail = {"code", "message"}`: `unsupported_type`
+  (422), `credential_not_found` (404; also every access refusal on the token endpoint, so nothing
+  leaks), `oauth_not_configured` (503), `not_refreshable` (422), `reauthorization_required` (409),
+  `provider_error` / `refresh_in_progress` (502 with `Retry-After`).
+- **503 vs 501.** When Google OAuth is not configured the Desktop endpoints answer 503
+  `oauth_not_configured` (a stable, coded "ask an administrator"), before anything is created. The
+  web `authorize` endpoint keeps its 501.
+- **Create reuses a pending credential.** If the caller already owns a never-authorized credential
+  of the same type (Default workspace, local use allowed, not a placeholder, no token stored), create
+  returns a new authorization for it instead of adding another empty one, and applies a new `name`
+  if given. When several match, the most recently updated wins. There is no lock, so two truly
+  concurrent creates can still produce two credentials.
+- **Local use is on by default for these.** A credential created from Desktop gets
+  `allow_local_use=true`. This is a deliberate product choice: the user is creating it precisely to
+  use it on their computer. The consequence is that it pre-consents local copy for anyone the
+  credential is later shared with (or a skill slot that provisions it for local install); the owner
+  can turn the switch off afterwards, which gates future delivery only.
+- **List fields.** Google items carry `oauth_status` (`pending_authorization`, `ready`,
+  `reauth_required`) and `granted_user_email` (the authorized Google account; hidden from a
+  recipient whose owner has not consented to local use). Both are null for other types.
+- **Materialize refreshes first.** For a Google item, materialize makes sure the token is valid for
+  at least 10 minutes, refreshing if needed, then delivers `access_token`, `token_type`,
+  `expires_at`, scope and the granted account (never the refresh token). Refusals:
+  `pending_authorization` (consent not finished), `reauthorization_required` (Google rejected the
+  grant; the owner must reconnect), `token_unavailable` (an expired token could not be refreshed
+  right now; transient, retry). Later tokens come from the access-token endpoint.
+- **Audit.** Starting an authorization logs `CREDENTIAL_OAUTH_AUTHORIZE_LOCAL`. The access-token
+  endpoint logs `CREDENTIAL_TOKEN_ISSUED_LOCAL` **only when it actually refreshed**, for the
+  requester and, for a shared credential, for the owner; serving the still-valid cached token is
+  not an event. Create/reconnect share a 10/minute limit, tokens 120/minute, per (user, client).
+- **Skill local install.** Because the Google types are now locally compatible, the skill
+  `provision-local` flow can create a `skill_local_install` share for an OAuth slot (outcome
+  `shared` / `already_shared`) when the publisher's credential has `allow_sharing` and
+  `allow_local_use`; before, such slots answered `not_allowed_locally`. See
+  [Agent Skills](../../agents/agent_skills/agent_skills.md#5c-publishing-a-skill-from-a-desktop).
+- **Authorization state and the callback.** See [OAuth Credentials](../../agents/agent_credentials/oauth_credentials.md#desktop-started-authorization).
+  The consent runs in the user's browser, which usually has no Cinna session. The callback binds
+  the state to the credential's owner: if the browser *is* signed in as a different Cinna account
+  the callback answers 403 and burns the state; a sessionless browser is fine. The callback page
+  shows a masked owner email (`ev***@example.com`) so a person who was sent someone else's
+  authorization link can see it connects another person's account before consenting. This
+  mitigates consent phishing, where an attacker starts a flow for their own credential and sends
+  the link to a victim hoping the victim's Google grant lands in the attacker's credential.
+- **Local Agent Kit.** Kit contract and `cinna_credentials.py` `HELPER_VERSION` are 1.14.0; the
+  helper names the three new refusal reasons and Google slots are satisfiable on a desktop host.
+
 ## Architecture Overview
 
 ```
@@ -157,6 +214,9 @@ Cinna Desktop (interactive session)
     │
     ├─ GET /external/credentials  (metadata, ETag/304)
     │       └─ DesktopCredentialService.list_credentials
+    │
+    ├─ POST /external/credentials/oauth, /{id}/oauth/authorize, /{id}/access-token
+    │       └─ DesktopOAuthService (create/reuse, authorize, token; refresh via OAuthRefreshService)
     │
     └─ POST /external/credentials/materialize  (selected ids)
             └─ DesktopCredentialService.materialize
@@ -186,7 +246,15 @@ Cinna Desktop (interactive session)
   for a shared credential, for the owner.
 - [Desktop App Authentication](../desktop_auth/desktop_auth.md) — materialization requires a live,
   interactive Desktop client and is refused for a CLI-exchanged session.
+- [OAuth Credentials](../../agents/agent_credentials/oauth_credentials.md) — the authorization flow,
+  hashed single-use state, refresh primitive and callback binding Desktop reuses.
 - [Local Agent Kit](../local_agent_kit/local_agent_kit.md) — the delivery target: a materialized
   entry lands in a local agent's `credentials/credentials.json`, read by the same
   `scripts/cinna_credentials.py` a cloud agent uses, including its `unavailable_reason` handling
   for a refused credential.
+
+## Changelog
+
+- Google OAuth credentials: the eight Google OAuth types became locally compatible and Core-brokered;
+  Desktop can create, reconnect and fetch access tokens; materialize refreshes before delivering;
+  new refusal reasons; list fields `oauth_status` / `granted_user_email`; kit contract 1.14.0.

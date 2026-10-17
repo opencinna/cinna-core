@@ -19181,6 +19181,29 @@ export const DesktopCredentialListItemSchema = {
                     type: 'null'
                 }
             ]
+        },
+        oauth_status: {
+            anyOf: [
+                {
+                    type: 'string',
+                    enum: ['pending_authorization', 'ready', 'reauth_required']
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Oauth Status'
+        },
+        granted_user_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Granted User Email'
         }
     },
     type: 'object',
@@ -19266,7 +19289,7 @@ export const DesktopCredentialRefusalSchema = {
         },
         reason: {
             type: 'string',
-            enum: ['not_found', 'no_access', 'not_local_category', 'local_use_not_allowed', 'unsupported_type', 'key_revoked', 'key_expired', 'key_paused'],
+            enum: ['not_found', 'no_access', 'not_local_category', 'local_use_not_allowed', 'unsupported_type', 'pending_authorization', 'reauthorization_required', 'token_unavailable', 'key_revoked', 'key_expired', 'key_paused'],
             title: 'Reason'
         },
         key_status: {
@@ -19322,6 +19345,28 @@ export const DesktopMaterializedCredentialSchema = {
     type: 'object',
     required: ['id', 'revision', 'entry'],
     title: 'DesktopMaterializedCredential'
+} as const;
+
+export const DesktopOAuthAuthorizeResponseSchema = {
+    properties: {
+        credential_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Credential Id'
+        },
+        authorization_url: {
+            type: 'string',
+            title: 'Authorization Url'
+        },
+        expires_at: {
+            type: 'integer',
+            title: 'Expires At'
+        }
+    },
+    type: 'object',
+    required: ['credential_id', 'authorization_url', 'expires_at'],
+    title: 'DesktopOAuthAuthorizeResponse',
+    description: "Where to send the user's browser to authorize a credential."
 } as const;
 
 export const DesktopOAuthClientPublicSchema = {
@@ -19385,6 +19430,31 @@ export const DesktopOAuthClientPublicSchema = {
     type: 'object',
     required: ['client_id', 'device_name', 'origin', 'created_at', 'is_revoked'],
     title: 'DesktopOAuthClientPublic'
+} as const;
+
+export const DesktopOAuthCredentialCreateSchema = {
+    properties: {
+        type: {
+            '$ref': '#/components/schemas/CredentialType'
+        },
+        name: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255,
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Name'
+        }
+    },
+    type: 'object',
+    required: ['type'],
+    title: 'DesktopOAuthCredentialCreate',
+    description: 'Create a Google OAuth credential from a Desktop client (then authorize it).'
 } as const;
 
 export const DeviceInputSchema = {
@@ -27402,6 +27472,23 @@ export const OAuthCallbackResponseSchema = {
         message: {
             type: 'string',
             title: 'Message'
+        },
+        origin: {
+            type: 'string',
+            enum: ['web', 'desktop'],
+            title: 'Origin',
+            default: 'web'
+        },
+        owner_email_masked: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Owner Email Masked'
         }
     },
     type: 'object',

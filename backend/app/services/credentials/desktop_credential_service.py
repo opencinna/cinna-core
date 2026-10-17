@@ -16,6 +16,13 @@ listed or delivered — except a share stamped ``skill_local_install``, which
 ``provision-local`` creates precisely so a Desktop can copy it. Only ``LOCALLY_COMPATIBLE_TYPES`` — types that work on a
 device out of the box — are listed or delivered at all.
 
+Google OAuth types are core-brokered: the refresh token never leaves Core.
+Materialize delivers a fresh access token (refreshing first when needed) and
+refuses ``pending_authorization`` / ``reauthorization_required`` /
+``token_unavailable``; the list carries ``oauth_status`` and
+``granted_user_email``. Desktop gets later tokens from
+``DesktopOAuthService.access_token`` (``/external/credentials/{id}/access-token``).
+
 Issued ``agent_api`` keys (plan §6/§7) are opt-in: only with
 ``include=agent_api_keys``, only the caller's own key issued to the caller, and
 only delivered while active (other statuses are listed, and refused on
@@ -59,18 +66,29 @@ from app.services.agent_api.agent_api_key_status import (
 from app.services.agent_api.agent_api_token_service import AgentApiTokenService
 from app.services.common.rate_limiter import RateLimiter
 from app.services.credentials.credentials_service import CredentialsService
+from app.services.credentials.oauth_refresh_service import (
+    GOOGLE_OAUTH_TYPES,
+    AgentEnvTokenError,
+    OAuthRefreshService,
+    oauth_status,
+)
 from app.services.desktop_auth.desktop_auth_service import DesktopAuthService
 from app.services.events.security_event_service import SecurityEventService
 
 logger = logging.getLogger(__name__)
 
 MATERIALIZE_LIMIT_PER_MINUTE = 60
+# Minimum lifetime of the access token a materialize delivers for a Google
+# OAuth credential (the Desktop asks /access-token for later ones).
+MATERIALIZE_OAUTH_MIN_TTL_SECONDS = 600
 
-# Credential types that work on a Desktop device out of the box: the delivered
-# entry (plus, for a service account, its full key JSON) is all a local agent
-# needs. Everything else is never listed nor delivered:
-# - OAuth (gmail/gdrive/gcalendar/gmeet, incl. readonly): refreshing the access token
-#   needs the OAuth client secret, which is private to the backend server.
+# Credential types that work on a Desktop device: the delivered entry (plus,
+# for a service account, its full key JSON) is all a local agent needs.
+# - Google OAuth (gmail/gdrive/gcalendar/gmeet, incl. readonly): core-brokered.
+#   The entry carries a short-lived access token only; the refresh token and
+#   the OAuth client secret stay in Core, and the Desktop gets later tokens
+#   from the access-token endpoint.
+# Everything else is never listed nor delivered:
 # - ssh_key: the private key never leaves Core, so the entry is useless locally.
 # - agent_api: only an issued key owned by and issued to the caller, and only
 #   when the client opts in (include=agent_api_keys); connections never.
@@ -83,6 +101,14 @@ LOCALLY_COMPATIBLE_TYPES: frozenset[CredentialType] = frozenset(
         CredentialType.API_TOKEN,
         CredentialType.GOOGLE_SERVICE_ACCOUNT,
         CredentialType.AGENT_API,
+        CredentialType.GMAIL_OAUTH,
+        CredentialType.GMAIL_OAUTH_READONLY,
+        CredentialType.GDRIVE_OAUTH,
+        CredentialType.GDRIVE_OAUTH_READONLY,
+        CredentialType.GCALENDAR_OAUTH,
+        CredentialType.GCALENDAR_OAUTH_READONLY,
+        CredentialType.GMEET_OAUTH,
+        CredentialType.GMEET_OAUTH_READONLY,
     }
 )
 
@@ -90,15 +116,24 @@ _limiter = RateLimiter()
 
 
 class DesktopCredentialError(Exception):
-    """Request-level failure; the route maps it to an HTTP response."""
+    """Request-level failure; the route maps it to an HTTP response.
+
+    ``code`` (optional) is a stable machine code; with it the route answers
+    ``detail={"code", "message"}``, without it the plain message string.
+    """
 
     def __init__(
-        self, status_code: int, message: str, headers: dict[str, str] | None = None
+        self,
+        status_code: int,
+        message: str,
+        headers: dict[str, str] | None = None,
+        code: str | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.message = message
         self.headers = headers
+        self.code = code
 
 
 class DesktopCredentialService:
@@ -266,9 +301,11 @@ class DesktopCredentialService:
     ) -> tuple[str, DesktopCredentialList | None]:
         """Return ``(etag, list)``; ``list`` is None when ``if_none_match`` matches.
 
-        The ETag covers every metadata field plus the revision. ``status`` and
-        ``expires_at`` derive from the encrypted payload, whose every change
-        bumps the revision, so the common unchanged poll costs no decryption.
+        The ETag covers every metadata field plus the revision. ``status``,
+        ``expires_at`` and, for Google OAuth types, ``oauth_status`` and
+        ``granted_user_email`` derive from the encrypted payload, whose every
+        change bumps the revision, so the common unchanged poll costs no
+        decryption.
         Issued keys (opt-in) put ``key_status``, ``expires_at`` and their
         ``agent_api`` facts in the metadata, so status flips, producer renames
         and issuer email changes move the ETag too.
@@ -337,6 +374,7 @@ class DesktopCredentialService:
                 # "complete" — availability is key_status, not the payload.
                 items.append(DesktopCredentialListItem(**meta, status="complete"))
                 continue
+            is_oauth = c.type.value in GOOGLE_OAUTH_TYPES
             items.append(
                 DesktopCredentialListItem(
                     **meta,
@@ -344,6 +382,13 @@ class DesktopCredentialService:
                         c.type.value, data
                     ),
                     expires_at=data.get("expires_at"),
+                    oauth_status=oauth_status(data) if is_oauth else None,
+                    # A recipient without local-use consent sees no Google account.
+                    granted_user_email=(
+                        data.get("granted_user_email")
+                        if is_oauth and meta["local_use_allowed"]
+                        else None
+                    ),
                 )
             )
         return etag, DesktopCredentialList(items=items)
@@ -403,9 +448,20 @@ class DesktopCredentialService:
             raise DesktopCredentialError(401, "Desktop authentication revoked")
 
     @staticmethod
-    def _check_rate_limit(user_id: uuid.UUID, client_id: str) -> None:
+    def _check_rate_limit(
+        user_id: uuid.UUID,
+        client_id: str,
+        *,
+        scope: str | None = None,
+        limit_per_minute: int = MATERIALIZE_LIMIT_PER_MINUTE,
+    ) -> None:
+        """429 past ``limit_per_minute`` for ``(scope, user, client)``; no
+        ``scope`` is the materialize bucket."""
         # Per-process sliding window, not a distributed quota.
-        retry = _limiter.check(f"{user_id}:{client_id}", MATERIALIZE_LIMIT_PER_MINUTE)
+        key = f"{user_id}:{client_id}"
+        if scope:
+            key = f"{scope}:{key}"
+        retry = _limiter.check(key, limit_per_minute)
         if retry:
             raise DesktopCredentialError(
                 429,
@@ -457,6 +513,11 @@ class DesktopCredentialService:
             )
             if reason is None and credential.type not in LOCALLY_COMPATIBLE_TYPES:
                 reason = "unsupported_type"
+            if reason is None and credential.type.value in GOOGLE_OAUTH_TYPES:
+                # May refresh (and commit) — nothing in this loop writes before it.
+                reason = await DesktopCredentialService._ensure_oauth_token(
+                    session, credential
+                )
             key_state = key_states.get(cid) if reason is None else None
             if key_state is not None:
                 # Status gate: only an active key is delivered.
@@ -536,6 +597,37 @@ class DesktopCredentialService:
             refused=refused,
             current_user=block("current_user") if request.include_current_user else None,
         )
+
+    @staticmethod
+    async def _ensure_oauth_token(
+        session: Session, credential: Credential
+    ) -> DesktopCredentialRefusalReason | None:
+        """Make sure a Google OAuth credential holds an access token valid for
+        ``MATERIALIZE_OAUTH_MIN_TTL_SECONDS``; the refusal reason, or None.
+
+        Refreshes through ``OAuthRefreshService.issue_access_token`` (the one
+        outcome-to-error mapping). On success the credential is re-read, so the
+        caller's decrypt and revision see what a refresh just stored.
+        """
+        status = oauth_status(
+            CredentialsService.decrypt_credential_data(session, credential)
+        )
+        if status == "pending_authorization":
+            return "pending_authorization"
+        if status == "reauth_required":
+            return "reauthorization_required"
+        try:
+            await OAuthRefreshService.issue_access_token(
+                session, credential, min_ttl=MATERIALIZE_OAUTH_MIN_TTL_SECONDS
+            )
+        except AgentEnvTokenError as e:
+            if e.code == "reauthorization_required":
+                return "reauthorization_required"
+            if e.code == "not_refreshable":
+                return "pending_authorization"
+            return "token_unavailable"
+        session.refresh(credential)
+        return None
 
     @staticmethod
     async def _audit_delivery(

@@ -97,3 +97,38 @@ Auto-generated from OpenAPI spec. Tag: `external`
 **Response:** `DesktopCredentialMaterializeResponse`
 
 ---
+
+## POST `/api/v1/external/credentials/oauth`
+**Create Oauth Credential**
+
+**Request body** (`DesktopOAuthCredentialCreate`):
+  - `type`: CredentialType (required)
+  - `name`: string | null
+
+**Response:** `DesktopOAuthAuthorizeResponse`
+
+---
+
+## POST `/api/v1/external/credentials/{credential_id}/oauth/authorize`
+**Reauthorize Oauth Credential**
+
+**Path parameters:**
+- `credential_id`: uuid
+
+**Response:** `DesktopOAuthAuthorizeResponse`
+
+---
+
+## POST `/api/v1/external/credentials/{credential_id}/access-token`
+**Desktop Credential Access Token**
+
+**Path parameters:**
+- `credential_id`: uuid
+
+**Request body** (`AgentCredentialAccessTokenRequest`):
+  - `min_ttl`: integer
+  - `known_expires_at`: integer | null
+
+**Response:** `AgentCredentialAccessTokenResponse`
+
+---

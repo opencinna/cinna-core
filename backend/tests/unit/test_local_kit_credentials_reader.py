@@ -181,6 +181,36 @@ def test_unknown_unavailable_reason_uses_generic_hint(reader) -> None:
     assert "it could not be delivered (something_new)" in str(exc.value)
 
 
+@pytest.mark.parametrize(
+    "reason,hint",
+    [
+        ("pending_authorization", "the Google account has not been connected yet"),
+        ("reauthorization_required", "Google needs the account reconnected"),
+        ("token_unavailable", "Google did not issue a token just now; try again"),
+    ],
+)
+def test_google_oauth_refusal_reasons_have_hints(
+    reader, monkeypatch: pytest.MonkeyPatch, reason: str, hint: str
+) -> None:
+    # Contract 1.14.0: OAuth slots are deliverable on desktop; core refuses with
+    # one of three reasons when it cannot hand out a token right now.
+    _write(
+        reader,
+        [{"name": "Gmail", "type": "gmail_oauth", "service_uri": "gmail",
+          "env_prefix": "GMAIL_"}],
+        [{"name": "Gmail", "type": "gmail_oauth", "service_uri": "gmail",
+          "credential_data": {}, "unavailable_reason": reason}],
+    )
+    monkeypatch.setenv("GMAIL_ACCESS_TOKEN", "stale-local-token")
+
+    assert reader.unavailable_reason("Gmail") == f"{hint} ({reason})"
+    assert reader.has_credential("Gmail") is False
+    with pytest.raises(reader.CredentialError) as exc:
+        reader.require_slot("gmail")
+    assert f"{hint} ({reason})" in str(exc.value)
+    assert "stale-local-token" not in str(exc.value)
+
+
 # ---------------------------------------------------------------------------
 # Kit contract 1.7.0: issued agent_api keys + agent_api_session
 # ---------------------------------------------------------------------------
@@ -190,10 +220,10 @@ import threading
 from contextlib import contextmanager
 
 
-def test_helper_version_is_1_7_0_and_not_ahead_of_the_contract(reader) -> None:
+def test_helper_version_is_1_14_0_and_not_ahead_of_the_contract(reader) -> None:
     # HELPER_VERSION names the contract the helper last changed in; later
     # contracts that leave the helper alone do not move it.
-    assert reader.HELPER_VERSION == "1.7.0"
+    assert reader.HELPER_VERSION == "1.14.0"
     if KIT_SOURCE == "docs":
         contract = (SCRIPT.parents[3] / "CONTRACT_VERSION").read_text().strip()
         as_tuple = lambda v: tuple(int(p) for p in v.split("."))  # noqa: E731

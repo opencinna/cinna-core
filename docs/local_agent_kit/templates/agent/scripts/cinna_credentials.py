@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 
 AGENT_ROOT = Path(__file__).resolve().parents[1]
-HELPER_VERSION = "1.7.0"
+HELPER_VERSION = "1.14.0"
 CLOUD_CREDENTIALS = AGENT_ROOT / "credentials" / "credentials.json"
 LOCAL_ENV = AGENT_ROOT / "credentials" / ".env"
 MANIFEST = AGENT_ROOT / "cinna-agent.json"
@@ -90,6 +90,10 @@ _UNAVAILABLE_HINTS = {
     "key_revoked": "the key was revoked by its issuer or its producer is gone",
     "key_expired": "the key has expired",
     "key_paused": "the producer has paused API access",
+    # Google OAuth types (contract 1.14.0): core holds the refresh token.
+    "pending_authorization": "the Google account has not been connected yet",
+    "reauthorization_required": "Google needs the account reconnected",
+    "token_unavailable": "Google did not issue a token just now; try again",
 }
 
 

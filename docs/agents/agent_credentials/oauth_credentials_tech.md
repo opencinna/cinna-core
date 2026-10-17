@@ -13,6 +13,16 @@ Business logic: [OAuth Credentials](oauth_credentials.md). Parent: [Agent Creden
 - `backend/app/env-templates/app_core_base/core/cinna_api/credentials.py` - container SDK (`access_token`, `CredentialRefreshError`)
 - `backend/app/services/sessions/stream_processor.py`, `backend/app/services/environments/environment_lifecycle.py` - refresh callers
 
+## Authorization State and Callback
+
+- Table `credential_oauth_state` (`backend/app/models/credentials/credential_oauth_state.py`, mig `90a3fecdf28b`): `state_hash` (unique sha256 hex), `credential_id`/`user_id` (FK CASCADE), `origin` (`web`|`desktop`), `created_at`, `expires_at`. Replaces the in-process `_oauth_states` dict.
+- `OAuthCredentialsService.initiate_oauth_flow(session, credential_id, user_id, origin="web")` -> `{authorization_url, state, expires_at}`; purges expired rows, inserts the hashed state (TTL `OAUTH_STATE_TTL_SECONDS = 600`); desktop states are prefixed `DESKTOP_STATE_PREFIX = "desktop."`. 501 when Google OAuth is not configured (Desktop endpoints pre-check and answer 503 `oauth_not_configured`).
+- `consume_state(session, state) -> ConsumedOAuthState | None` - one `DELETE ... RETURNING` plus commit; None when unknown, used or expired.
+- `handle_oauth_callback(session, code, state, signed_in_user_id=None) -> OAuthCallbackResult {credential, origin, owner_email_masked}`: consumes the state, then 403 if `signed_in_user_id` is set and differs from the state's user (state already burned), then owner check, `_exchange_authorization_code` (the single token-endpoint call and test seam; 400 on failure). `mask_email` keeps 1-2 leading characters and the full domain.
+- Route `POST /api/v1/credentials/oauth/callback` takes `OptionalCurrentUser` (`get_optional_current_user` in `deps.py`: missing or rejected token resolves to None, never fails). `OAuthCallbackResponse {credential_id, message, origin, owner_email_masked}`.
+- Frontend `routes/credentials/oauth/callback.tsx` renders the desktop or web terminal view (from `origin` or the `desktop.` prefix) and the masked account.
+- Tests: `backend/tests/api/credentials/test_oauth_state_db.py`.
+
 ## OAuthRefreshService
 
 - `refresh_if_needed(session, credential, *, min_valid_seconds, force=False, raise_on_error=False) -> RefreshOutcome`. Non-Google types and undecryptable blobs are `skipped`. Outcome `status`: `refreshed`, `fresh`, `skipped`, `failed`, `busy`, `cooldown`. Outcomes never contain token values.
@@ -20,7 +30,8 @@ Business logic: [OAuth Credentials](oauth_credentials.md). Parent: [Agent Creden
 - `locked(session, credential, needs_refresh)` - per-credential in-process `asyncio.Lock` plus `pg_try_advisory_xact_lock(0x4F415554, key)` on the caller's session (non-blocking try-lock polled every 0.25 s up to 5 s; no blocking `FOR UPDATE`, which would deadlock the event loop). `needs_refresh` is re-evaluated on a re-read after acquiring. States `acquired` / `not_needed` / `busy`. The commit on exit releases the lock. Caller session must have no pending changes.
 - Re-auth race guard: the encrypted blob is snapshotted under the lock and re-checked before writing; if the OAuth callback changed it, the stale result is discarded (`fresh`).
 - Bookkeeping in the encrypted blob (no migration): `refresh_attempted_at`, `refresh_error`, `refresh_error_kind` (`reauth_required` | `provider_error`), `refresh_error_at`. Cleared on success; the OAuth callback rebuilds the blob so re-authorization clears them. Kept out of the container by `AGENT_ENV_ALLOWED_FIELDS`. Metadata endpoint exposes `refresh_error` and `needs_reauthorization`.
-- `access_token_for_env(session, agent_id, credential_id, min_ttl, known_expires_at=None)` - used by the env endpoint (below).
+- `issue_access_token(session, credential, *, min_ttl) -> AgentCredentialAccessTokenResponse` - the one place mapping a `RefreshOutcome` to `AgentEnvTokenError` codes; callers resolve access first. Used by `access_token_for_env`, by Desktop `DesktopOAuthService.access_token` (`POST /api/v1/external/credentials/{id}/access-token`) and by Desktop materialize. `oauth_status(data)` -> `pending_authorization` | `ready` | `reauth_required`, also surfaced in the Desktop list.
+- `access_token_for_env(session, agent_id, credential_id, min_ttl, known_expires_at=None)` - link check + `issue_access_token` + env push; used by the env endpoint (below).
 - `AgentEnvTokenError(code, status, message, retry_after=None)` - mapped to HTTP errors by the route.
 
 ## Refresh Callers

@@ -189,6 +189,10 @@ from .credentials.credential_share import (
     SharedCredentialPublic,
     SharedCredentialsPublic,
 )
+from .credentials.credential_oauth_state import (
+    CredentialOAuthOrigin,
+    CredentialOAuthState,
+)
 from .credentials.desktop_credential import (
     DesktopCredentialList,
     DesktopCredentialListItem,
@@ -196,6 +200,8 @@ from .credentials.desktop_credential import (
     DesktopCredentialMaterializeResponse,
     DesktopCredentialRefusal,
     DesktopMaterializedCredential,
+    DesktopOAuthAuthorizeResponse,
+    DesktopOAuthCredentialCreate,
 )
 from .bundles.agent_bundle import (
     AgentBundle,
@@ -1205,12 +1211,16 @@ __all__ = [
     "CredentialShareLocalSkillUsage",
     "CredentialSharePublic",
     "CredentialShareRevocation",
+    "CredentialOAuthOrigin",
+    "CredentialOAuthState",
     "DesktopCredentialList",
     "DesktopCredentialListItem",
     "DesktopCredentialMaterializeRequest",
     "DesktopCredentialMaterializeResponse",
     "DesktopCredentialRefusal",
     "DesktopMaterializedCredential",
+    "DesktopOAuthAuthorizeResponse",
+    "DesktopOAuthCredentialCreate",
     "CredentialShareCreate",
     "CredentialSharesPublic",
     "SharedCredentialPublic",

@@ -394,47 +394,27 @@ class OAuthRefreshService:
         return RefreshOutcome(status="refreshed", credential=credential, attempted=True)
 
     @staticmethod
-    async def access_token_for_env(
+    async def issue_access_token(
         session: Session,
-        agent_id: uuid.UUID,
-        credential_id: uuid.UUID,
+        credential: Credential,
+        *,
         min_ttl: int,
-        known_expires_at: int | None = None,
     ) -> AgentCredentialAccessTokenResponse:
-        """Return a Google OAuth access token valid for at least ``min_ttl`` seconds.
+        """Return the credential's Google access token, valid for ``min_ttl`` seconds
+        when it can be (refreshing through ``refresh_if_needed`` when needed).
 
-        Scope: only credentials linked to ``agent_id`` (the calling env's agent);
-        an unlinked or nonexistent id is the same 404 (no existence leak).
-        ``known_expires_at`` is the expiry of the token the caller's env already
-        holds (from its credentials.json). Whenever the returned token's expiry
-        differs from it — or it is not given — the payload is pushed to the
-        agent's running environments before returning, so the env's output
-        redaction knows the returned value even when another path (sweep, a
-        sibling agent, another worker) refreshed it in the database.
-
-        Refreshes through ``OAuthRefreshService.refresh_if_needed``; the
-        payload is pushed to the agent's running environments before returning
-        so the env's output redaction knows the new value.
+        The one place that maps a ``RefreshOutcome`` to an error code. Callers
+        resolve access first (agent link, Desktop share rules) and wrap this.
+        ``min_ttl`` is clamped to ``[0, OAUTH_ON_DEMAND_MAX_MIN_TTL_SECONDS]``.
 
         Raises:
-            AgentEnvTokenError: see the status/code table in the plan (§2).
+            AgentEnvTokenError: ``not_refreshable`` (422),
+                ``reauthorization_required`` (409), ``refresh_in_progress`` /
+                ``provider_error`` (502, ``retry_after``),
+                ``oauth_not_configured`` (503).
         """
-        from app.services.credentials.credentials_service import CredentialsService
-
         min_ttl = max(0, min(min_ttl, settings.OAUTH_ON_DEMAND_MAX_MIN_TTL_SECONDS))
-
-        link = session.exec(
-            select(AgentCredentialLink).where(
-                AgentCredentialLink.agent_id == agent_id,
-                AgentCredentialLink.credential_id == credential_id,
-            )
-        ).first()
-        credential = session.get(Credential, credential_id) if link else None
-        if credential is None:
-            raise AgentEnvTokenError(
-                "credential_not_linked", 404,
-                f"Credential {credential_id} is not linked to this agent.",
-            )
+        credential_id = credential.id
         if credential.is_placeholder or credential.type.value not in GOOGLE_OAUTH_TYPES:
             raise AgentEnvTokenError(
                 "not_refreshable", 422,
@@ -445,9 +425,7 @@ class OAuthRefreshService:
         outcome = await OAuthRefreshService.refresh_if_needed(
             session, credential, min_valid_seconds=min_ttl
         )
-        logger.info(
-            "Agent-env access token for credential %s: %s", credential_id, outcome.status
-        )
+        logger.info("Access token for credential %s: %s", credential_id, outcome.status)
         data = OAuthRefreshService._decrypt(outcome.credential) or {}
         now = time.time()
         access_token = data.get("access_token")
@@ -479,7 +457,58 @@ class OAuthRefreshService:
                 retry_after=_cooldown_left(data, now),
             )
 
-        if outcome.status == "refreshed" or known_expires_at != int(expires_at):
+        return AgentCredentialAccessTokenResponse(
+            access_token=access_token,
+            token_type=data.get("token_type") or "Bearer",
+            expires_at=int(expires_at),
+            refreshed=outcome.status == "refreshed",
+        )
+
+    @staticmethod
+    async def access_token_for_env(
+        session: Session,
+        agent_id: uuid.UUID,
+        credential_id: uuid.UUID,
+        min_ttl: int,
+        known_expires_at: int | None = None,
+    ) -> AgentCredentialAccessTokenResponse:
+        """Return a Google OAuth access token valid for at least ``min_ttl`` seconds.
+
+        Scope: only credentials linked to ``agent_id`` (the calling env's agent);
+        an unlinked or nonexistent id is the same 404 (no existence leak).
+        ``known_expires_at`` is the expiry of the token the caller's env already
+        holds (from its credentials.json). Whenever the returned token's expiry
+        differs from it — or it is not given — the payload is pushed to the
+        agent's running environments before returning, so the env's output
+        redaction knows the returned value even when another path (sweep, a
+        sibling agent, another worker) refreshed it in the database.
+
+        The token itself comes from ``issue_access_token``.
+
+        Raises:
+            AgentEnvTokenError: ``credential_not_linked`` (404), plus every
+                error of ``issue_access_token``.
+        """
+        from app.services.credentials.credentials_service import CredentialsService
+
+        link = session.exec(
+            select(AgentCredentialLink).where(
+                AgentCredentialLink.agent_id == agent_id,
+                AgentCredentialLink.credential_id == credential_id,
+            )
+        ).first()
+        credential = session.get(Credential, credential_id) if link else None
+        if credential is None:
+            raise AgentEnvTokenError(
+                "credential_not_linked", 404,
+                f"Credential {credential_id} is not linked to this agent.",
+            )
+
+        resp = await OAuthRefreshService.issue_access_token(
+            session, credential, min_ttl=min_ttl
+        )
+
+        if resp.refreshed or known_expires_at != resp.expires_at:
             try:
                 await CredentialsService.sync_credentials_to_agent_environments(
                     session=session, agent_id=agent_id
@@ -490,12 +519,7 @@ class OAuthRefreshService:
                     credential_id, agent_id, type(e).__name__,
                 )
 
-        return AgentCredentialAccessTokenResponse(
-            access_token=access_token,
-            token_type=data.get("token_type") or "Bearer",
-            expires_at=int(expires_at),
-            refreshed=outcome.status == "refreshed",
-        )
+        return resp
 
     @staticmethod
     def _raise_for_failure(outcome: RefreshOutcome, data: dict[str, Any], now: float) -> None:
@@ -564,3 +588,23 @@ def _cooldown_left(data: dict[str, Any], now: float) -> int:
         return 1
     return max(1, int(settings.OAUTH_REFRESH_COOLDOWN_SECONDS - (now - attempted_at)))
 
+
+OAuthStatus = Literal["pending_authorization", "ready", "reauth_required"]
+
+
+def oauth_status(data: dict[str, Any] | None) -> OAuthStatus:
+    """Authorization state of a Google OAuth credential, from its decrypted blob.
+
+    Pure function of the blob (no clock), so it only changes when the blob
+    does, which bumps the credential revision: ``pending_authorization`` until
+    a token is stored, ``reauth_required`` once Google rejected the refresh
+    token, else ``ready`` (an expired token is still ``ready``: it refreshes).
+    """
+    data = data or {}
+    expires_at = data.get("expires_at")
+    has_expiry = isinstance(expires_at, (int, float)) and not isinstance(expires_at, bool)
+    if not data.get("access_token") or not has_expiry:
+        return "pending_authorization"
+    if data.get("refresh_error_kind") == REFRESH_ERROR_REAUTH_REQUIRED:
+        return "reauth_required"
+    return "ready"

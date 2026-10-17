@@ -391,7 +391,7 @@ slot answers with one outcome, re-checked live at every call:
 - `not_shareable`: the publisher no longer provides it (credential gone, sharing
   turned off, type or slot changed, or it is an Agent API connection).
 - `not_allowed_locally`: the owner has not turned on local use, the type does not
-  work on a computer, or the caller's only access is a bundle-install share.
+  work on a computer (Google OAuth types now do: Core hands the Desktop short-lived tokens), or the caller's only access is a bundle-install share.
 - `already_shared`: the caller already owns it or holds a share.
 - `shared`: a share was just created for the caller.
 

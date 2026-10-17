@@ -13,6 +13,14 @@ CREDENTIAL_WRITE_ATTEMPT = "CREDENTIAL_WRITE_ATTEMPT"
 # Desktop device: once for the requester, and once for the owner when a
 # recipient copied a credential shared with them. Never carries secret values.
 CREDENTIAL_MATERIALIZED_LOCAL = "CREDENTIAL_MATERIALIZED_LOCAL"
+# Emitted by ``DesktopOAuthService`` when a Desktop client creates a Google
+# OAuth credential or starts its re-authorization. Details:
+# ``{credential_id, desktop_client_id, credential_type, created}``.
+CREDENTIAL_OAUTH_AUTHORIZE_LOCAL = "CREDENTIAL_OAUTH_AUTHORIZE_LOCAL"
+# Emitted by ``DesktopOAuthService`` per Google access token issued to a
+# Desktop client: for the requester, and for the owner when a recipient asked
+# for a shared credential. Never carries the token.
+CREDENTIAL_TOKEN_ISSUED_LOCAL = "CREDENTIAL_TOKEN_ISSUED_LOCAL"
 
 # ── Two-Factor Authentication (MFA) event-type constants ─────────────
 # Emitted by ``MfaService`` and the login routes during 2FA enrollment,

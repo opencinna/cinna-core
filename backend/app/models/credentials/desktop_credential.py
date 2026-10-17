@@ -10,11 +10,13 @@ already filtered through ``AGENT_ENV_ALLOWED_FIELDS``.
 import uuid
 from typing import Any, Literal
 
+from pydantic import field_validator
 from sqlmodel import Field, SQLModel
 
 from app.models.credentials.credential import CredentialType
 
 DesktopCredentialRelation = Literal["owned", "shared"]
+DesktopOAuthStatus = Literal["pending_authorization", "ready", "reauth_required"]
 
 # Why a requested credential was not delivered. Per item, never batch-fatal.
 DesktopCredentialRefusalReason = Literal[
@@ -23,6 +25,12 @@ DesktopCredentialRefusalReason = Literal[
     "not_local_category",
     "local_use_not_allowed",
     "unsupported_type",
+    # Google OAuth types: not authorized yet (no token stored) /
+    # Google rejected the grant, the owner must re-authorize /
+    # expired token that could not be refreshed right now (transient).
+    "pending_authorization",
+    "reauthorization_required",
+    "token_unavailable",
     # Issued agent_api keys (only with ``include=agent_api_keys``). Each carries
     # the detailed ``key_status``.
     "key_revoked",  # revoked_by_issuer | producer_removed | issuer_removed
@@ -73,6 +81,11 @@ class DesktopCredentialListItem(SQLModel):
     # Unknown future values: treat as unavailable.
     key_status: str | None = None
     agent_api: DesktopAgentApiKeyFacts | None = None
+    # Google OAuth types only; null otherwise. Derived from the payload.
+    oauth_status: DesktopOAuthStatus | None = None
+    # The Google account the credential was authorized for. Null for non-OAuth
+    # types, before authorization, and when ``local_use_allowed`` is false.
+    granted_user_email: str | None = None
 
 
 class DesktopCredentialList(SQLModel):
@@ -108,3 +121,28 @@ class DesktopCredentialMaterializeResponse(SQLModel):
     # Always null: issued keys bind identity to the key, connections are never
     # delivered to a device. Kept so existing Desktop clients parse.
     owner_identity: dict[str, Any] | None = None
+
+
+class DesktopOAuthCredentialCreate(SQLModel):
+    """Create a Google OAuth credential from a Desktop client (then authorize it)."""
+
+    type: CredentialType
+    # Defaults to the type's display name ("Gmail", "Google Drive (read-only)", ...).
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _strip_name(cls, value: Any) -> Any:
+        # Whitespace-only (or empty) falls back to the type's default name.
+        if isinstance(value, str):
+            return value.strip() or None
+        return value
+
+
+class DesktopOAuthAuthorizeResponse(SQLModel):
+    """Where to send the user's browser to authorize a credential."""
+
+    credential_id: uuid.UUID
+    authorization_url: str
+    # Epoch seconds when the authorization state expires (the poll window).
+    expires_at: int

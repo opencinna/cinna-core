@@ -3,21 +3,28 @@ OAuth Credentials Service - Business logic for OAuth credential operations.
 
 This service handles the OAuth flow for Google service credentials (Gmail, Drive, Calendar, Meet).
 """
+import hashlib
 import secrets
 import uuid
 import json
 import logging
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlencode
 
 import httpx
+from sqlalchemy import delete
 from sqlmodel import Session
 from fastapi import HTTPException
 
 from app.core.config import settings
 from app.core import security
-from app.models import Credential
+from app.models import Credential, User
+from app.models.credentials.credential_oauth_state import (
+    CredentialOAuthOrigin,
+    CredentialOAuthState,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +51,42 @@ class OAuthRefreshError(Exception):
         self.kind = kind
         self.message = message
 
-# In-memory state storage for OAuth flows (use Redis in production)
-_oauth_states: dict[str, dict[str, Any]] = {}
+# Lifetime of a pending authorization state (``credential_oauth_state`` row).
+OAUTH_STATE_TTL_SECONDS = 600
+# Prefix of a state started from Cinna Desktop. The SPA callback page reads it
+# to pick its terminal view even when Google redirects back with ``?error=``.
+DESKTOP_STATE_PREFIX = "desktop."
+
+
+def _hash_state(state: str) -> str:
+    return hashlib.sha256(state.encode()).hexdigest()
+
+
+@dataclass(frozen=True)
+class ConsumedOAuthState:
+    credential_id: uuid.UUID
+    user_id: uuid.UUID
+    origin: CredentialOAuthOrigin
+
+
+@dataclass(frozen=True)
+class OAuthCallbackResult:
+    credential: Credential
+    origin: CredentialOAuthOrigin
+    owner_email_masked: str | None
+
+
+def mask_email(email: str | None) -> str | None:
+    """``evgeny@example.com`` -> ``ev***@example.com``; the domain stays whole.
+
+    Enough for the owner to recognise their own account, not enough to hand a
+    stranger who completes the link a usable address.
+    """
+    if not email or "@" not in email:
+        return None
+    local, domain = email.rsplit("@", 1)
+    keep = 1 if len(local) <= 3 else 2
+    return f"{local[:keep]}***@{domain}"
 
 # Scope mapping for each OAuth credential type
 OAUTH_SCOPES = {
@@ -139,20 +180,25 @@ class OAuthCredentialsService:
     def initiate_oauth_flow(
         session: Session,
         credential_id: uuid.UUID,
-        user_id: uuid.UUID
-    ) -> dict[str, str]:
+        user_id: uuid.UUID,
+        origin: CredentialOAuthOrigin = "web",
+    ) -> dict[str, Any]:
         """
         Initiate OAuth flow for a credential.
 
-        Generates a state token with credential context and builds the Google authorization URL.
+        Stores a single-use state (hashed) in ``credential_oauth_state`` and
+        builds the Google authorization URL. Desktop-started states carry the
+        ``DESKTOP_STATE_PREFIX``.
 
         Args:
             session: Database session
             credential_id: Credential ID to authorize
             user_id: User ID initiating the flow (for ownership verification)
+            origin: "web" (credential settings page) or "desktop"
 
         Returns:
-            Dictionary with "authorization_url" and "state" keys
+            ``{"authorization_url", "state", "expires_at"}`` (``expires_at`` =
+            state expiry, epoch seconds)
 
         Raises:
             HTTPException: If Google OAuth is not configured
@@ -179,21 +225,32 @@ class OAuthCredentialsService:
         except ValueError as e:
             raise ValueError(f"Invalid credential type for OAuth: {str(e)}")
 
-        # Generate CSRF state token with credential context
+        # Generate CSRF state token; only its hash is stored.
         state = secrets.token_urlsafe(32)
-        _oauth_states[state] = {
-            "credential_id": str(credential_id),
-            "user_id": str(user_id),
-            "expires": datetime.now(timezone.utc).timestamp() + 600  # 10 minutes
-        }
+        if origin == "desktop":
+            state = DESKTOP_STATE_PREFIX + state
+        now = datetime.now(timezone.utc)
+        expires_at = now + timedelta(seconds=OAUTH_STATE_TTL_SECONDS)
 
-        # Clean up expired states
-        now = datetime.now(timezone.utc).timestamp()
-        expired_states = [k for k, v in _oauth_states.items() if v["expires"] < now]
-        for k in expired_states:
-            del _oauth_states[k]
+        # Opportunistic purge of abandoned flows, then record this one.
+        session.execute(
+            delete(CredentialOAuthState).where(CredentialOAuthState.expires_at < now)
+        )
+        session.add(
+            CredentialOAuthState(
+                state_hash=_hash_state(state),
+                credential_id=credential_id,
+                user_id=user_id,
+                origin=origin,
+                expires_at=expires_at,
+            )
+        )
+        session.commit()
 
-        logger.info(f"Initiating OAuth flow for credential {credential_id} (type: {credential.type.value})")
+        logger.info(
+            "Initiating OAuth flow for credential %s (type: %s, origin: %s)",
+            credential_id, credential.type.value, origin,
+        )
 
         # Build authorization URL
         # Use separate redirect URI for credential OAuth to differentiate from user OAuth
@@ -210,28 +267,66 @@ class OAuthCredentialsService:
 
         return {
             "authorization_url": auth_url,
-            "state": state
+            "state": state,
+            "expires_at": int(expires_at.timestamp()),
         }
+
+    @staticmethod
+    def consume_state(session: Session, state: str) -> ConsumedOAuthState | None:
+        """Delete the state's row in one statement and commit; return its context.
+
+        Single-use: the row is gone (committed) before the caller talks to
+        Google, so a failed exchange cannot be replayed. None when the state is
+        unknown, already used, or expired.
+        """
+        row = session.execute(
+            delete(CredentialOAuthState)
+            .where(CredentialOAuthState.state_hash == _hash_state(state))
+            .returning(
+                CredentialOAuthState.credential_id,
+                CredentialOAuthState.user_id,
+                CredentialOAuthState.origin,
+                CredentialOAuthState.expires_at,
+            )
+            .execution_options(synchronize_session=False)
+        ).first()
+        session.commit()
+        if row is None:
+            return None
+        credential_id, user_id, origin, expires_at = row
+        if expires_at <= datetime.now(timezone.utc):
+            return None
+        return ConsumedOAuthState(
+            credential_id=credential_id,
+            user_id=user_id,
+            origin="desktop" if origin == "desktop" else "web",
+        )
 
     @staticmethod
     async def handle_oauth_callback(
         session: Session,
         code: str,
-        state: str
-    ) -> Credential:
+        state: str,
+        signed_in_user_id: uuid.UUID | None = None,
+    ) -> OAuthCallbackResult:
         """
         Handle OAuth callback from Google.
 
-        Validates state token, exchanges authorization code for tokens,
-        and stores them in the credential's encrypted_data.
+        Consumes the state (CSRF protection, single-use), exchanges the
+        authorization code for tokens, and stores them in the credential's
+        encrypted_data.
 
         Args:
             session: Database session
             code: Authorization code from Google
             state: State token from authorization request
+            signed_in_user_id: The Cinna account the browser is signed in as,
+                or None for a sessionless browser (the usual desktop case).
+                When set it must be the state's user, else 403. The state is
+                consumed either way, so a phishing link dies on first use.
 
         Returns:
-            Updated Credential object
+            The updated credential and the origin the flow was started from
 
         Raises:
             HTTPException: If OAuth is not configured, state is invalid, or token exchange fails
@@ -242,50 +337,37 @@ class OAuthCredentialsService:
                 detail="Google OAuth is not configured"
             )
 
-        # Validate state token (CSRF protection)
-        if state not in _oauth_states:
+        consumed = OAuthCredentialsService.consume_state(session, state)
+        if consumed is None:
             raise HTTPException(status_code=400, detail="Invalid or expired state parameter")
-
-        state_data = _oauth_states[state]
-        credential_id = uuid.UUID(state_data["credential_id"])
-        user_id = uuid.UUID(state_data["user_id"])
-
-        # Clean up used state
-        del _oauth_states[state]
+        if signed_in_user_id is not None and signed_in_user_id != consumed.user_id:
+            # Generic on purpose: never say whose link it is.
+            logger.warning(
+                "OAuth callback rejected: signed-in account does not own the state"
+            )
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "This authorization link was started from a different Cinna "
+                    "account than the one signed in here. The link is no longer "
+                    "valid; start the connection again from your own account."
+                ),
+            )
+        credential_id = consumed.credential_id
 
         # Get credential and verify ownership
         credential = session.get(Credential, credential_id)
         if not credential:
             raise HTTPException(status_code=404, detail="Credential not found")
-        if credential.owner_id != user_id:
+        if credential.owner_id != consumed.user_id:
             raise HTTPException(status_code=403, detail="Not authorized to access this credential")
 
         logger.info(f"Processing OAuth callback for credential {credential_id}")
 
         try:
-            # Exchange authorization code for tokens
-            logger.info(f"Exchanging code for tokens with redirect_uri: {settings.GOOGLE_CREDENTIALS_REDIRECT_URI}")
-            async with httpx.AsyncClient() as client:
-                token_response = await client.post(
-                    "https://oauth2.googleapis.com/token",
-                    data={
-                        "code": code,
-                        "client_id": settings.GOOGLE_CLIENT_ID,
-                        "client_secret": settings.GOOGLE_CLIENT_SECRET,
-                        "redirect_uri": settings.GOOGLE_CREDENTIALS_REDIRECT_URI,
-                        "grant_type": "authorization_code",
-                    },
-                )
-
-            if token_response.status_code != 200:
-                logger.error(f"Token exchange failed: {token_response.text}")
-                raise HTTPException(
-                    status_code=400,
-                    detail="Failed to exchange authorization code"
-                )
+            token_data = await OAuthCredentialsService._exchange_authorization_code(code)
 
             # Extract token information
-            token_data = token_response.json()
             access_token = token_data.get("access_token")
             refresh_token = token_data.get("refresh_token")
             expires_in = token_data.get("expires_in", 3600)  # Default 1 hour
@@ -357,7 +439,12 @@ class OAuthCredentialsService:
 
             logger.info(f"Successfully stored OAuth tokens for credential {credential_id}")
 
-            return credential
+            owner = session.get(User, credential.owner_id)
+            return OAuthCallbackResult(
+                credential=credential,
+                origin=consumed.origin,
+                owner_email_masked=mask_email(owner.email if owner else None),
+            )
 
         except HTTPException:
             raise
@@ -430,6 +517,41 @@ class OAuthCredentialsService:
                 "expires_at": None,
                 "granted_at": None
             }
+
+    @staticmethod
+    async def _exchange_authorization_code(code: str) -> dict[str, Any]:
+        """
+        Exchange an authorization code for Google tokens (the callback's single
+        token-endpoint call, and its test seam).
+
+        Returns:
+            The decoded Google token response.
+
+        Raises:
+            HTTPException: 400 when Google does not answer 200.
+        """
+        logger.info(
+            "Exchanging code for tokens with redirect_uri: %s",
+            settings.GOOGLE_CREDENTIALS_REDIRECT_URI,
+        )
+        async with httpx.AsyncClient() as client:
+            token_response = await client.post(
+                GOOGLE_TOKEN_URL,
+                data={
+                    "code": code,
+                    "client_id": settings.GOOGLE_CLIENT_ID,
+                    "client_secret": settings.GOOGLE_CLIENT_SECRET,
+                    "redirect_uri": settings.GOOGLE_CREDENTIALS_REDIRECT_URI,
+                    "grant_type": "authorization_code",
+                },
+            )
+        if token_response.status_code != 200:
+            logger.error(f"Token exchange failed: {token_response.text}")
+            raise HTTPException(
+                status_code=400,
+                detail="Failed to exchange authorization code"
+            )
+        return token_response.json()
 
     @staticmethod
     async def _exchange_refresh_token(refresh_token: str) -> dict[str, Any]:

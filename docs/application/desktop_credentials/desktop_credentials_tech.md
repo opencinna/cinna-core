@@ -8,11 +8,15 @@
   headers, `DesktopCredentialError` → `HTTPException` mapping. No business logic.
 - `backend/app/services/credentials/desktop_credential_service.py` — `DesktopCredentialService`,
   the whole authorization rule, list/materialize, rate limiting, audit.
+- `backend/app/services/credentials/desktop_oauth_service.py` — `DesktopOAuthService`: Google OAuth
+  create / reconnect / access-token for Desktop (see Google OAuth section).
+- `backend/app/models/credentials/credential_oauth_state.py` — `CredentialOAuthState` table (pending
+  authorization states).
 - `backend/app/models/credentials/desktop_credential.py` — request/response schemas
   (`DesktopCredentialList`, `DesktopCredentialListItem`, `DesktopCredentialMaterializeRequest`,
   `DesktopCredentialMaterializeResponse`, `DesktopMaterializedCredential`,
-  `DesktopCredentialRefusal`, `DesktopCredentialRefusalReason`). No tables — response/request
-  shapes only.
+  `DesktopCredentialRefusal`, `DesktopCredentialRefusalReason`, `DesktopOAuthCredentialCreate`,
+  `DesktopOAuthAuthorizeResponse`, `DesktopOAuthStatus`). No tables — response/request shapes only.
 - `backend/app/services/credentials/credentials_service.py` — `CredentialsService.credential_to_env_dict`
   (the single pre-whitelist entry shape, shared with cloud sync's
   `get_agent_credentials_with_data`), `prepare_credentials_for_environment` (accepts
@@ -21,8 +25,8 @@
   no `Agent` row involved), `classify_credential_category`, `classify_owned_credentials`.
 - `backend/app/models/credentials/credential.py` — `Credential.allow_local_use`,
   `Credential.updated_at` (the revision source).
-- `backend/app/models/events/security_event.py` — `CREDENTIAL_MATERIALIZED_LOCAL` event-type
-  constant.
+- `backend/app/models/events/security_event.py` — `CREDENTIAL_MATERIALIZED_LOCAL`,
+  `CREDENTIAL_OAUTH_AUTHORIZE_LOCAL`, `CREDENTIAL_TOKEN_ISSUED_LOCAL` event-type constants.
 - `backend/app/services/common/rate_limiter.py` — `RateLimiter`, the per-process sliding window
   used for the 60/minute cap.
 - `backend/app/services/desktop_auth/desktop_auth_service.py` —
@@ -37,6 +41,9 @@
   boolean>` mirror of the backend's `LOCALLY_COMPATIBLE_TYPES`; `isLocallyDeliverableCredentialType`.
   The `Record` shape means a new backend `CredentialType` fails the frontend typecheck here until
   someone decides whether it is locally deliverable.
+- `frontend/src/routes/credentials/oauth/callback.tsx` — callback page; picks the desktop vs web
+  terminal view from the response `origin` or the `desktop.` state prefix (so Google `?error=` still
+  works), shows `owner_email_masked`.
 - `frontend/src/components/Credentials/CredentialSharing.tsx` — the "Allow use on recipients'
   computers" `Switch`, gated on `allowSharing && isLocallyDeliverableCredentialType(credential.type)`;
   its mutation calls `CredentialsService.updateCredential({ requestBody: { allow_local_use } })`.
@@ -48,7 +55,7 @@
 
 - `docs/local_agent_kit/templates/agent/scripts/cinna_credentials.py` (mirrored to
   `backend/app/env-templates/platform-knowledge-env/app/workspace/knowledge/local-kit/templates/agent/scripts/cinna_credentials.py`
-  by `sync_platform_knowledge.py`) — `HELPER_VERSION = "1.4.0"`. Reads, in order:
+  by `sync_platform_knowledge.py`) — `HELPER_VERSION = "1.14.0"` (kit contract 1.14.0). Reads, in order:
   `CINNA_CREDENTIALS_PATH` (if set), then `credentials/credentials.json` (array or `{"credentials":
   [...]}` envelope), then the legacy root object, then environment variables, then
   `credentials/.env`. `by_slot` / `require_slot` match on `service_uri` only, never on name or
@@ -66,6 +73,11 @@
   insert/update/delete changes the revision. Downgrade drops both triggers/functions and both
   columns.
 
+### Migrations (OAuth state)
+
+- `backend/app/alembic/versions/90a3fecdf28b_credential_oauth_state.py` (after `31f1c9c4a952`) —
+  creates `credential_oauth_state`.
+
 ### Tests
 
 - `backend/tests/api/external/test_desktop_credentials.py` — owner/recipient/stranger/superuser
@@ -79,6 +91,9 @@
   shares neither listed nor delivered.
 - `backend/tests/unit/test_local_kit_credentials_reader.py` — `cinna_credentials.py`'s precedence
   order and `unavailable_reason` handling.
+- `backend/tests/api/external/test_desktop_oauth_credentials.py` — create/reuse, reconnect, access
+  token, refusals, audit; `backend/tests/api/credentials/test_oauth_state_db.py` — hashed single-use
+  state and callback binding; `backend/tests/utils/oauth_credential.py` — helpers.
 - `backend/tests/utils/desktop_credentials.py` — shared test helpers for this suite.
 
 ## Database Schema
@@ -87,7 +102,11 @@
   `allow_local_use: bool` (default `False`, owner-only to set) and `updated_at: datetime`
   (server-maintained, never written by application code — it exists purely as the revision
   source).
-- No new tables. `credential_shares` is unchanged in shape; its insert/update/delete now also
+- New table `credential_oauth_state` (mig `90a3fecdf28b`): `id`, `state_hash` (unique, sha256 hex of
+  the state; the raw state is never stored), `credential_id` (FK, CASCADE), `user_id` (FK, CASCADE),
+  `origin` (`web` | `desktop`, plain string), `created_at`, `expires_at` (indexed). Never exposed by
+  the API. Replaces the former in-process `_oauth_states` dict.
+- `credential_shares` is unchanged in shape; its insert/update/delete now also
   touches its parent credential's `updated_at` via trigger.
 
 ## API Endpoints
@@ -104,7 +123,43 @@
   Same optional `?include=agent_api_keys`. Response: `Cache-Control: no-store`;
   `DesktopCredentialMaterializeResponse`.
 
+### Google OAuth endpoints (`external_credentials.py`, tag `external`, all `CurrentUser` + `CurrentClientClaims`)
+
+All use `_desktop_client_id` (403 unless `kind == "desktop"`; `ensure_not_cli_exchanged_session`) and
+`_http_error` (coded `DesktopCredentialError` -> `detail={"code","message"}`).
+
+- `POST /api/v1/external/credentials/oauth` (201) — body `DesktopOAuthCredentialCreate {type, name?}`
+  -> `DesktopOAuthAuthorizeResponse {credential_id, authorization_url, expires_at}`. 422
+  `unsupported_type`, 503 `oauth_not_configured`.
+- `POST /api/v1/external/credentials/{credential_id}/oauth/authorize` — owner only; 404
+  `credential_not_found`, 422, 503.
+- `POST /api/v1/external/credentials/{credential_id}/access-token` — body
+  `AgentCredentialAccessTokenRequest` -> `AgentCredentialAccessTokenResponse`, `Cache-Control:
+  no-store`. 404 `credential_not_found` (any `local_access_refusal`), 422 `not_refreshable`, 409
+  `reauthorization_required`, 502 `provider_error` / `refresh_in_progress` (`Retry-After`), 503.
+- `POST /api/v1/credentials/oauth/callback` (public, see [OAuth Credentials Tech](../../agents/agent_credentials/oauth_credentials_tech.md)).
+
 ## Services & Key Methods
+
+`DesktopOAuthService` (`desktop_oauth_service.py`): `create_oauth_credential`,
+`_find_pending_credential` (same owner/type, `user_workspace_id IS NULL`, `allow_local_use`, not
+placeholder, decrypted `oauth_status == pending_authorization`; ordered `updated_at desc, id desc`;
+no lock), `reauthorize_oauth_credential`, `_authorize` (calls `OAuthCredentialsService.initiate_oauth_flow(...,
+origin="desktop")`, logs `CREDENTIAL_OAUTH_AUTHORIZE_LOCAL`), `access_token` (rule =
+`local_access_refusal`, token via `OAuthRefreshService.issue_access_token`, audits
+`CREDENTIAL_TOKEN_ISSUED_LOCAL` only when `resp.refreshed`, plus the owner for a share). Limits:
+`AUTHORIZE_LIMIT_PER_MINUTE = 10` (scope `oauth`), `TOKEN_LIMIT_PER_MINUTE = 120` (scope `token`);
+`DesktopCredentialService._check_rate_limit` gained `scope` / `limit_per_minute`. Default names via
+`default_credential_name` ("Gmail (read-only)", ...).
+
+`DesktopCredentialService` additions: `_ensure_oauth_token` (materialize, Google types: status
+`pending_authorization` / `reauth_required` short-circuit, else `issue_access_token` with
+`MATERIALIZE_OAUTH_MIN_TTL_SECONDS = 600`; maps `reauthorization_required` -> same,
+`not_refreshable` -> `pending_authorization`, anything else -> `token_unavailable`; re-reads the row
+after a refresh); list populates `oauth_status` / `granted_user_email`; `DesktopCredentialError` gained
+an optional `code`. Refusal reasons added: `pending_authorization`, `reauthorization_required`,
+`token_unavailable`.
+
 
 `DesktopCredentialService` (`desktop_credential_service.py`):
 
@@ -151,7 +206,7 @@
   differs from the requester (a shared credential), logs a second event on the owner naming the
   recipient's id and email. Neither event carries a value.
 - `LOCALLY_COMPATIBLE_TYPES: frozenset[CredentialType]` — `EMAIL_IMAP`, `EMAIL_SMTP`, `ODOO`,
-  `API_TOKEN`, `GOOGLE_SERVICE_ACCOUNT` (`AGENT_API` is conditional, see above).
+  `API_TOKEN`, `GOOGLE_SERVICE_ACCOUNT`, and the eight Google OAuth types (`AGENT_API` is conditional, see above).
 - `MATERIALIZE_LIMIT_PER_MINUTE = 60`.
 
 `CredentialsService` additions this feature relies on (`credentials_service.py`):
@@ -188,8 +243,8 @@
 - `frontend/src/components/Credentials/CredentialSharing.tsx` — sharing card; renders the
   local-use `Switch` only when `allowSharing && isLocallyDeliverableCredentialType(credential.type)`;
   copy next to it states that disabling cannot recall already-delivered values.
-- `frontend/src/utils/credentialLocalUse.ts` — the frontend's compatibility table, kept in sync by
-  hand with `LOCALLY_COMPATIBLE_TYPES`; its `Record<CredentialType, boolean>` type fails to compile
+- `frontend/src/utils/credentialLocalUse.ts` — the frontend's compatibility table (the eight Google
+  OAuth types are `true`), kept in sync by hand with `LOCALLY_COMPATIBLE_TYPES`; its `Record<CredentialType, boolean>` type fails to compile
   if a new `CredentialType` is added without an explicit `true`/`false` here.
 
 ## Configuration
@@ -213,6 +268,8 @@ config-driven.
   are typed fields that are always `None` — kept in the schema only so an older Desktop client that
   still parses them does not break; neither `ssh_key` nor `mcp_provider` credentials, nor `agent_api` connections, are
   ever delivered (issued `agent_api` keys are, under the opt-in).
+- The refresh token and OAuth client secret never leave Core; audit events and errors never carry
+  a token. Access-token refusals are all the same 404.
 - Rate limiting is per-process (`RateLimiter`), keyed on `f"{user_id}:{client_id}"`, not a
   distributed quota.
 - Auditing never records a credential value, only ids/emails, via `SecurityEventService.create_event`.

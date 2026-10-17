@@ -41,7 +41,7 @@ Routes marked *Not available via `cinna api`* are refused by the account CLI esc
 | Desktop Download | [desktop_download.md](./desktop_download.md) | 1 |
 | Environments | [environments.md](./environments.md) | 17 |
 | Events | [events.md](./events.md) | 3 |
-| External | [external.md](./external.md) | 10 |
+| External | [external.md](./external.md) | 13 |
 | External A2A | [external_a2a.md](./external_a2a.md) | 6 |
 | Files | [files.md](./files.md) | 3 |
 | Guest Share | [guest_share.md](./guest_share.md) | 3 |

@@ -16,6 +16,32 @@ folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
 
+## 1.14.0 — Google OAuth credentials on desktop
+
+Additive. Every 1.x folder stays valid and needs no change, and a tool built
+against an earlier 1.x keeps operating a 1.14.0 folder, because the majors match.
+
+The eight Google OAuth types (`gmail_oauth`, `gdrive_oauth`, `gcalendar_oauth`,
+`gmeet_oauth` and their `_readonly` variants) were cloud-only. A slot of one of
+those types can now be filled in Cinna Desktop when the credential is created
+there (New in Attach credential) or created on the platform and attached.
+
+### Changed
+
+- **OAuth slots are satisfiable on a desktop host.** The platform keeps the
+  refresh token; the host receives `access_token`, `token_type`, `expires_at`,
+  `scope` and the granted Google account (`granted_user_email`, `granted_user_name`). Read the token with
+  `credentials.access_token("<credential id>")`, which refreshes it, on both
+  hosts.
+- **Three new refusal reasons** an attached entry's `unavailable_reason` may
+  carry: `pending_authorization` (Google consent not finished),
+  `reauthorization_required` (the user must reconnect the account) and
+  `token_unavailable` (Google did not issue a token just now; try again).
+  `scripts/cinna_credentials.py` (helper 1.14.0) names each in its error.
+
+No folder change is needed. `google_service_account` remains the option for an
+agent whose user has no platform account.
+
 ## Artifact links, not code
 
 Documentation update, with no schema-shape or contract-version change.

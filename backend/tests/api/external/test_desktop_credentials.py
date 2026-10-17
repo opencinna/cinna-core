@@ -378,47 +378,22 @@ def test_materialize_token_gating(
 
 # ── Scenario 4: only locally compatible types reach a Desktop ───────────────
 
-OAUTH_TYPES = (
-    "gmail_oauth",
-    "gmail_oauth_readonly",
-    "gdrive_oauth",
-    "gdrive_oauth_readonly",
-    "gcalendar_oauth",
-    "gcalendar_oauth_readonly",
-    "gmeet_oauth",
-    "gmeet_oauth_readonly",
-)
-
-
 def test_incompatible_types_are_neither_listed_nor_delivered(client: TestClient) -> None:
     """
-    1. Owner has one credential of every locally incompatible type (all eight
-       OAuth types, ssh_key, mcp_provider) plus one api_token
+    1. Owner has one credential of every locally incompatible type (ssh_key,
+       mcp_provider) plus one api_token
     2. The Desktop list contains only the api_token
     3. Materialize delivers the api_token and refuses every other item
-       unsupported_type; no token or key material leaves Core
-    4. A recipient holding a direct share + local-use consent of an OAuth
-       credential gets the same: not listed, refused unsupported_type
+       unsupported_type; no key material leaves Core
+
+    Google OAuth types are locally compatible since the desktop OAuth feature;
+    they are covered by test_desktop_oauth_credentials.py.
     """
     owner, oh = create_random_user_with_headers(client)
-    recipient, rh = create_random_user_with_headers(client)
     od, _ = desktop_session(client, oh)
-    rd, _ = desktop_session(client, rh)
-    expires = int(time.time()) + 3600
 
     # ── Phase 1: one credential per incompatible type + one compatible ────
-    incompatible = [
-        create_credential_via_api(
-            client,
-            oh,
-            t,
-            _oauth_data(f"access-{t}", f"refresh-{t}", expires),
-            allow_sharing=True,
-            allow_local_use=True,
-        )["id"]
-        for t in OAUTH_TYPES
-    ]
-    incompatible.append(create_ssh_key_credential_generate(client, oh, key_type="ed25519")["id"])
+    incompatible = [create_ssh_key_credential_generate(client, oh, key_type="ed25519")["id"]]
     incompatible.append(
         create_credential_via_api(
             client,
@@ -442,22 +417,9 @@ def test_incompatible_types_are_neither_listed_nor_delivered(client: TestClient)
     body = r.json()
     assert list(_items(body)) == [gid]
     assert _refused(body) == dict.fromkeys(incompatible, "unsupported_type")
-    assert "access-" not in r.text and "refresh-" not in r.text
     assert "PRIVATE KEY" not in r.text
     assert body["owner_identity"] is None
     assert all(i["ssh_key"] is None for i in body["items"])
-
-    # ── Phase 4: a consenting direct share of OAuth changes nothing ───────
-    oauth_id = incompatible[0]
-    share_credential_via_api(client, oh, oauth_id, recipient["email"])
-    r = list_desktop_credentials(client, rd)
-    assert r.status_code == 200, r.text
-    assert r.json()["items"] == []
-    r = _post_materialize(client, rd, [oauth_id])
-    assert r.status_code == 200, r.text
-    assert _refused(r.json()) == {oauth_id: "unsupported_type"}
-    assert r.json()["items"] == []
-    assert "access-" not in r.text
 
 
 def test_service_account_side_file_and_request_size_bound(client: TestClient) -> None:
@@ -701,6 +663,9 @@ def test_openapi_names_desktop_credential_response_models(client: TestClient) ->
         "no_access",
         "not_local_category",
         "local_use_not_allowed",
+        "pending_authorization",
+        "reauthorization_required",
+        "token_unavailable",
         "unsupported_type",
         "key_revoked",
         "key_expired",

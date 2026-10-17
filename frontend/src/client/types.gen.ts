@@ -4400,6 +4400,8 @@ export type DesktopCredentialListItem = {
     user_workspace_id?: (string | null);
     key_status?: (string | null);
     agent_api?: (DesktopAgentApiKeyFacts | null);
+    oauth_status?: ('pending_authorization' | 'ready' | 'reauth_required' | null);
+    granted_user_email?: (string | null);
 };
 
 export type relation = 'owned' | 'shared';
@@ -4422,11 +4424,11 @@ export type DesktopCredentialMaterializeResponse = {
 
 export type DesktopCredentialRefusal = {
     id: string;
-    reason: 'not_found' | 'no_access' | 'not_local_category' | 'local_use_not_allowed' | 'unsupported_type' | 'key_revoked' | 'key_expired' | 'key_paused';
+    reason: 'not_found' | 'no_access' | 'not_local_category' | 'local_use_not_allowed' | 'unsupported_type' | 'pending_authorization' | 'reauthorization_required' | 'token_unavailable' | 'key_revoked' | 'key_expired' | 'key_paused';
     key_status?: (string | null);
 };
 
-export type reason2 = 'not_found' | 'no_access' | 'not_local_category' | 'local_use_not_allowed' | 'unsupported_type' | 'key_revoked' | 'key_expired' | 'key_paused';
+export type reason2 = 'not_found' | 'no_access' | 'not_local_category' | 'local_use_not_allowed' | 'unsupported_type' | 'pending_authorization' | 'reauthorization_required' | 'token_unavailable' | 'key_revoked' | 'key_expired' | 'key_paused';
 
 export type DesktopMaterializedCredential = {
     id: string;
@@ -4440,6 +4442,15 @@ export type DesktopMaterializedCredential = {
     ssh_key?: null;
 };
 
+/**
+ * Where to send the user's browser to authorize a credential.
+ */
+export type DesktopOAuthAuthorizeResponse = {
+    credential_id: string;
+    authorization_url: string;
+    expires_at: number;
+};
+
 export type DesktopOAuthClientPublic = {
     client_id: string;
     device_name: string;
@@ -4449,6 +4460,14 @@ export type DesktopOAuthClientPublic = {
     last_used_at?: (string | null);
     created_at: string;
     is_revoked: boolean;
+};
+
+/**
+ * Create a Google OAuth credential from a Desktop client (then authorize it).
+ */
+export type DesktopOAuthCredentialCreate = {
+    type: CredentialType;
+    name?: (string | null);
 };
 
 export type DeviceInput = {
@@ -6483,7 +6502,11 @@ export type OAuthCallbackRequest = {
 export type OAuthCallbackResponse = {
     credential_id: string;
     message: string;
+    origin?: 'web' | 'desktop';
+    owner_email_masked?: (string | null);
 };
+
+export type origin = 'web' | 'desktop';
 
 /**
  * Availability of the OAuth providers on this instance.
@@ -11608,6 +11631,25 @@ export type ExternalMaterializeCredentialsData = {
 };
 
 export type ExternalMaterializeCredentialsResponse = (DesktopCredentialMaterializeResponse);
+
+export type ExternalCreateOauthCredentialData = {
+    requestBody: DesktopOAuthCredentialCreate;
+};
+
+export type ExternalCreateOauthCredentialResponse = (DesktopOAuthAuthorizeResponse);
+
+export type ExternalReauthorizeOauthCredentialData = {
+    credentialId: string;
+};
+
+export type ExternalReauthorizeOauthCredentialResponse = (DesktopOAuthAuthorizeResponse);
+
+export type ExternalDesktopCredentialAccessTokenData = {
+    credentialId: string;
+    requestBody: AgentCredentialAccessTokenRequest;
+};
+
+export type ExternalDesktopCredentialAccessTokenResponse = (AgentCredentialAccessTokenResponse);
 
 export type ExternalA2aGetExternalAgentCardData = {
     agentId: string;
