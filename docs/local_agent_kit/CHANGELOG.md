@@ -16,6 +16,15 @@ folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
 
+## Artifact links, not code
+
+Documentation update, with no schema-shape or contract-version change.
+`skills/cinna-artifacts/SKILL.md` and the `url` description in
+`protocols/artifacts.schema.json` now say to give a published artifact's page
+address as a plain Markdown link or a bare address on its own line, never in
+backticks or a code block. A host draws the artifact's card, and makes the
+address clickable, only for a link.
+
 ## 1.13.0 — the artifacts folder
 
 Additive. Every 1.x folder stays valid and needs no change, and a tool built

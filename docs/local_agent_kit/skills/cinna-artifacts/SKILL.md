@@ -13,7 +13,7 @@ metadata:
 
 An artifact is something you made that a person opens in Cinna: a Markdown report, a CSV, a PDF, a folder of files, or a small website such as a dashboard. You publish it from your workspace with `artifacts_publish`; Cinna copies the files, and the person opens them on the artifact's page. Your copy in the workspace is not touched and later edits to it do not show until you publish again.
 
-Everything you publish is **private to your owner**. You cannot share it, make it public or delete it; a person does that from the artifact's page. Do not tell anyone a link will work for them; give the `url` to your owner.
+Everything you publish is **private to your owner**. You cannot share it, make it public or delete it; a person does that from the artifact's page. Do not tell anyone a link will work for them; give the page address from the result to your owner as a plain link, never as code.
 
 ## Where to build it
 
@@ -35,7 +35,7 @@ Build anything meant to be published under **`artifacts/<name>/`**, one subfolde
 - **Limits:** 25 MB per file; 50 MB and 2,000 files per revision; your owner has a total storage quota across all artifacts. Over a limit the publish fails with the reason; nothing is published.
 - **Republishing updates what people see.** If your owner has shared the artifact, a new revision is what everyone with access, including people holding a link, sees next — unless that link was pinned to an earlier revision. Say what changed when you republish.
 
-Tell the person the title and the `url`, and what changed if it is a new revision.
+Tell the person the title, and what changed if it is a new revision. Give the page address from the result as a plain Markdown link such as [Q3 summary](https://…/artifact/…), or as the bare address on a line of its own. Never put it inside backticks or a code block: there it is plain text, it does not open with a click and Cinna does not show the artifact's card.
 
 ## Building a site that works
 

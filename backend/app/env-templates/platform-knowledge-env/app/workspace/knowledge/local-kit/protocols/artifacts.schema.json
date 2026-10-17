@@ -50,7 +50,7 @@
         "properties": {
           "artifact_id": { "type": "string", "description": "Pass it as `artifact_id` to republish." },
           "revision": { "type": "integer", "minimum": 1, "description": "This publish's revision number." },
-          "url": { "type": "string", "description": "The artifact's page in Cinna. Give it to the person; it needs their sign-in." },
+          "url": { "type": "string", "description": "The artifact's page in Cinna. Give it to the person as a plain Markdown link or bare URL, never in backticks or a code block; it needs their sign-in." },
           "kind": { "type": "string", "enum": ["site", "files"], "description": "`site` opens a page; `files` shows a file browser or a single-file viewer." },
           "file_count": { "type": "integer", "minimum": 0 },
           "size_bytes": { "type": "integer", "minimum": 0, "description": "Bytes in this revision." },
