@@ -468,7 +468,7 @@ display name is ever wanted it belongs at **create** time, never at sync time.
 
 Zero valid skill folders raises `MarketplaceCatalogError`.
 
-### The five `unsupported_reason` codes
+### The `unsupported_reason` codes (the five below plus `too_large`)
 
 Set only through `_mark_unsupported` (plus the two direct writes for
 `app_connector_only` and the skills parser's verdict), and persisted on both the
@@ -481,6 +481,7 @@ insert and update branches of `_upsert_plugins`.
 | `no_skill_md` | no valid `SKILL.md`, so there is nothing to install |
 | `unknown_source` | declares a source kind this platform cannot fetch from |
 | `unsafe_path` | points outside its repository (absolute or `..`), so it cannot be fetched safely |
+| `too_large` | a skills-format entry whose folder exceeds 16 MB uncompressed, so it cannot be snapshotted for download |
 
 One sentence each in `UNSUPPORTED_REASON_SENTENCES`, mirrored client-side in
 `frontend/src/utils/marketplace.ts` so the create dialog, the admin table, the

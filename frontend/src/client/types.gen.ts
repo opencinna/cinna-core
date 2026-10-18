@@ -5798,6 +5798,8 @@ export type LLMPluginMarketplacePluginPublic = {
     updated_at: string;
     supported?: boolean;
     unsupported_reason?: (string | null);
+    skill_archive_sha256?: (string | null);
+    skill_archive_size?: (number | null);
     skill_summary?: (PluginSkillSummary | null);
     marketplace_name?: (string | null);
     marketplace_owner?: (string | null);
@@ -12141,6 +12143,22 @@ export type LlmPluginsGetPluginData = {
 };
 
 export type LlmPluginsGetPluginResponse = (LLMPluginMarketplacePluginPublic);
+
+export type LlmPluginsGetPluginSkillArchiveData = {
+    pluginId: string;
+    sha256?: (string | null);
+};
+
+export type LlmPluginsGetPluginSkillArchiveResponse = (unknown);
+
+export type LlmPluginsGetPluginsByIdsData = {
+    /**
+     * Comma-separated plugin ids, at most 100
+     */
+    ids: string;
+};
+
+export type LlmPluginsGetPluginsByIdsResponse = (LLMPluginMarketplacePluginsPublic);
 
 export type LlmPluginsListAgentPluginsData = {
     agentId: string;

@@ -129,14 +129,33 @@ Technical details: [OAuth Credentials Tech](oauth_credentials_tech.md).
 
 ### CSRF Protection
 - State tokens generated for each OAuth flow initiation
-- Stored in-memory with 10-minute expiration
-- Include credential type and user ID context
+- Stored in the `credential_oauth_state` table with a 10-minute expiration, only as a SHA-256 hash
+- Row carries credential id, user id and origin (`web` | `desktop`)
+- Single-use: the callback deletes the row (committed) before talking to Google, so a failed
+  exchange cannot be replayed; expired rows are purged when a new flow starts
 - Callback validates state token ownership before saving tokens
 
 ### Authorization Rules
 - Only credential owner can initiate OAuth flow
 - Only credential owner can view OAuth metadata (email, scopes)
 - OAuth callback validates state token ownership before saving
+
+### Desktop-started authorization
+
+Cinna Desktop starts a flow through its own endpoints (see
+[Desktop Credential Delivery](../../application/desktop_credentials/desktop_credentials.md)); the
+state carries a `desktop.` prefix and `origin="desktop"`, and the user finishes consent in a browser
+that normally has no Cinna session, so the public callback cannot rely on a login.
+
+- **Session binding.** If the callback request carries a valid Cinna session, it must be the state's
+  user, else 403 with a generic message and the state is burned (a phishing link dies on first use).
+  A sessionless browser is accepted.
+- **Masked owner on the page.** The callback response includes `owner_email_masked`
+  (`ev***@example.com`) and the page shows it. This mitigates consent phishing: an attacker starts a
+  flow for their own credential and sends the link to a victim, hoping the victim's Google grant is
+  stored in the attacker's credential. The victim sees an account that is not theirs and can stop.
+- **503 vs 501.** Desktop endpoints answer 503 `oauth_not_configured` when Google OAuth is not
+  configured; the web `authorize` endpoint answers 501.
 
 ### Token Exposure Control
 - Refresh tokens never exposed in API responses or to frontend
@@ -155,3 +174,4 @@ Technical details: [OAuth Credentials Tech](oauth_credentials_tech.md).
 ## Changelog
 
 - OAuth refresh hardening: single locked refresh primitive, 30-minute threshold, refresh on sync / every stream path / background sweep, recorded failure state with re-authorization, container `credentials.access_token()` and endpoint.
+- Authorization state moved from an in-process dict to the hashed, single-use `credential_oauth_state` table (works across workers and restarts); callback session binding and masked owner email; Desktop-started flows.

@@ -228,8 +228,15 @@ class LLMPluginMarketplacePlugin(LLMPluginMarketplacePluginBase, table=True):
     supported: bool = Field(default=True, nullable=False)
     # Stable code, not a sentence: the copy belongs to the client. One of
     # ``npm_source`` | ``app_connector_only`` | ``no_skill_md`` |
-    # ``unknown_source`` | ``unsafe_path``.
+    # ``unknown_source`` | ``unsafe_path`` | ``too_large``.
     unsupported_reason: Optional[str] = Field(default=None, max_length=64)
+    # ``skills`` format only: the sha256 and compressed size of the entry's
+    # content-addressed archive snapshot from the latest sync, kept under
+    # ``SKILL_STORAGE_DIR/marketplace-skills/<marketplace>/<plugin>/``. NULL for
+    # other formats, unsupported entries, and rows not re-synced since the
+    # columns were added.
+    skill_archive_sha256: Optional[str] = Field(default=None, max_length=64)
+    skill_archive_size: Optional[int] = Field(default=None)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -290,9 +297,14 @@ class LLMPluginMarketplacePluginPublic(SQLModel):
     #: unsupported entry is listed (with its reason) and refused at install.
     supported: bool = True
     #: Stable code — ``npm_source`` | ``app_connector_only`` | ``no_skill_md``
-    #: | ``unknown_source`` | ``unsafe_path``. The sentence belongs to the
-    #: client.
+    #: | ``unknown_source`` | ``unsafe_path`` | ``too_large``. The sentence
+    #: belongs to the client.
     unsupported_reason: Optional[str] = None
+    #: ``skills`` format only: digest and compressed byte size of the current
+    #: archive snapshot, served by ``GET /plugins/{id}/skill-archive``. NULL
+    #: when the entry has no installable snapshot.
+    skill_archive_sha256: Optional[str] = None
+    skill_archive_size: Optional[int] = None
     #: Present only for a one-skill entry (``skills`` format).
     skill_summary: Optional[PluginSkillSummary] = None
     # Additional fields for discovery

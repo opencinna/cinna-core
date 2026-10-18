@@ -354,22 +354,27 @@ def dropped_background_tasks(targets=None):
 
 @contextmanager
 def patched_storage_dirs(tmp_path_factory):
-    """Redirect bundle + app-data storage roots to a tmp tree.
+    """Redirect bundle, app-data and skill storage roots to a tmp tree.
 
     Without this, ``PublishService.publish`` and
     ``AppDataService.get_or_create_volume`` create real directories under
-    ``settings.BUNDLE_STORAGE_DIR`` and ``settings.APP_DATA_STORAGE_DIR``.
-    The latter is bind-mounted from the host (``backend/data/agents/app-data/``),
-    so every test run leaves a per-(user, bundle) folder there.
+    ``settings.BUNDLE_STORAGE_DIR`` and ``settings.APP_DATA_STORAGE_DIR``, and
+    every skills-marketplace sync writes archive snapshots under
+    ``settings.SKILL_STORAGE_DIR``. Those roots are bind-mounted from the host
+    (``backend/data/...``), so every test run would leave folders there. A
+    function-scoped ``patched_skill_storage`` nests inside this and wins.
     """
     tmp = tmp_path_factory.mktemp("storage")
     app_data = tmp / "app-data"
     bundles = tmp / "bundles"
+    skills = tmp / "skills"
     app_data.mkdir()
     bundles.mkdir()
+    skills.mkdir()
     with (
         patch.object(settings, "APP_DATA_STORAGE_DIR", str(app_data)),
         patch.object(settings, "BUNDLE_STORAGE_DIR", str(bundles)),
+        patch.object(settings, "SKILL_STORAGE_DIR", str(skills)),
         patch.object(settings, "HOST_APP_DATA_DIR", None),
     ):
         yield

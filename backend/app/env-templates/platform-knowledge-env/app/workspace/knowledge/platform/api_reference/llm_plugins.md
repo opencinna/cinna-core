@@ -102,6 +102,27 @@ Auto-generated from OpenAPI spec. Tag: `llm-plugins`
 
 ---
 
+## GET `/api/v1/llm-plugins/plugins/{plugin_id}/skill-archive`
+**Get Plugin Skill Archive**
+
+**Path parameters:**
+- `plugin_id`: uuid
+
+**Query parameters:**
+- `sha256`: string | null
+
+---
+
+## GET `/api/v1/llm-plugins/plugins`
+**Get Plugins By Ids**
+
+**Query parameters:**
+- `ids`: string (required)
+
+**Response:** `LLMPluginMarketplacePluginsPublic`
+
+---
+
 ## GET `/api/v1/llm-plugins/agents/{agent_id}/plugins`
 **List Agent Plugins**
 

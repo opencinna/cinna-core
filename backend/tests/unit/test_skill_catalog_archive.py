@@ -243,3 +243,73 @@ def test_download_cap_exceeds_the_publish_cap() -> None:
         AgentEnvService._CATALOG_EXTRACT_MAX_BYTES
         >= AgentEnvService._CATALOG_ARCHIVE_MAX_BYTES
     )
+
+
+# Recorded with the pre-refactor ``_build_archive_bytes`` (before the builder
+# moved to ``services/skills/skill_archive.py``). Every published revision's
+# stored ``archive_sha256`` rests on these bytes never changing, so a new value
+# here is a breaking change for every existing catalog install, not a fixture
+# update.
+GOLDEN_ARCHIVE_SHA256 = (
+    "c9f4b5317ffc80c6db3cf1f95ed58e8905c1e10d84601ee2f94e524be47f20c4"
+)
+
+
+def test_catalog_archive_bytes_match_the_pinned_golden_digest(
+    tmp_path: Path,
+) -> None:
+    """A fixed tree always gives the same catalog archive digest."""
+    skill_dir = tmp_path / "golden-skill"
+    (skill_dir / "scripts").mkdir(parents=True)
+    (skill_dir / "references" / "nested" / "deep").mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: golden-skill\ndescription: Golden fixture\n---\nBody text.\n"
+    )
+    script = skill_dir / "scripts" / "run.sh"
+    script.write_text("#!/bin/sh\necho golden\n")
+    os.chmod(script, 0o755)
+    (skill_dir / "references" / "a.md").write_text("reference a\n")
+    (skill_dir / "references" / "nested" / "deep" / "b.txt").write_bytes(
+        b"nested bytes\x00\x01\n"
+    )
+
+    data = SkillCatalogService._build_archive_bytes(skill_dir, "golden-skill")
+
+    assert hashlib.sha256(data).hexdigest() == GOLDEN_ARCHIVE_SHA256
+
+
+# ── Shared builder (marketplace snapshots) ─────────────────────────────────
+
+
+def test_shared_builder_matches_the_catalog_archive_bytes(skill_tree: Path) -> None:
+    """U2: ``build_skill_archive`` over ``walk_skill_tree`` == the catalog's bytes."""
+    from app.services.skills.skill_archive import build_skill_archive, walk_skill_tree
+
+    files, total = walk_skill_tree(skill_tree)
+    assert total == sum(p.stat().st_size for _, p in files)
+    shared = build_skill_archive("pdf-report", files)
+    catalog = SkillCatalogService._build_archive_bytes(skill_tree, "pdf-report")
+    assert shared == catalog
+
+
+@pytest.mark.parametrize("rel", ["../escape.txt", "a/../../b", "/abs/path", ""])
+def test_shared_builder_refuses_unsafe_relative_paths(
+    skill_tree: Path, rel: str
+) -> None:
+    """U3: a ``..``, absolute or empty rel is refused."""
+    from app.services.skills.skill_archive import build_skill_archive
+
+    with pytest.raises(ValueError):
+        build_skill_archive("pdf-report", [(rel, skill_tree / "SKILL.md")])
+
+
+def test_shared_builder_refuses_a_symlink_path(skill_tree: Path, tmp_path: Path) -> None:
+    """U3: a symlink handed to the builder is refused, never followed."""
+    from app.services.skills.skill_archive import build_skill_archive
+
+    secret = tmp_path / "secret.txt"
+    secret.write_text("top secret")
+    link = skill_tree / "link.txt"
+    link.symlink_to(secret)
+    with pytest.raises(ValueError):
+        build_skill_archive("pdf-report", [("link.txt", link)])

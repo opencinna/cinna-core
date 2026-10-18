@@ -96,7 +96,7 @@ Agent SDK (Claude Code / ADK)
 | `CREDENTIAL_BASH_ACCESS` | high | Bash command matched credential-access pattern |
 | `OUTPUT_REDACTED` | medium | Credential value found and redacted in agent output |
 | `CREDENTIAL_WRITE_ATTEMPT` | high | Attempt to Write/Edit credential files |
-| `CREDENTIAL_MATERIALIZED_LOCAL` | high | A credential value was delivered to a Cinna Desktop session; fired on the requester, and also on the owner when the credential was shared |
+| `CREDENTIAL_MATERIALIZED_LOCAL` (and, for Desktop Google OAuth, `CREDENTIAL_OAUTH_AUTHORIZE_LOCAL` / `CREDENTIAL_TOKEN_ISSUED_LOCAL`, see the Desktop doc) | high | A credential value was delivered to a Cinna Desktop session; fired on the requester, and also on the owner when the credential was shared |
 
 ## Pattern Matching
 

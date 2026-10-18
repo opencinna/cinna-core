@@ -42,6 +42,12 @@ from tests.utils.ai_credential import create_random_ai_credential
 from tests.utils.background_tasks import drain_tasks
 from tests.utils.environment import list_environments
 from tests.utils.fixtures import patched_storage_dirs
+from tests.utils.marketplace_skills import (
+    create_second_superuser,
+    new_skills_marketplace,
+    skills_repo,
+    snapshots_root,
+)
 from tests.utils.user import create_random_user_with_headers, promote_to_developer
 
 API = settings.API_V1_STR
@@ -183,3 +189,23 @@ def test_refused_self_delete_by_a_superuser_removes_nothing(
 
     assert app_data.is_dir()
     assert uploads.is_dir()
+
+
+def test_superuser_delete_removes_the_targets_marketplace_skill_snapshots(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    1. A second superuser owns a synced skills marketplace; the admin owns another.
+    2. Deleting the owner removes `<mid>/` of their marketplace only.
+    """
+    owner, owner_headers = create_second_superuser(client, superuser_token_headers)
+    mine = new_skills_marketplace(client, owner_headers, skills_repo())
+    bystander = new_skills_marketplace(client, superuser_token_headers, skills_repo())
+    assert (snapshots_root() / mine["id"]).is_dir()
+
+    r = client.delete(f"{API}/users/{owner['id']}", headers=superuser_token_headers)
+    assert r.status_code == 200, r.text
+
+    assert not (snapshots_root() / mine["id"]).exists()
+    assert (snapshots_root() / bystander["id"]).is_dir()

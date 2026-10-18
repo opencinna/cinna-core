@@ -24688,6 +24688,28 @@ export const LLMPluginMarketplacePluginPublicSchema = {
             ],
             title: 'Unsupported Reason'
         },
+        skill_archive_sha256: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Skill Archive Sha256'
+        },
+        skill_archive_size: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Skill Archive Size'
+        },
         skill_summary: {
             anyOf: [
                 {

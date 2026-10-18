@@ -152,6 +152,12 @@ agent into it with one command.
     and `runtime.permissions` stay local.
   - `handovers[].target_kind` is registered to Cinna Desktop (its coordinator
     handback pair); other hosts preserve it and ignore it.
+- **Marketplace skill pins (contract 1.15.0).** `marketplace_skills[]` in `cinna-agent.json` pins a skill from a skills-format marketplace by plugin id and archive digest; it shares the one skill namespace (a clash with a catalog pin is invalid). See guide 08 and the [marketplace snapshots](../plugin_marketplaces/plugin_marketplaces_tech.md).
+- **Google OAuth slots on a desktop host (contract 1.14.0).** The eight Google OAuth credential
+  types can now fill a slot locally: Core keeps the refresh token and Desktop gets an access token
+  (`credentials.access_token(id)` refreshes it). `cinna_credentials.py` (`HELPER_VERSION` 1.14.0)
+  names the new `unavailable_reason` values `pending_authorization`, `reauthorization_required`
+  and `token_unavailable`. See [Desktop Credential Delivery](../desktop_credentials/desktop_credentials.md).
 - **Issued API keys and `agent_api_session` (contract 1.7.0).** A person a producer's owner has
   issued an API key to can now use it from a local agent: Cinna Desktop delivers the key (it opts
   in; connections are still never delivered) and the helper `scripts/cinna_credentials.py`

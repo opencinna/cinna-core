@@ -1,7 +1,7 @@
 ---
 feature: plugin_marketplaces
 domain: application
-one_liner: "Lets admins register Git-based marketplaces of plugins and skills that users install into their agents, syncing metadata into Postgres with no persistent file cache."
+one_liner: "Lets admins register Git-based marketplaces of plugins and skills that users install into their agents, syncing metadata into Postgres and snapshotting skills-format entries for download."
 docs:
   tech: plugin_marketplaces_tech.md
 ---
@@ -17,7 +17,7 @@ Allows platform admins to register Git-based repositories (marketplaces) that ma
 
 - **Marketplace** — A Git repository registered by an admin, in one of **three formats** (see [Marketplace formats](#marketplace-formats)). A `claude` repository contains a `.claude-plugin/marketplace.json` catalog; a `codex` repository an `.agents/plugins/marketplace.json`; a `skills` repository has no catalog file at all and is walked as a directory of `SKILL.md` folders.
 - **Supported / unsupported entry** — A sync-time verdict on whether *this platform's containers* can install an entry. Recorded as `supported` plus a stable `unsupported_reason` code. Unsupported entries are still listed — hiding them would make a half-broken marketplace look empty — but installing one is refused.
-- **Sync** — The process of cloning the marketplace repo to a **throwaway temp directory**, parsing the catalog to extract plugin metadata and Git coordinates, writing those to Postgres, and then discarding the clone. No persistent backend cache is maintained.
+- **Sync** — The process of cloning the marketplace repo to a **throwaway temp directory**, parsing the catalog to extract plugin metadata and Git coordinates, writing those to Postgres, and then discarding the clone. Skills-format entries are additionally snapshotted into a content-addressed archive (see Business Rules); no clone or plugin file cache is kept.
 - **Public Discovery** — Flag that controls whether a marketplace's plugins are visible to all users on the platform or only to the owner.
 - **Marketplace Status** — Lifecycle state of the connection to the Git repo: `pending` → `connected` / `error` / `disconnected`.
 - **SSH Key** — Optional reference to a stored SSH key for accessing private Git repositories.
@@ -57,7 +57,7 @@ This means marketplace sync is now purely a metadata operation — fast, statele
 ### Admin: Delete a Marketplace
 1. Admin deletes a marketplace record.
 2. Associated `LLMPluginMarketplacePlugin` records are removed.
-3. There is no persistent cache to clean up — the delete comment in `delete_marketplace()` confirms this explicitly.
+3. The marketplace's skill snapshot archives (skills-format only) are deleted with it; nothing else is cached.
 4. Agents that had plugins from this marketplace installed retain their `AgentPluginLink` records, and `plugin_id` becomes NULL via `ON DELETE SET NULL` — the git coordinates are lost for upgrade purposes.
 5. **This only started working when the ORM cascade was fixed.** `LLMPluginMarketplacePlugin.agent_links` used to declare `cascade="all, delete-orphan"`, which deleted the links in Python before the database rule could apply — so an admin deleting a marketplace silently *uninstalled* every user's plugins. It is now `passive_deletes=True`, deferring to the FK. See [agent_addons_tech](../../agents/agent_addons/agent_addons_tech.md).
 6. The orphaned links keep their names, because the install path snapshots `snapshot_marketplace_name` / `snapshot_plugin_name` on every source. If the entry reappears upstream, the next sync **re-attaches** them — but only when the marketplace names the **same repository** the install was made from, already existed when the link was created, and the link actually recorded a repository URL. All three are required: a reused *name* is not enough (the unique name index frees a name exactly when its holder is deleted, so a rename could otherwise hand an unrelated repository somebody else's installs), and a marketplace you delete and re-register from the same repository is younger than the links, so it does not adopt them either — those re-install by hand.
@@ -68,7 +68,9 @@ This means marketplace sync is now purely a metadata operation — fast, statele
 
 - **Admin-only management**: Creating, updating, deleting, and syncing marketplaces requires superuser access.
 - **Automatic initial sync**: Marketplace registration always triggers an immediate sync.
-- **Temp-clone, no persistent cache**: Every sync (initial or manual) clones to a new throwaway directory and discards it. The backend holds only Postgres rows — no plugin files on disk.
+- **Temp-clone**: Every sync (initial or manual) clones to a new throwaway directory and discards it. The backend holds Postgres rows and, for `skills` marketplaces only, one snapshot archive per supported entry.
+- **Skill snapshots**: at sync each supported entry of a skills-format marketplace is archived under a content digest so a desktop can download exactly that version. An unchanged folder keeps its digest (no "update"); past digests stay downloadable until the marketplace or user is deleted. A tree over 16 MB is unsupported with reason `too_large`. An entry removed by sync is simply not found afterwards. Entries synced before the upgrade have no snapshot until the next sync.
+- **Who can download**: anyone who can see the entry in discovery (own marketplace or public discovery) — superusers get no extra view on that route.
 - **Update detection**: `sync_commit_hash` stores the HEAD commit of the last sync. Comparing installed plugin commit hashes against `LLMPluginMarketplacePlugin.commit_hash` enables `has_update` detection on agent plugin links.
 - **Upsert behavior**: Sync adds new plugins, updates changed plugin configs, and removes plugins that are no longer in the catalog. It does not uninstall plugins already installed by agents — a removed entry orphans its links instead, and re-attaches them if it comes back.
 - **SSH key scope**: The SSH key is scoped to the marketplace owner (same `user_ssh_keys` table used by knowledge source Git repos).
@@ -151,3 +153,7 @@ Update detection → compare AgentPluginLink.installed_commit_hash
 - **Agent Plugins** — Marketplace sync populates the Postgres rows (including git coordinates) that `build_plugin_manifest()` uses at plugin install time. Marketplace re-syncs propagate `has_update` to installed agent plugin links. See [agent_plugins](../../agents/agent_plugins/agent_plugins.md).
 - **SSH Keys** — Uses the same `user_ssh_keys` table as knowledge source Git repos for private repository authentication. See [ssh_keys](../ssh_keys/ssh_keys.md).
 - **Git Operations** — Shares the `backend/app/services/knowledge/git_operations.py` utility with knowledge sources for clone/pull operations.
+
+## Changelog
+
+- 2026-10-18: Skills-format marketplaces snapshot every supported entry at sync; `skill-archive` and batch `plugins?ids=` routes let Cinna Desktop install marketplace skills.

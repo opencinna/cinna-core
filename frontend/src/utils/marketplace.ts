@@ -115,9 +115,9 @@ export function marketplaceFormatLabel(
 /**
  * Why an entry cannot be installed, keyed by the server's stable code.
  *
- * Five codes, not the four the plan drafted: `unsafe_path` was added during
- * the backend build for an entry whose path is absolute or escapes the repo,
- * which is refused per entry so its siblings still sync.
+ * `unsafe_path` is an entry whose path is absolute or escapes the repo,
+ * refused per entry so its siblings still sync. `too_large` is a skills-format
+ * entry whose folder is over the 16 MB snapshot cap.
  */
 const UNSUPPORTED_REASON_COPY: Record<string, string> = {
   npm_source:
@@ -130,6 +130,7 @@ const UNSUPPORTED_REASON_COPY: Record<string, string> = {
     "This entry declares a source this platform cannot fetch from.",
   unsafe_path:
     "This entry points outside its repository, so it cannot be fetched safely.",
+  too_large: "This skill is larger than 16 MB, so it cannot be installed.",
 }
 
 const UNSUPPORTED_FALLBACK =

@@ -258,9 +258,11 @@ def _read_manifest(path: Path) -> dict:
 def project_revision_manifest(data: dict) -> dict:
     """The part of ``cinna-agent.json`` a share revision keeps:
     ``{id, name, slug, description, contract_version, runtime: {engine, model},
-    credentials: [{name, type, service_uri}], catalog_skills: [...]}``. Only
-    strings (and the pins' own JSON objects) are kept, so a hostile manifest
-    cannot push arbitrary JSON into the catalog."""
+    credentials: [{name, type, service_uri}], catalog_skills: [...],
+    marketplace_skills: [...]}``. Only strings (and the pins' own JSON objects)
+    are kept, so a hostile manifest cannot push arbitrary JSON into the catalog.
+    Both pin arrays are kept as written (contract 1.15.0): core never rewrites a
+    pin, and the push hook has already validated them against the schema."""
     runtime = data.get("runtime") if isinstance(data.get("runtime"), dict) else {}
     credentials = [
         {
@@ -272,6 +274,9 @@ def project_revision_manifest(data: dict) -> dict:
         if isinstance(c, dict)
     ]
     pins = [p for p in data.get("catalog_skills") or [] if isinstance(p, dict)]
+    marketplace_pins = [
+        p for p in data.get("marketplace_skills") or [] if isinstance(p, dict)
+    ]
     return {
         "id": _text(data.get("id")),
         "name": _text(data.get("name")),
@@ -284,6 +289,7 @@ def project_revision_manifest(data: dict) -> dict:
         },
         "credentials": credentials,
         "catalog_skills": pins,
+        "marketplace_skills": marketplace_pins,
     }
 
 

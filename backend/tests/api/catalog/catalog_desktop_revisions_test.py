@@ -24,8 +24,11 @@ from tests.api.catalog.catalog_helpers import (
     make_person as make_developer,
     publish_skill_package,
 )
+from app.services.cli.platform_knowledge_assets import local_kit_dir
 from tests.utils.catalog import (
     GitClient,
+    put_grants,
+    user_grant,
     create_desktop_agent,
     get_item,
     manifest_id_of,
@@ -176,3 +179,61 @@ def test_push_records_notes_specs_and_skills(
     after = get_item(client, owner.headers, item["uuid"])
     assert [r["revision_number"] for r in after["revisions"]] == [2, 1]
     assert after["desktop"]["head_sha"] == sha2
+
+
+def test_marketplace_skill_pins_round_trip_byte_for_byte(
+    client: TestClient, superuser_token_headers: dict[str, str], bridge, tmp_path
+) -> None:
+    """M7 round trip.
+
+    1. Vacuity guard: the mirrored schema knows ``marketplace_skills``, contract 1.15.0
+    2. Owner pushes a manifest with a pin carrying an unknown extra key -> accepted
+    3. A ``use`` holder clones it: ``cinna-agent.json`` is byte-for-byte what was written
+    4. A pin with ``archive_sha256: "xyz"`` is refused by the hook (mirror enforces)
+    """
+    schema = (local_kit_dir() / "schema" / "cinna-agent.schema.json").read_text()
+    assert '"marketplace_skills"' in schema
+    assert server_contract_version() == (1, 15, 0)
+
+    su = superuser_token_headers
+    owner = make_developer(client, su)
+    reader = make_developer(client, su)
+    item = create_desktop_agent(client, owner.headers, visibility="users")
+    put_grants(
+        client, owner.headers, item["uuid"],
+        [user_grant(owner.id, "maintain"), user_grant(reader.id, "use")],
+    )
+    pin = {
+        "entry_uuid": str(uuid.uuid4()),
+        "marketplace_uuid": str(uuid.uuid4()),
+        "marketplace_name": "Team Market",
+        "name": "market-report",
+        "archive_sha256": "ab" * 32,
+        "commit_hash": None,
+        "version": "2.0.1",
+        "future_key": {"kept": True},
+    }
+    git = GitClient(tmp_path, token=_token(owner))
+    work = tmp_path / "work"
+    assert git.clone(bridge.repo_url(repo_id_of(item)), work).ok
+    write_agent_tree(work, manifest=_manifest(item, marketplace_skills=[pin]))
+    written = (work / "cinna-agent.json").read_bytes()
+    git.commit_all(work, "pin marketplace skill")
+    pushed = git.push(work)
+    assert pushed.ok, pushed.output
+
+    got = get_item(client, owner.headers, item["uuid"])
+    assert got["latest"]["revision_number"] == 1
+
+    rgit = GitClient(tmp_path, token=_token(reader))
+    assert rgit.clone(bridge.repo_url(repo_id_of(item)), tmp_path / "reader").ok
+    assert (tmp_path / "reader" / "cinna-agent.json").read_bytes() == written
+    assert json.loads(written)["marketplace_skills"] == [pin]
+
+    bad = dict(pin, archive_sha256="xyz")
+    write_agent_tree(work, manifest=_manifest(item, marketplace_skills=[bad]))
+    git.commit_all(work, "bad pin")
+    refused = git.push(work)
+    assert not refused.ok
+    after = get_item(client, owner.headers, item["uuid"])
+    assert [r["revision_number"] for r in after["revisions"]] == [1]

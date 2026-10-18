@@ -1,0 +1,56 @@
+{
+  "description": "Two well-formed marketplace skill pins (contract 1.15.0), one without commit_hash or version and one carrying an unknown extra key, beside a catalog pin of a different name. Nothing to report.",
+  "manifest": {
+    "contract_version": "1.15.0",
+    "id": "0f6d2c1e-8a4b-4c3d-9e2f-1a2b3c4d5e6f",
+    "name": "Conformance Agent",
+    "slug": "conformance-agent",
+    "description": "Answers questions about invoices.",
+    "example_prompts": [
+      "Which invoices are overdue?"
+    ],
+    "catalog_skills": [
+      {
+        "package_id": "io.example.team.skill.pdf-report",
+        "package_uuid": "0b5c1f8e-6a43-4d7e-9a51-2f0c7d1e9b34",
+        "revision_number": 3,
+        "archive_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "name": "pdf-report"
+      }
+    ],
+    "marketplace_skills": [
+      {
+        "entry_uuid": "3c9a7e21-5b4d-4f60-8e12-7a9b0c1d2e3f",
+        "marketplace_uuid": "8d2f4a6b-1c3e-4a5b-9c7d-0e1f2a3b4c5d",
+        "marketplace_name": "Team skills",
+        "name": "csv-export",
+        "archive_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "commit_hash": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+        "version": "0.3.1"
+      },
+      {
+        "entry_uuid": "5e1d2c3b-4a59-4687-9a6b-5c4d3e2f1a0b",
+        "marketplace_uuid": "8d2f4a6b-1c3e-4a5b-9c7d-0e1f2a3b4c5d",
+        "marketplace_name": "Team skills",
+        "name": "invoice-lookup",
+        "archive_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "commit_hash": null,
+        "version": null,
+        "x_host_note": "unknown keys on a pin are preserved"
+      }
+    ]
+  },
+  "expect": {
+    "errors": [],
+    "no_warnings": [
+      "marketplace_skills",
+      "marketplace_skills.entry_uuid",
+      "marketplace_skills.marketplace_uuid",
+      "marketplace_skills.marketplace_name",
+      "marketplace_skills.name",
+      "marketplace_skills.archive_sha256",
+      "marketplace_skills.commit_hash",
+      "marketplace_skills.version"
+    ]
+  }
+}

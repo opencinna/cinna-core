@@ -351,6 +351,32 @@ leave the engine to pick one. `kit.py validate` reports each clash as an error. 
 change a catalog skill, publish a new version of it; to make a private variant,
 write a skill with a different name under `skills/`.
 
+### Skills from a marketplace
+
+A host can also give an agent a skill from one of the platform's plugin
+marketplaces (contract 1.15.0). It works like a catalog pin: the host installs the
+skill from a marketplace the user can see, writes a pin to `cinna-agent.json`, and
+keeps the files outside the agent folder. You never write these pins by hand.
+
+```json
+"marketplace_skills": [
+  {
+    "entry_uuid": "3c9a7e21-5b4d-4f60-8e12-7a9b0c1d2e3f",
+    "marketplace_uuid": "8d2f4a6b-1c3e-4a5b-9c7d-0e1f2a3b4c5d",
+    "marketplace_name": "Team skills",
+    "name": "csv-export",
+    "archive_sha256": "<64 lowercase hex characters>",
+    "commit_hash": "<the marketplace commit, or null>",
+    "version": "0.3.1"
+  }
+]
+```
+
+`commit_hash` and `version` are for display only. A marketplace pin's `name` follows
+the same rule as a catalog pin's: it must not be a folder under `skills/`, a skill the
+platform provides, a `catalog_skills` pin, or another marketplace pin. Cloud import
+ignores these pins for now; sharing the agent keeps them unchanged.
+
 Skills this agent publishes are recorded in `publications.json` → `skills[]`
 (`platform_url`, `name`, `package_id`, `package_uuid`, `revision_number`,
 `content_hash`). The record travels with the agent, so anyone who can edit the agent

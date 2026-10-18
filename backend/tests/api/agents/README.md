@@ -21,6 +21,7 @@ This is the largest test domain in the suite (80 files / 592 tests), so tests ar
 | `integrations/` | Inbound/outbound integrations: webhooks, capability flags, router trigger prompt |
 | `core/` | Everything without a better home: create-flow, creation limits, prompt sync, resilient plugins, addon marketplace formats (Codex / bare-skills parsers, unsupported entries), AI-credential slot matching, credential categorization, team task delegation, env token scoping, A2A access tokens, agent skills routes, skills catalog (publish / visibility / install) |
 | `skill_credentials/` | Skill credential slot declarations (`credentials:` in `SKILL.md`): publish-time resolution matrix, `not_owned`, revision immutability, invalid declarations, `agent_api` producer id capture, description fallback, placeholder exclusion, install provisioning, and Addons readiness for local and plugin skills' declared slots |
+| `marketplace_skills/` | Skills-marketplace snapshots: sync writes one content-addressed archive per supported skill (resync no-op, edit moves one digest, `too_large`, symlinks, determinism, removal), `GET /llm-plugins/plugins/{id}/skill-archive` visibility + digests + error codes, `GET /llm-plugins/plugins?ids=` batch lookup |
 
 **Placement rule.** New test files go into the group that matches their topic — never loose at the root of `tests/api/agents/`. Create a new group only for a genuinely new topic you expect to reach ~3 files; give it an `__init__.py` and add a row above. If `core/` grows past ~12 files, split it instead of letting it sprawl.
 

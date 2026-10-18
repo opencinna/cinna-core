@@ -68,7 +68,8 @@ services:
       # persist across backend container recreation: a published revision is
       # immutable and every catalog-installed skill re-fetches its archive from
       # here on each plugin sync, so an unmounted path would silently lose the
-      # content behind every install
+      # content behind every install. Marketplace skill archive snapshots live
+      # here too (marketplace-skills/). Multi-replica deployments need a shared volume.
       - ${HOST_SKILL_STORAGE_DIR:-./backend/data/skills}:/app/data/skills
       # Team library bare repositories (GIT_STORAGE_DIR) — must persist across
       # backend container recreation: they ARE the shared agents (Postgres only

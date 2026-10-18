@@ -19,6 +19,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from collections.abc import Callable
 from typing import Optional
 
 from fastapi import HTTPException
@@ -55,6 +56,11 @@ from app.services.knowledge.git_operations import (
     GitOperationError,
 )
 from app.services.agents.skill_manifest import parse_skill_dir
+from app.services.plugins.marketplace_skill_snapshots import (
+    MarketplaceSkillSnapshots,
+    StagedArchive,
+    TooLarge,
+)
 from app.services.users.ssh_key_service import SSHKeyService
 
 logger = logging.getLogger(__name__)
@@ -271,10 +277,13 @@ class LLMPluginService:
         if not marketplace:
             return False
 
-        # No persistent cache to clean up — marketplace sync uses a throwaway
-        # temp clone that is discarded immediately after parsing.
         session.delete(marketplace)
         session.commit()
+
+        # The sync clone is throwaway, but skills-format entries keep
+        # content-addressed archive snapshots under SKILL_STORAGE_DIR. One
+        # rmtree after the commit also catches dirs left by crashed syncs.
+        MarketplaceSkillSnapshots.remove_marketplace(marketplace_id)
 
         logger.info(f"Deleted marketplace '{marketplace.name}' (id={marketplace_id})")
         return True
@@ -375,8 +384,7 @@ class LLMPluginService:
         """
         if include_public:
             statement = select(LLMPluginMarketplace).where(
-                (LLMPluginMarketplace.user_id == user_id) |
-                (LLMPluginMarketplace.public_discovery == True)  # noqa: E712
+                LLMPluginService._discoverable_clause(user_id)
             )
         else:
             statement = select(LLMPluginMarketplace).where(
@@ -483,6 +491,7 @@ class LLMPluginService:
             # marketplace cache. Git coordinates land in Postgres; the container
             # re-fetches plugin files at install time from those coordinates.
             temp_dir = tempfile.mkdtemp(prefix="cinna_marketplace_")
+            staging_dir: Path | None = None
             try:
                 # Clone repository (fresh each sync)
                 repo = clone_repository(
@@ -514,13 +523,48 @@ class LLMPluginService:
                 if metadata.get("owner_email"):
                     marketplace.owner_email = metadata["owner_email"]
 
+                # Skills-format entries are archived while the clone still
+                # exists; the archives are promoted to their final paths just
+                # before the upsert commits (see ``before_commit``).
+                staged: dict[str, StagedArchive] = {}
+                if marketplace.type == "skills":
+                    staging_dir = MarketplaceSkillSnapshots.new_staging_dir(
+                        marketplace.id
+                    )
+                    staged = LLMPluginService._stage_skill_snapshots(
+                        temp_dir, plugins_data, staging_dir
+                    )
+
+                def _promote_staged(
+                    rows_by_name: dict[str, LLMPluginMarketplacePlugin],
+                ) -> None:
+                    for name, archive in staged.items():
+                        MarketplaceSkillSnapshots.promote(
+                            archive, marketplace.id, rows_by_name[name].id
+                        )
+
                 # Upsert plugins
-                LLMPluginService._upsert_plugins(
+                deleted_plugin_ids = LLMPluginService._upsert_plugins(
                     session=session,
                     marketplace=marketplace,
                     plugins_data=plugins_data,
-                    commit_hash=commit_hash
+                    commit_hash=commit_hash,
+                    before_commit=_promote_staged if staged else None,
                 )
+
+                # A removed entry's row is gone for good (a returning entry
+                # gets a new id), so nobody can reach its snapshots again.
+                # Best effort: never fails a sync whose rows are committed.
+                for deleted_id in deleted_plugin_ids:
+                    try:
+                        MarketplaceSkillSnapshots.remove_entry(
+                            marketplace.id, deleted_id
+                        )
+                    except Exception as e:
+                        logger.exception(
+                            f"Could not remove snapshots of deleted plugin "
+                            f"{deleted_id}: {e}"
+                        )
 
                 # The marketplace name is half of every install's directory
                 # identity, so a rename upstream moves the directory — and the
@@ -549,8 +593,17 @@ class LLMPluginService:
                 logger.info(f"Successfully synced marketplace '{marketplace.name}' - {len(plugins_data)} plugins")
 
             finally:
-                # Discard the throwaway clone (no persistent cache).
+                # Discard the throwaway clone, and any staged archive that was
+                # not promoted (a failed sync, or an entry the upsert dropped).
                 shutil.rmtree(temp_dir, ignore_errors=True)
+                if staging_dir is not None:
+                    shutil.rmtree(staging_dir, ignore_errors=True)
+                    # Leave ``<mid>/`` holding plugin dirs only. Fails (and is
+                    # ignored) while a concurrent sync is still staging.
+                    try:
+                        staging_dir.parent.rmdir()
+                    except OSError:
+                        pass
                 # Clean up SSH key file
                 if ssh_key_context:
                     ssh_key_context.__exit__(None, None, None)
@@ -573,6 +626,45 @@ class LLMPluginService:
 
         session.refresh(marketplace)
         return marketplace
+
+    @staticmethod
+    def _stage_skill_snapshots(
+        clone_dir: str, plugins_data: list[dict], staging_dir: Path
+    ) -> dict[str, StagedArchive]:
+        """Archive every supported skill entry into ``staging_dir``.
+
+        Sets ``skill_archive_sha256`` / ``skill_archive_size`` on each entry
+        dict (None for unsupported ones) and returns the staged archives by
+        entry name. A tree over the 16 MB cap turns the entry unsupported with
+        ``too_large``; its ``config.skill`` block stays so the admin sees it.
+        """
+        clone_root = Path(clone_dir).resolve()
+        staged: dict[str, StagedArchive] = {}
+        for plugin in plugins_data:
+            plugin["skill_archive_sha256"] = None
+            plugin["skill_archive_size"] = None
+            if not plugin.get("supported", True):
+                continue
+            skill_dir = Path(clone_dir) / plugin["source_path"]
+            # Defence in depth: the parser already skips symlinked children
+            # and a symlinked ``skills/``.
+            if (
+                skill_dir.is_symlink()
+                or not skill_dir.is_dir()
+                or not skill_dir.resolve().is_relative_to(clone_root)
+            ):
+                LLMPluginService._mark_unsupported(plugin, "unsafe_path")
+                continue
+            result = MarketplaceSkillSnapshots.stage(
+                staging_dir, skill_dir, plugin["name"]
+            )
+            if isinstance(result, TooLarge):
+                LLMPluginService._mark_unsupported(plugin, "too_large")
+                continue
+            plugin["skill_archive_sha256"] = result.sha256
+            plugin["skill_archive_size"] = result.size
+            staged[plugin["name"]] = result
+        return staged
 
     @staticmethod
     def _get_parser_for_type(marketplace_type: str):
@@ -1128,7 +1220,7 @@ class LLMPluginService:
                 {
                     "name": child.name,
                     "description": entry.description if valid else "",
-                    "version": "",
+                    "version": entry.version or "",
                     "author_name": "",
                     "author_email": "",
                     "category": "skill",
@@ -1175,14 +1267,23 @@ class LLMPluginService:
         session: Session,
         marketplace: LLMPluginMarketplace,
         plugins_data: list[dict],
-        commit_hash: str
-    ):
+        commit_hash: str,
+        before_commit: Callable[[dict[str, LLMPluginMarketplacePlugin]], None]
+        | None = None,
+    ) -> list[uuid.UUID]:
         """
         Upsert plugins for a marketplace.
 
         - Add new plugins
         - Update existing plugins
         - Remove plugins no longer in marketplace
+
+        ``before_commit`` runs just before the commit with every kept or
+        created row by name. If it raises, the session is rolled back and the
+        error re-raised, so no half-upserted rows can be committed by the
+        caller's error path.
+
+        Returns the ids of the rows it deleted.
         """
         # Get existing plugins
         statement = select(LLMPluginMarketplacePlugin).where(
@@ -1191,6 +1292,7 @@ class LLMPluginService:
         existing_plugins = {p.name: p for p in session.exec(statement).all()}
 
         new_plugin_names = set()
+        rows_by_name: dict[str, LLMPluginMarketplacePlugin] = {}
 
         for plugin_data in plugins_data:
             name = plugin_data["name"]
@@ -1222,6 +1324,8 @@ class LLMPluginService:
                 plugin.plugin_type = marketplace.type
                 plugin.supported = bool(plugin_data.get("supported", True))
                 plugin.unsupported_reason = plugin_data.get("unsupported_reason")
+                plugin.skill_archive_sha256 = plugin_data.get("skill_archive_sha256")
+                plugin.skill_archive_size = plugin_data.get("skill_archive_size")
                 plugin.updated_at = datetime.now(UTC)
                 session.add(plugin)
             else:
@@ -1245,17 +1349,29 @@ class LLMPluginService:
                     commit_hash=commit_hash,
                     supported=bool(plugin_data.get("supported", True)),
                     unsupported_reason=plugin_data.get("unsupported_reason"),
+                    skill_archive_sha256=plugin_data.get("skill_archive_sha256"),
+                    skill_archive_size=plugin_data.get("skill_archive_size"),
                 )
                 session.add(plugin)
+            rows_by_name[name] = plugin
 
         # Remove plugins no longer in marketplace. Any agent that installed one
         # keeps its link (``plugin_id`` becomes NULL, per the column's
         # ``ON DELETE SET NULL``): an upstream repo dropping an entry is not
         # consent to uninstall it from somebody's agent.
+        deleted_ids: list[uuid.UUID] = []
         for name, plugin in existing_plugins.items():
             if name not in new_plugin_names:
                 logger.info(f"Removing plugin '{name}' from marketplace")
+                deleted_ids.append(plugin.id)
                 session.delete(plugin)
+
+        if before_commit is not None:
+            try:
+                before_commit(rows_by_name)
+            except Exception:
+                session.rollback()
+                raise
 
         session.commit()
 
@@ -1273,6 +1389,8 @@ class LLMPluginService:
                 f"Could not re-attach orphaned links for marketplace "
                 f"'{marketplace.name}': {e}"
             )
+
+        return deleted_ids
 
     @staticmethod
     def _rename_link_snapshots(
@@ -1628,6 +1746,72 @@ class LLMPluginService:
         """Get a plugin by ID."""
         return session.get(LLMPluginMarketplacePlugin, plugin_id)
 
+    # --------------------------------------------------------------------------
+    # Discover visibility — the one rule ``/discover``, the skill-archive
+    # download and the batch lookup share: the caller owns the marketplace, or
+    # it is publicly discoverable. Deliberately NO superuser bypass: a user may
+    # download exactly what discovery shows them, nothing more.
+    # --------------------------------------------------------------------------
+
+    @staticmethod
+    def _discoverable_clause(user_id: uuid.UUID):
+        """SQL form of :meth:`is_discoverable` over ``LLMPluginMarketplace``."""
+        return (LLMPluginMarketplace.user_id == user_id) | (
+            LLMPluginMarketplace.public_discovery == True  # noqa: E712
+        )
+
+    @staticmethod
+    def is_discoverable(marketplace: LLMPluginMarketplace, user_id: uuid.UUID) -> bool:
+        """Python form of :meth:`_discoverable_clause`."""
+        return marketplace.user_id == user_id or bool(marketplace.public_discovery)
+
+    @staticmethod
+    def get_discoverable_plugin(
+        session: Session, plugin_id: uuid.UUID, user_id: uuid.UUID
+    ) -> tuple[LLMPluginMarketplacePlugin, LLMPluginMarketplace] | None:
+        """The plugin and its marketplace when the caller may discover it.
+
+        None for an unknown id and for an invisible one alike, so callers can
+        answer both the same way and never confirm a private entry exists.
+        """
+        plugin = session.get(LLMPluginMarketplacePlugin, plugin_id)
+        if plugin is None:
+            return None
+        marketplace = session.get(LLMPluginMarketplace, plugin.marketplace_id)
+        if marketplace is None or not LLMPluginService.is_discoverable(
+            marketplace, user_id
+        ):
+            return None
+        return plugin, marketplace
+
+    @staticmethod
+    def get_discoverable_plugins(
+        session: Session, plugin_ids: list[uuid.UUID], user_id: uuid.UUID
+    ) -> list[LLMPluginMarketplacePluginPublic]:
+        """Public rows for the visible ids among ``plugin_ids``, in request order.
+
+        Unknown and invisible ids are simply absent. ``plugin_ids`` is expected
+        de-duplicated by the caller.
+        """
+        if not plugin_ids:
+            return []
+        statement = (
+            select(LLMPluginMarketplacePlugin, LLMPluginMarketplace)
+            .join(
+                LLMPluginMarketplace,
+                LLMPluginMarketplace.id == LLMPluginMarketplacePlugin.marketplace_id,
+            )
+            .where(LLMPluginMarketplacePlugin.id.in_(plugin_ids))
+            .where(LLMPluginService._discoverable_clause(user_id))
+        )
+        found = {
+            plugin.id: LLMPluginService.get_plugin_public(
+                plugin, marketplace=marketplace
+            )
+            for plugin, marketplace in session.exec(statement).all()
+        }
+        return [found[pid] for pid in plugin_ids if pid in found]
+
     @staticmethod
     def get_plugin_public(
         plugin: LLMPluginMarketplacePlugin,
@@ -1667,6 +1851,8 @@ class LLMPluginService:
             updated_at=plugin.updated_at,
             supported=plugin.supported,
             unsupported_reason=plugin.unsupported_reason,
+            skill_archive_sha256=plugin.skill_archive_sha256,
+            skill_archive_size=plugin.skill_archive_size,
             skill_summary=LLMPluginService._skill_summary(plugin),
             marketplace_name=marketplace_name,
             marketplace_owner=LLMPluginService.marketplace_owner_label(marketplace),

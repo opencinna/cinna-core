@@ -1590,6 +1590,7 @@ def validate_manifest(manifest: dict, report: Report) -> None:
     _validate_schedules(manifest.get("schedules", []), report)
     _validate_handovers(manifest.get("handovers", []), manifest.get("slug"), report)
     _validate_catalog_skills(manifest.get("catalog_skills"), report)
+    _validate_marketplace_skills(manifest, report)
     _validate_manifest_ledger_keys(manifest, report)
 
     features = manifest.get("features", {})
@@ -2664,7 +2665,8 @@ def _validate_status_file(agent_dir: Path, report: Report) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Skills: `skills/<name>/SKILL.md` and the manifest's `catalog_skills[]`
+# Skills: `skills/<name>/SKILL.md`, the manifest's `catalog_skills[]` and
+# `marketplace_skills[]`
 # --------------------------------------------------------------------------- #
 #
 # A port of the platform's own skill validator (`skill_manifest.py` in
@@ -3126,9 +3128,87 @@ def _validate_catalog_skills(catalog_skills: object, report: Report) -> None:
             )
 
 
+def _validate_marketplace_skills(manifest: dict, report: Report) -> None:
+    """The manifest's `marketplace_skills[]` pins (contract 1.15.0), field by field.
+
+    Also refuses a pin whose name is a `catalog_skills[]` pin's name: the two
+    arrays share one skill namespace. Names against `skills/` and the platform's
+    own skills are checked by `_validate_skills`, which can see the folder.
+    """
+    marketplace_skills = manifest.get("marketplace_skills")
+    if marketplace_skills is None:
+        return
+    if not isinstance(marketplace_skills, list):
+        report.error(f"{MANIFEST_NAME}: `marketplace_skills` must be an array.")
+        return
+    catalog_skills = manifest.get("catalog_skills")
+    catalog_names = {
+        pin.get("name")
+        for pin in (catalog_skills if isinstance(catalog_skills, list) else [])
+        if isinstance(pin, dict) and isinstance(pin.get("name"), str)
+    }
+    seen_entries: set[str] = set()
+    seen_names: set[str] = set()
+    for index, pin in enumerate(marketplace_skills):
+        label = f"marketplace_skills[{index}]"
+        if not isinstance(pin, dict):
+            report.error(f"{MANIFEST_NAME}: `{label}` must be an object.")
+            continue
+        for key, what in (("entry_uuid", "marketplace entry"), ("marketplace_uuid", "marketplace")):
+            value = pin.get(key)
+            try:
+                canonical = str(uuid.UUID(value)) if isinstance(value, str) else None
+            except ValueError:
+                canonical = None
+            if canonical is None:
+                report.error(f"{MANIFEST_NAME}: `{label}.{key}` must be the {what}'s UUID.")
+            elif key == "entry_uuid":
+                if canonical in seen_entries:
+                    report.error(
+                        f"{MANIFEST_NAME}: `{label}.entry_uuid` pins the same marketplace "
+                        "skill twice."
+                    )
+                seen_entries.add(canonical)
+        marketplace_name = pin.get("marketplace_name")
+        if not isinstance(marketplace_name, str):
+            report.error(f"{MANIFEST_NAME}: `{label}.marketplace_name` must be a string.")
+        name = pin.get("name")
+        if (
+            not isinstance(name, str)
+            or len(name) > SKILL_MAX_NAME_LENGTH
+            or not SKILL_NAME_RE.match(name)
+        ):
+            report.error(
+                f"{MANIFEST_NAME}: `{label}.name` must be the skill's name: lowercase words "
+                "joined by single hyphens, at most 64 characters."
+            )
+        else:
+            if name in seen_names:
+                report.error(
+                    f"{MANIFEST_NAME}: `{label}.name` pins a second marketplace skill named "
+                    f"`{name}`; an agent holds one skill per name."
+                )
+            elif name in catalog_names:
+                report.error(
+                    f"{MANIFEST_NAME}: `{label}.name` is `{name}`, which is also the name of a "
+                    "catalog_skills[] pin; an agent holds one skill per name."
+                )
+            seen_names.add(name)
+        archive_sha256 = pin.get("archive_sha256")
+        if not isinstance(archive_sha256, str) or not SHA256_HEX_RE.match(archive_sha256):
+            report.error(
+                f"{MANIFEST_NAME}: `{label}.archive_sha256` must be 64 lowercase hex characters."
+            )
+        for key in ("commit_hash", "version"):
+            value = pin.get(key)
+            if value is not None and not isinstance(value, str):
+                report.error(f"{MANIFEST_NAME}: `{label}.{key}` must be a string or null.")
+
+
 def _validate_skills(agent_dir: Path, manifest: dict, report: Report) -> None:
     """`skills/<name>/SKILL.md` by the platform's rules, then the agent's budget,
-    then `catalog_skills[]` names against authored and platform skills.
+    then `catalog_skills[]` and `marketplace_skills[]` names against authored and
+    platform skills.
 
     Mirrors the platform's scan: plain files and dot-folders under `skills/`
     are skipped (the scaffold ships `skills/README.md`), folders are read in
@@ -3173,27 +3253,28 @@ def _validate_skills(agent_dir: Path, manifest: dict, report: Report) -> None:
             accepted += 1
             total_bytes += size
 
-    catalog_skills = manifest.get("catalog_skills")
-    if not isinstance(catalog_skills, list):
-        return
     platform_names = platform_skill_names()
-    for index, pin in enumerate(catalog_skills):
-        if not isinstance(pin, dict):
+    for key, kind in (("catalog_skills", "catalog"), ("marketplace_skills", "marketplace")):
+        pins = manifest.get(key)
+        if not isinstance(pins, list):
             continue
-        name = pin.get("name")
-        if not isinstance(name, str) or not SKILL_NAME_RE.match(name):
-            continue  # reported by `_validate_catalog_skills`
-        if name in authored:
-            report.error(
-                f"{MANIFEST_NAME}: `catalog_skills[{index}]` is the catalog skill `{name}`, "
-                f"and skills/{name}/ is a skill of the same name written here. Remove the "
-                "pin or rename the folder — a catalog skill never lives under skills/."
-            )
-        elif name in platform_names:
-            report.error(
-                f"{MANIFEST_NAME}: `catalog_skills[{index}]` is named `{name}`, which is a "
-                "skill the platform provides."
-            )
+        for index, pin in enumerate(pins):
+            if not isinstance(pin, dict):
+                continue
+            name = pin.get("name")
+            if not isinstance(name, str) or not SKILL_NAME_RE.match(name):
+                continue  # reported by the manifest-level pin validators
+            if name in authored:
+                report.error(
+                    f"{MANIFEST_NAME}: `{key}[{index}]` is the {kind} skill `{name}`, "
+                    f"and skills/{name}/ is a skill of the same name written here. Remove the "
+                    f"pin or rename the folder — a {kind} skill never lives under skills/."
+                )
+            elif name in platform_names:
+                report.error(
+                    f"{MANIFEST_NAME}: `{key}[{index}]` is named `{name}`, which is a "
+                    "skill the platform provides."
+                )
 
 
 def template_description() -> str | None:

@@ -53,7 +53,9 @@ Defined via `LLMPluginMarketplacePluginBase`:
 | `source_type` | `local` or `url` |
 | `plugin_type` | Inherited from the marketplace `type` on every upsert: `claude` \| `codex` \| `skills` |
 | `supported` | **New.** `bool`, not null, default `true`. Sync-time verdict: can our containers install this entry? Re-derived on every sync, never sticky |
-| `unsupported_reason` | **New.** `String(64)`, nullable. One of `npm_source`, `app_connector_only`, `no_skill_md`, `unknown_source`, `unsafe_path` |
+| `unsupported_reason` | **New.** `String(64)`, nullable. One of `npm_source`, `app_connector_only`, `no_skill_md`, `unknown_source`, `unsafe_path`, `too_large` |
+| `skill_archive_sha256` | `String(64)`, nullable. Digest of the entry's current skill snapshot (skills-format marketplaces only). NULL until the first sync after upgrade, for unsupported entries and for other formats. Migration `98e0bd120428` |
+| `skill_archive_size` | `int`, nullable. Compressed bytes of that snapshot |
 | `source_path` | Relative path (local plugins) |
 | `source_url`, `source_branch` | External repo details (url plugins) |
 | `source_commit_hash` | Pinned commit from external repo (url plugins) |
@@ -73,7 +75,7 @@ These rows are the source of git coordinates consumed by `LLMPluginService.build
 
 ## API Endpoints
 
-All in `backend/app/api/routes/llm_plugins.py`, admin-only (superuser guard):
+All in `backend/app/api/routes/llm_plugins.py`. Marketplace create is superuser-only; update, delete and sync need the marketplace owner or a superuser; `discover`, `plugins/{id}`, `plugins` and `skill-archive` are open to any signed-in user (rules below):
 
 | Method | Path | Request | Response | Purpose |
 |--------|------|---------|----------|---------|
@@ -84,7 +86,11 @@ All in `backend/app/api/routes/llm_plugins.py`, admin-only (superuser guard):
 | `DELETE` | `/api/v1/llm-plugins/marketplaces/{id}` | — | `Message` | Delete marketplace and plugins (no cache cleanup) |
 | `POST` | `/api/v1/llm-plugins/marketplaces/{id}/sync` | — | `LLMPluginMarketplacePublic` | Trigger re-sync (temp-clone, parse, discard) |
 | `GET` | `/api/v1/llm-plugins/discover` | `?search=&category=` | `LLMPluginMarketplacePluginsPublic` | Discover plugins from accessible marketplaces |
-| `GET` | `/api/v1/llm-plugins/marketplaces/{id}/plugins` | — | `LLMPluginMarketplacePluginsPublic` | List plugins for a specific marketplace |
+| `GET` | `/api/v1/llm-plugins/plugins/{plugin_id}` | — | `LLMPluginMarketplacePluginPublic` | One entry. Own rule: owner, public marketplace **or superuser**, else 403 (differs from the two routes below) |
+| `GET` | `/api/v1/llm-plugins/plugins/{plugin_id}/skill-archive` | `?sha256=` (64 lowercase hex, pattern-validated) | gzip file, header `X-Archive-Sha256` | Download a skill snapshot. 404 `not_found` (entry gone or not visible), 404 `snapshot_missing` (no file for that digest), 409 `not_a_skill` |
+| `GET` | `/api/v1/llm-plugins/plugins` | `?ids=a,b,…` (≤100) | `LLMPluginMarketplacePluginsPublic` | Batch lookup in request order, de-duplicated; invisible or unknown ids are omitted. 422 `too_many_ids` / `invalid_id` |
+
+**Visibility for the two snapshot routes** is exactly the `/discover` rule (`LLMPluginService.is_discoverable` plus one SQL clause): the marketplace is the caller's own or has `public_discovery`. There is **no superuser bypass**; a private entry answers `404 not_found`, never 403.
 
 ## Services & Key Methods
 
@@ -98,10 +104,12 @@ Marketplace lifecycle:
   3. `temp_dir = tempfile.mkdtemp(prefix="cinna_marketplace_")`.
   4. `clone_repository(url, temp_dir, branch, ssh_key_path)`.
   5. `get_current_commit_hash(repo)`.
-  6. `_parse_claude_marketplace(temp_dir)` → metadata + plugin data dicts.
-  7. `_upsert_plugins()` → writes to Postgres.
+  6. The format's parser → metadata + plugin data dicts.
+  6b. For a `skills` marketplace, each supported entry is staged as a snapshot archive (`MarketplaceSkillSnapshots.stage`); a tree over 16 MB uncompressed marks the entry unsupported with `too_large`.
+  7. `_upsert_plugins(before_commit=…)` → writes to Postgres; the hook promotes the staged archives just before the commit and rolls back on failure, so a committed row never names a missing file.
   8. Updates marketplace `status`, `sync_commit_hash`, `last_sync_at`.
-  9. `finally: shutil.rmtree(temp_dir, ignore_errors=True)` — discard clone.
+  9. After commit, the snapshot directories of entries the sync deleted are removed.
+  10. `finally: shutil.rmtree(temp_dir, ignore_errors=True)` — discard clone.
 - `_get_parser_for_type(marketplace_type)` — dict lookup over `claude` / `codex` / `skills`. **Raises `MarketplaceFormatError` on a miss** — it no longer falls back to the Claude parser. `MarketplaceCatalogError` subclasses it (`marketplace_catalog_unreadable`); `routes/llm_plugins.py` maps both to **422** with `{code, message}`.
 - `_parse_claude_marketplace(repo_path)` — Reads `.claude-plugin/marketplace.json`, parses local and URL source types, returns `{"metadata": {...}, "plugins": [...]}`. Now also runs `_safe_entry_path` on each declared path (`unsafe_path` on escape).
 - `_parse_codex_marketplace(repo_path)` / `_parse_skills_marketplace(repo_path)` — the two new parsers. Details in [agent_addons_tech](../../agents/agent_addons/agent_addons_tech.md#marketplace-parsers--backendappservicespluginsllm_plugin_servicepy).
@@ -109,7 +117,15 @@ Marketplace lifecycle:
 
 **Deletion safety:** because the parser raises *before* `_upsert_plugins` runs, and stale-row deletion lives only inside `_upsert_plugins`, an unreadable catalog **deletes nothing**.
 - `_upsert_plugins()` — Compares parsed plugin list with existing DB records: inserts new, updates changed (by `name` key), deletes removed; updates `plugin_count`.
-- `delete_marketplace()` — Deletes DB record + cascades to plugin rows. Comment in code confirms: "No persistent cache to clean up — marketplace sync uses a throwaway temp clone that is discarded immediately after parsing."
+- `delete_marketplace()` — Deletes DB record + cascades to plugin rows, then removes `marketplace-skills/<marketplace_id>/` (`MarketplaceSkillSnapshots.remove_marketplace`). The git clone itself is still throwaway.
+
+**Skill snapshots** — `backend/app/services/plugins/marketplace_skill_snapshots.py` (`MarketplaceSkillSnapshots`) with the shared deterministic tar.gz builder `backend/app/services/skills/skill_archive.py` (`build_skill_archive`, also used by catalog revisions; file list from the parser's own `_walk_files`, symlinks skipped).
+- Layout: `<SKILL_STORAGE_DIR>/marketplace-skills/<marketplace_id>/<plugin_id>/<sha256>.tar.gz` — content-addressed, so an unchanged folder gives the same digest and no "update".
+- Staging: during sync archives are written to `<SKILL_STORAGE_DIR>/marketplace-skills/<marketplace_id>/.staging/<uuid>/`, inside the marketplace dir, so marketplace and user delete also reclaim leftovers of a crashed sync.
+- Metadata vs content: a superuser can read `skill_archive_sha256`/`skill_archive_size` of private marketplaces through `GET /plugins/{id}` (its existing rule) but still gets 404 `not_found` from `/skill-archive` — metadata only, never content.
+- Retention: every digest that was ever current is kept (no GC). Removed on marketplace delete, on user delete (`user_data_cleanup_service`) and when a sync removes the entry; that entry then answers `not_found` and, if it returns, gets a new id.
+- Cap: 16 MB **uncompressed** (same constant as catalog packages) → `unsupported_reason=too_large`; `skill_archive_size` is the compressed size.
+- Consumer: Cinna Desktop pins the digest in `marketplace_skills[]` of the agent manifest (kit contract 1.15.0, see [local_agent_kit](../local_agent_kit/local_agent_kit.md)).
 
 Discovery:
 - `discover_plugins(search, category, plugin_type)` — Queries `LLMPluginMarketplacePlugin` joined with `LLMPluginMarketplace` where `public_discovery=true` OR `owner_id = current_user`; supports text search on name/description/author/category. Reads Postgres only.

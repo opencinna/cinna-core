@@ -351,6 +351,66 @@
         }
       }
     },
+    "marketplace_skills": {
+      "description": "Skills from the platform's plugin marketplaces that this agent uses, pinned by reference (contract 1.15.0). The host installs these from a marketplace the user can discover; nobody writes them by hand. The skill's files are never copied into skills/: a host downloads the pinned snapshot, checks it against archive_sha256, and gives it to the engine beside the agent's own skills. A pin's `name` must not be the name of a folder under skills/, of a skill the platform provides, of a catalog_skills[] pin, or of another marketplace pin.",
+      "type": "array",
+      "x-scope": "portable",
+      "x-import": "mapped to marketplace plugin links on cloud import (later)",
+      "items": {
+        "type": "object",
+        "required": ["entry_uuid", "marketplace_uuid", "marketplace_name", "name", "archive_sha256"],
+        "additionalProperties": true,
+        "properties": {
+          "entry_uuid": {
+            "description": "The marketplace entry's (plugin's) id on the instance it came from.",
+            "type": "string",
+            "format": "uuid",
+            "x-scope": "portable",
+            "x-import": "mapped with the entry (later)"
+          },
+          "marketplace_uuid": {
+            "description": "The marketplace's id on the instance it came from.",
+            "type": "string",
+            "format": "uuid",
+            "x-scope": "portable",
+            "x-import": "mapped with the entry (later)"
+          },
+          "marketplace_name": {
+            "description": "The marketplace's name when the pin was written, for display only.",
+            "type": "string",
+            "x-scope": "portable",
+            "x-import": "ignored"
+          },
+          "name": {
+            "description": "The skill's name, as in its SKILL.md. It is the name the engine knows the skill by, so it must not be the name of a folder under skills/, of a skill the platform provides, of a catalog_skills[] pin, or of another marketplace pin.",
+            "type": "string",
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+            "maxLength": 64,
+            "x-scope": "portable",
+            "x-import": "mapped with the entry (later)"
+          },
+          "archive_sha256": {
+            "description": "SHA-256 of the pinned snapshot's downloaded archive, lowercase hex. A host refuses a download that does not match.",
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "x-scope": "portable",
+            "x-import": "mapped with the entry (later)"
+          },
+          "commit_hash": {
+            "description": "The marketplace repository commit the snapshot was taken from, for display only.",
+            "type": ["string", "null"],
+            "x-scope": "portable",
+            "x-import": "ignored"
+          },
+          "version": {
+            "description": "The entry's version label when the pin was written, for display only.",
+            "type": ["string", "null"],
+            "x-scope": "portable",
+            "x-import": "ignored"
+          }
+        }
+      }
+    },
     "features": {
       "description": "Cloud-only capabilities the agent expects once imported. Ignored locally.",
       "type": "object",

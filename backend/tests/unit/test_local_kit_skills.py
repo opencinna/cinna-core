@@ -366,6 +366,85 @@ def test_a_version_over_64_characters_is_a_warning(agent: Path) -> None:
     assert [w for w in payload["warnings"] if "longer than 64" in w]
 
 
+MPIN = {
+    "entry_uuid": "11111111-2222-4333-8444-555555555555",
+    "marketplace_uuid": "66666666-7777-4888-9999-000000000000",
+    "marketplace_name": "Team Market",
+    "name": "market-report",
+    "archive_sha256": SHA,
+    "commit_hash": None,
+    "version": "1.0.0",
+}
+
+
+def test_a_well_formed_marketplace_pin_validates_clean(agent: Path) -> None:
+    set_manifest(agent, marketplace_skills=[MPIN])
+    payload = validate(agent)
+    assert payload["ok"] is True, payload["errors"]
+
+
+def test_a_marketplace_pin_named_like_an_authored_skill_is_an_error(agent: Path) -> None:
+    write_skill(agent, "market-report", "name: market-report\ndescription: d\n")
+    set_manifest(agent, marketplace_skills=[MPIN])
+    payload = validate(agent)
+    found = errors_mentioning(payload, "marketplace_skills[0]")
+    assert found and "skills/market-report/" in " ".join(found), payload["errors"]
+
+
+def test_a_marketplace_pin_named_like_a_platform_skill_is_an_error(agent: Path) -> None:
+    set_manifest(agent, marketplace_skills=[dict(MPIN, name="cinna-tasks")])
+    payload = validate(agent)
+    found = errors_mentioning(payload, "marketplace_skills[0]")
+    assert found and "platform provides" in " ".join(found), payload["errors"]
+
+
+def test_a_marketplace_pin_named_like_a_catalog_pin_is_an_error(agent: Path) -> None:
+    set_manifest(agent, catalog_skills=[PIN], marketplace_skills=[dict(MPIN, name="pdf-report")])
+    payload = validate(agent)
+    assert errors_mentioning(payload, "marketplace_skills"), payload["errors"]
+
+
+def test_two_marketplace_pins_of_one_name_or_entry_are_errors(agent: Path) -> None:
+    same_name = dict(MPIN, entry_uuid="aaaaaaaa-2222-4333-8444-555555555555")
+    set_manifest(agent, marketplace_skills=[MPIN, same_name])
+    assert errors_mentioning(validate(agent), "marketplace_skills[1]")
+    same_entry = dict(MPIN, name="other-skill")
+    set_manifest(agent, marketplace_skills=[MPIN, same_entry])
+    assert errors_mentioning(validate(agent), "marketplace_skills[1]")
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"entry_uuid": "nope"},
+        {"marketplace_uuid": "nope"},
+        {"archive_sha256": "xyz"},
+        {"name": "Bad Name"},
+    ],
+)
+def test_a_malformed_marketplace_pin_is_an_error(agent: Path, change: dict) -> None:
+    set_manifest(agent, marketplace_skills=[dict(MPIN, **change)])
+    payload = validate(agent)
+    assert payload["ok"] is False
+    assert errors_mentioning(payload, "marketplace_skills[0]"), payload["errors"]
+
+
+def test_a_manifest_with_authored_catalog_and_marketplace_skills_validates_clean(agent: Path) -> None:
+    write_skill(agent, "my-own", "name: my-own\ndescription: d\n")
+    set_manifest(agent, catalog_skills=[PIN], marketplace_skills=[MPIN])
+    payload = validate(agent)
+    assert payload["ok"] is True, payload["errors"]
+
+
+def test_the_manifest_schema_registers_marketplace_skills() -> None:
+    props = _schema("cinna-agent.schema.json")["properties"]
+    assert "marketplace_skills" in props
+    item = props["marketplace_skills"]["items"]
+    assert set(item["required"]) == {
+        "entry_uuid", "marketplace_uuid", "marketplace_name", "name", "archive_sha256",
+    }
+
+
 def test_publications_skills_entries_are_checked(agent: Path) -> None:
     (agent / "publications.json").write_text(
         json.dumps(

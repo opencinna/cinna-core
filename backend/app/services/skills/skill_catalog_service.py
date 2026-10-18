@@ -32,14 +32,11 @@ show.
 from __future__ import annotations
 
 import asyncio
-import gzip
 import hashlib
-import io
 import logging
 import os
 import re
 import shutil
-import tarfile
 import uuid
 from collections import Counter
 from dataclasses import dataclass, field
@@ -107,6 +104,7 @@ from app.services.environments.workspace_classification import (
     safe_copytree,
 )
 from app.services.skills.exceptions import SkillCatalogError
+from app.services.skills.skill_archive import build_skill_archive
 from app.services.skills.skill_credential_requirements import (
     SkillCredentialRequirements,
 )
@@ -2630,33 +2628,13 @@ class SkillCatalogService:
 
     @staticmethod
     def _build_archive_bytes(skill_dir: Path, skill_name: str) -> bytes:
-        raw = io.BytesIO()
-        files = SkillCatalogService.snapshot_files(skill_dir)
-        with tarfile.open(fileobj=raw, mode="w") as tar:
-            for path in files:
-                rel = path.relative_to(skill_dir).as_posix()
-                stat_result = path.stat()
-                info = tarfile.TarInfo(name=f"skills/{skill_name}/{rel}")
-                info.size = stat_result.st_size
-                info.mtime = 0
-                # Two modes only, chosen by whether the source file was
-                # executable. Preserving the bit matters: a skill's
-                # ``scripts/run.sh`` is meant to be run, and a catalog install
-                # that silently drops the bit would behave differently from the
-                # same skill sitting in a local ``skills/`` folder. Collapsing
-                # to two values (rather than copying st_mode) is what keeps the
-                # tarball deterministic and drops setuid/setgid/sticky, which is
-                # the actual privilege concern.
-                info.mode = 0o755 if stat_result.st_mode & 0o111 else 0o644
-                info.uid = info.gid = 0
-                info.uname = info.gname = ""
-                info.type = tarfile.REGTYPE
-                with path.open("rb") as handle:
-                    tar.addfile(info, handle)
-        compressed = io.BytesIO()
-        with gzip.GzipFile(fileobj=compressed, mode="wb", mtime=0) as gz:
-            gz.write(raw.getvalue())
-        return compressed.getvalue()
+        return build_skill_archive(
+            skill_name,
+            [
+                (path.relative_to(skill_dir).as_posix(), path)
+                for path in SkillCatalogService.snapshot_files(skill_dir)
+            ],
+        )
 
     @staticmethod
     def archive_sha256(revision: SkillPackageRevision) -> str | None:

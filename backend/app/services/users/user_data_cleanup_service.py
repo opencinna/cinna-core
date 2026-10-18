@@ -13,7 +13,9 @@ Cleaned, keyed by the deleted rows:
   down) and ``<ENV_INSTANCES_DIR>/<env_id>/``;
 - ``<APP_DATA_STORAGE_DIR>/<user_id>/`` (all the user's app-data volumes);
 - ``<UPLOAD_BASE_PATH>/<user_id>/`` (all the user's file uploads);
-- ``<ARTIFACT_STORAGE_DIR>/<artifact_id>/`` for every artifact the user owned.
+- ``<ARTIFACT_STORAGE_DIR>/<artifact_id>/`` for every artifact the user owned;
+- ``<SKILL_STORAGE_DIR>/marketplace-skills/<marketplace_id>/`` (skill archive
+  snapshots) for every plugin marketplace the user owned.
 
 Deliberately left: skill packages the user published (``publisher_user_id``
 is SET NULL, the package lives on, so does ``SKILL_STORAGE_DIR/<uuid>/``),
@@ -30,8 +32,12 @@ from app.core.config import settings
 from app.models.agents.agent import Agent
 from app.models.artifacts.artifact import Artifact
 from app.models.environments.environment import AgentEnvironment
+from app.models.plugins.llm_plugin import LLMPluginMarketplace
 from app.services.artifacts.artifact_storage import ArtifactStorage
 from app.services.common.data_dirs import remove_data_subdir
+from app.services.plugins.marketplace_skill_snapshots import (
+    MarketplaceSkillSnapshots,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +49,7 @@ class UserDataCleanup:
     user_id: uuid.UUID
     environment_ids: list[uuid.UUID] = field(default_factory=list)
     artifact_ids: list[uuid.UUID] = field(default_factory=list)
+    marketplace_ids: list[uuid.UUID] = field(default_factory=list)
 
 
 class UserDataCleanupService:
@@ -57,10 +64,16 @@ class UserDataCleanupService:
         artifact_ids = session.exec(
             select(Artifact.id).where(Artifact.owner_id == user_id)
         ).all()
+        marketplace_ids = session.exec(
+            select(LLMPluginMarketplace.id).where(
+                LLMPluginMarketplace.user_id == user_id
+            )
+        ).all()
         return UserDataCleanup(
             user_id=user_id,
             environment_ids=list(env_ids),
             artifact_ids=list(artifact_ids),
+            marketplace_ids=list(marketplace_ids),
         )
 
     @staticmethod
@@ -86,3 +99,7 @@ class UserDataCleanupService:
         )
         for artifact_id in cleanup.artifact_ids:
             await asyncio.to_thread(ArtifactStorage.remove_artifact, artifact_id)
+        for marketplace_id in cleanup.marketplace_ids:
+            await asyncio.to_thread(
+                MarketplaceSkillSnapshots.remove_marketplace, marketplace_id
+            )

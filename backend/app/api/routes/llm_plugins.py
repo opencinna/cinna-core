@@ -11,7 +11,8 @@ import uuid
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import FileResponse
 
 from app.api.deps import CurrentUser, SessionDep
 from app.models import (
@@ -34,6 +35,9 @@ from app.services.credentials.credentials_service import CredentialsService
 from app.services.plugins.llm_plugin_service import (
     LLMPluginService,
     MarketplaceFormatError,
+)
+from app.services.plugins.marketplace_skill_snapshots import (
+    MarketplaceSkillSnapshots,
 )
 from app.services.skills.exceptions import SkillCatalogError, http_error_for
 
@@ -286,6 +290,118 @@ def get_plugin(
     )
 
     return LLMPluginService.get_plugin_public(plugin, marketplace_name=marketplace.name)
+
+
+#: Most ids one batch lookup accepts.
+MAX_BATCH_PLUGIN_IDS = 100
+
+
+@router.get(
+    "/plugins/{plugin_id}/skill-archive",
+    response_class=FileResponse,
+    responses={
+        200: {"content": {"application/gzip": {}}},
+        404: {"description": "`not_found` or `snapshot_missing`"},
+        409: {"description": "`not_a_skill`"},
+    },
+)
+def get_plugin_skill_archive(
+    session: SessionDep,
+    current_user: CurrentUser,
+    plugin_id: uuid.UUID,
+    sha256: str | None = Query(default=None, pattern="^[0-9a-f]{64}$"),
+) -> Any:
+    """
+    Download a skills-format entry's archive snapshot.
+
+    Visible exactly when the entry is listed by `/discover` for the caller (own
+    or publicly discoverable marketplace; no superuser bypass). Without
+    `sha256` the current snapshot is served; with it, any digest that was ever
+    current for this entry. The response carries the digest in
+    `X-Archive-Sha256`; the client verifies the bytes against it.
+
+    Errors (`detail.code`): 404 `not_found` (unknown or not visible),
+    409 `not_a_skill` (no installable snapshot: another format, or an
+    unsupported entry such as `too_large`), 404 `snapshot_missing` (that
+    digest is not kept).
+    """
+    found = LLMPluginService.get_discoverable_plugin(
+        session, plugin_id, current_user.id
+    )
+    if found is None:
+        raise HTTPException(status_code=404, detail={"code": "not_found"})
+    plugin, marketplace = found
+    if plugin.skill_archive_sha256 is None:
+        raise HTTPException(status_code=409, detail={"code": "not_a_skill"})
+
+    want = sha256 or plugin.skill_archive_sha256
+    path = MarketplaceSkillSnapshots.existing_archive(marketplace.id, plugin.id, want)
+    try:
+        if path is None:
+            raise FileNotFoundError(want)
+        # One stat, handed to FileResponse: a delete racing the existence
+        # check answers snapshot_missing rather than a 500.
+        stat_result = path.stat()
+    except OSError:
+        raise HTTPException(status_code=404, detail={"code": "snapshot_missing"})
+
+    logger.info(
+        "marketplace_skill_archive_download user_id=%s plugin_id=%s sha=%s bytes=%s",
+        current_user.id,
+        plugin.id,
+        want,
+        stat_result.st_size,
+    )
+    return FileResponse(
+        path,
+        stat_result=stat_result,
+        media_type="application/gzip",
+        filename=f"{plugin.name}.tar.gz",
+        headers={"X-Archive-Sha256": want, "X-Content-Type-Options": "nosniff"},
+    )
+
+
+@router.get("/plugins", response_model=LLMPluginMarketplacePluginsPublic)
+def get_plugins_by_ids(
+    session: SessionDep,
+    current_user: CurrentUser,
+    ids: str = Query(description="Comma-separated plugin ids, at most 100"),
+) -> Any:
+    """
+    Look up several marketplace plugins by id.
+
+    Uses the `/discover` visibility rule: unknown and invisible ids are simply
+    absent. Duplicates are returned once, in request order; `count` is the
+    number of rows returned.
+
+    Errors (422, `detail.code`): `too_many_ids` (more than 100), `invalid_id`
+    (a value that is not a uuid).
+    """
+    raw_ids = [part.strip() for part in ids.split(",") if part.strip()]
+    if len(raw_ids) > MAX_BATCH_PLUGIN_IDS:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "too_many_ids",
+                "message": f"At most {MAX_BATCH_PLUGIN_IDS} ids per request.",
+            },
+        )
+    plugin_ids: list[uuid.UUID] = []
+    for raw in raw_ids:
+        try:
+            plugin_id = uuid.UUID(raw)
+        except ValueError:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "invalid_id", "message": f"Not a valid id: {raw[:64]!r}"},
+            )
+        if plugin_id not in plugin_ids:
+            plugin_ids.append(plugin_id)
+
+    plugins = LLMPluginService.get_discoverable_plugins(
+        session, plugin_ids, current_user.id
+    )
+    return LLMPluginMarketplacePluginsPublic(data=plugins, count=len(plugins))
 
 
 # =============================================================================

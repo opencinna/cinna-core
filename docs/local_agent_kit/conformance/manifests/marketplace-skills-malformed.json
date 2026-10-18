@@ -1,0 +1,35 @@
+{
+  "description": "A marketplace skill pin with every field malformed (bad uuids, bad sha, bad name, non-string marketplace_name, commit_hash and version): each field is an error of its own (contract 1.15.0).",
+  "manifest": {
+    "contract_version": "1.15.0",
+    "id": "0f6d2c1e-8a4b-4c3d-9e2f-1a2b3c4d5e6f",
+    "name": "Conformance Agent",
+    "slug": "conformance-agent",
+    "description": "Answers questions about invoices.",
+    "example_prompts": [
+      "Which invoices are overdue?"
+    ],
+    "marketplace_skills": [
+      {
+        "entry_uuid": "nope",
+        "marketplace_uuid": "also-nope",
+        "marketplace_name": 42,
+        "name": "Not_A_Name",
+        "archive_sha256": "xyz",
+        "commit_hash": 7,
+        "version": 3
+      }
+    ]
+  },
+  "expect": {
+    "errors": [
+      "marketplace_skills.entry_uuid",
+      "marketplace_skills.marketplace_uuid",
+      "marketplace_skills.marketplace_name",
+      "marketplace_skills.name",
+      "marketplace_skills.archive_sha256",
+      "marketplace_skills.commit_hash",
+      "marketplace_skills.version"
+    ]
+  }
+}

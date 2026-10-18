@@ -112,7 +112,7 @@ accepted:
 - **Required credentials** come from the manifest's `credentials[]` as user-provided slots; a bad
   entry is skipped and logged.
 - **Skills summary** lists the agent's own `skills/*/` (authored) and the catalog skills it pins by
-  reference (`catalog_skills[]`).
+  reference (`catalog_skills[]`). Marketplace skill pins (`marketplace_skills[]`) travel in the revision manifest unchanged and are not named in the skills summary.
 - The description follows the manifest.
 
 If the bookkeeping loses a race, that push gets no revision of its own and the next version's notes

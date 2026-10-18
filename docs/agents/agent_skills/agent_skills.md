@@ -119,6 +119,12 @@ run the script, and verifying readiness end to end.
 The agent page, the `/skills` command and the popup all read one merged index
 covering all three.
 
+A desktop agent can also install skills from a skills-format marketplace: Cinna
+Desktop downloads the entry's snapshot archive (see
+[Addon Marketplaces](../../application/plugin_marketplaces/plugin_marketplaces.md))
+and pins it in `marketplace_skills[]` of the agent manifest (kit contract 1.15.0).
+It shares the one skill namespace, and a shared desktop agent keeps the pins unchanged.
+
 **Platform skills** are a fourth, platform-owned kind that is not part of that
 index. Today there is one, `cinna-tasks`: the skill that teaches the Cinna Task
 Protocol (the `cinna` server's `tasks_*` tools — see
@@ -901,3 +907,4 @@ sweep skips denylisted names — it simply never travels again.
 - 2026-10-06: Platform skills — `cinna-tasks` (Cinna Task Protocol) is installed into every environment's core, projected beside the agent's skills, reserved against workspace skills, and listed by the fallback Agent Skills block.
 - 2026-10-10: Skills can be published from a desktop (preview + archive upload, additive grants, user-provided credential slots), and a revision pinned by a usable desktop agent can be downloaded and read without catalog visibility.
 - Desktop publish can name a publisher credential per slot, and a desktop install provisions those slots through `provision-local` as `skill_local_install` shares.
+- 2026-10-18: Desktop agents can install marketplace skills through snapshot archives and `marketplace_skills[]` pins.
