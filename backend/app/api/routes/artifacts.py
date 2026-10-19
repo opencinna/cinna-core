@@ -238,7 +238,7 @@ def replace_artifact_grants(
     artifact_id: uuid.UUID,
     body: list[ArtifactGrantIn],
 ) -> Any:
-    """Owner: replace the people who can view (people only; roles ⇒ 422)."""
+    """Owner: replace the people and user groups who can view (roles ⇒ 422)."""
     with artifact_errors():
         return ArtifactService.replace_grants(db, current_user, artifact_id, body)
 

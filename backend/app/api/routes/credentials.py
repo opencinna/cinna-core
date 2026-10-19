@@ -71,6 +71,7 @@ def _credential_to_public(
     used_in_bundle: bool = False,
     category: str = "mine",
     key_states: dict[uuid.UUID, KeyState] | None = None,
+    share_counts: tuple[dict[uuid.UUID, int], dict[uuid.UUID, int]] | None = None,
 ) -> CredentialPublic:
     """Convert a Credential model to CredentialPublic with share_count and status.
 
@@ -78,13 +79,21 @@ def _credential_to_public(
     the caller (batched once per page for ``read_credentials``) and threaded in
     so this helper never issues a per-row usage query. ``key_states`` is the
     batched issued-key lookup; when omitted, an ``agent_api`` row is resolved
-    on its own.
+    on its own. ``share_counts`` is the batched ``(direct, group)`` share
+    counts; when omitted, an owned row counts its own.
     """
     share_count = 0
-    if not is_shared:
-        # Only show share_count to owners
+    group_share_count = 0
+    if not is_shared and share_counts is not None:
+        share_count = share_counts[0].get(credential.id, 0)
+        group_share_count = share_counts[1].get(credential.id, 0)
+    elif not is_shared:
+        # Only show share counts to owners
         share_count = CredentialShareService.get_share_count_for_credential(
             session=session, credential_id=credential.id
+        )
+        group_share_count = CredentialShareService.get_group_share_count_for_credential(
+            session, credential.id
         )
 
     # Decrypt credential data to check completeness
@@ -107,6 +116,7 @@ def _credential_to_public(
         owner_id=credential.owner_id,
         user_workspace_id=credential.user_workspace_id,
         share_count=share_count,
+        group_share_count=group_share_count,
         is_shared=is_shared,
         owner_email=owner_email,
         is_placeholder=credential.is_placeholder,
@@ -202,6 +212,10 @@ def read_credentials(
         [c.id for c in credentials if c.type == CredentialType.AGENT_API],
     )
 
+    share_counts = CredentialShareService.share_counts_by_credential(
+        session, credential_ids
+    )
+
     # Convert to public models with share_count, category, and the batched badges.
     credentials_public = [
         _credential_to_public(
@@ -211,6 +225,7 @@ def read_credentials(
             used_in_bundle=c.id in bundle_flags,
             category=categories.get(c.id, "mine"),
             key_states=key_states,
+            share_counts=share_counts,
         )
         for c in credentials
     ]

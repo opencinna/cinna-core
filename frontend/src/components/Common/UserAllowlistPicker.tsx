@@ -1,16 +1,19 @@
+import { useQuery } from "@tanstack/react-query"
+import { Loader2, Share2, Users, X } from "lucide-react"
 import type { ReactNode } from "react"
 import { useEffect, useRef, useState } from "react"
-import { useQuery } from "@tanstack/react-query"
-import { Loader2, Users, X } from "lucide-react"
 
-import { UsersService } from "@/client"
+import { type UserGroupSearchResult, UsersService } from "@/client"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover"
 import {
-  Popover,
-  PopoverAnchor,
-  PopoverContent,
-} from "@/components/ui/popover"
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import { pluralize } from "@/utils/pluralize"
+import { useUserGroupSearch } from "./useUserGroupSearch"
 
 interface UserItem {
   id: string
@@ -31,10 +34,31 @@ export interface UserAllowlistSelectedItem {
   fallbackLabel?: string
 }
 
+export interface GroupSelectedItem {
+  // Caller-defined unique key, passed back via ``groups.onRemove``.
+  id: string
+  // The user group's id, used to filter it out of the group results.
+  groupId: string
+  name: string
+  memberCount?: number | null
+}
+
+/** Opt-in group mode: a "Groups" section above "People" in one search. */
+export interface UserAllowlistGroupsMode {
+  selected: GroupSelectedItem[]
+  onAdd: (group: UserGroupSearchResult) => void
+  onRemove: (item: GroupSelectedItem) => void
+  isAdding?: boolean
+  isRemoving?: boolean
+  // Group ids already committed elsewhere: filtered out of the results
+  // without a pill (the group twin of ``excludeUserIds``).
+  excludeGroupIds?: string[]
+}
+
 interface UserAllowlistPickerProps {
-  selected: UserAllowlistSelectedItem[]
-  onAdd: (user: UserItem) => void
-  onRemove: (item: UserAllowlistSelectedItem) => void
+  selected?: UserAllowlistSelectedItem[]
+  onAdd?: (user: UserItem) => void
+  onRemove?: (item: UserAllowlistSelectedItem) => void
   isAdding?: boolean
   isRemoving?: boolean
   searchPlaceholder?: string
@@ -52,15 +76,91 @@ interface UserAllowlistPickerProps {
   // yourself is meaningless for share/assignment pickers). Turn on for pickers
   // where self-selection is valid — e.g. assigning yourself agent-api scopes.
   includeSelf?: boolean
+  // Offer user groups too (shown first, ≤ 5 results). Without it the picker
+  // is people only, exactly as before.
+  groups?: UserAllowlistGroupsMode
+  // ``false`` gives a groups-only picker (requires ``groups``).
+  people?: boolean
 }
 
 const MIN_QUERY_LENGTH = 2
+const MAX_GROUP_RESULTS = 5
+
+function SectionHeading({ children }: { children: ReactNode }) {
+  return (
+    <p className="px-3 pt-2 pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+      {children}
+    </p>
+  )
+}
+
+function SectionStatus({
+  state,
+  noun,
+}: {
+  state: "searching" | "error" | "empty"
+  noun: "users" | "people" | "groups"
+}) {
+  if (state === "searching") {
+    return (
+      <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        Searching...
+      </div>
+    )
+  }
+  if (state === "error") {
+    /* Without this branch a failed search renders as "No matching …" — the
+       picker would report a fact about the directory when what actually
+       happened is that the request failed. */
+    return (
+      <p className="px-3 py-2 text-xs text-destructive" role="alert">
+        Couldn't search {noun}. This is a failed request, not an empty directory
+        — try again.
+      </p>
+    )
+  }
+  return (
+    <p className="px-3 py-2 text-xs text-muted-foreground">
+      No matching {noun}.
+    </p>
+  )
+}
+
+function RemovePillButton({
+  label,
+  disabled,
+  onClick,
+}: {
+  label: string
+  disabled?: boolean
+  onClick: () => void
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          onClick={onClick}
+          className="hover:text-destructive transition-colors"
+          disabled={disabled}
+          aria-label={label}
+        >
+          <X className="h-3 w-3" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="text-xs">
+        Remove
+      </TooltipContent>
+    </Tooltip>
+  )
+}
 
 export function UserAllowlistPicker({
-  selected,
+  selected = [],
   onAdd,
   onRemove,
-  isAdding,
+  isAdding: isAddingPerson,
   isRemoving,
   searchPlaceholder = "Search users to add...",
   emptyHint,
@@ -68,7 +168,10 @@ export function UserAllowlistPicker({
   enabled = true,
   excludeUserIds,
   includeSelf = false,
+  groups,
+  people = true,
 }: UserAllowlistPickerProps) {
+  const isAdding = isAddingPerson || groups?.isAdding
   const [query, setQuery] = useState("")
   const trimmedQuery = query.trim()
   const inputRef = useRef<HTMLInputElement>(null)
@@ -99,9 +202,21 @@ export function UserAllowlistPicker({
         limit: 10,
         includeSelf,
       }),
-    enabled: enabled && debouncedQuery.length >= MIN_QUERY_LENGTH,
+    enabled: people && enabled && debouncedQuery.length >= MIN_QUERY_LENGTH,
     staleTime: 30000,
   })
+
+  const groupSearch = useUserGroupSearch(trimmedQuery, {
+    enabled: !!groups && enabled,
+    minLength: MIN_QUERY_LENGTH,
+  })
+  const selectedGroupIds = new Set([
+    ...(groups?.selected ?? []).map((g) => g.groupId),
+    ...(groups?.excludeGroupIds ?? []),
+  ])
+  const groupResults = groupSearch.groups
+    .filter((g) => !selectedGroupIds.has(g.id))
+    .slice(0, MAX_GROUP_RESULTS)
 
   const filteredUserIds = new Set([
     ...selected.map((s) => s.userId),
@@ -110,6 +225,8 @@ export function UserAllowlistPicker({
   const results: UserItem[] = (searchData?.data ?? [])
     .map((u) => ({ id: u.id, email: u.email, full_name: u.full_name ?? null }))
     .filter((u) => !filteredUserIds.has(u.id))
+
+  const selectedGroups = groups?.selected ?? []
 
   // While the debounce hasn't caught up to what's typed (or the request is
   // in flight / hasn't produced data yet) we're still "searching" — without
@@ -127,38 +244,128 @@ export function UserAllowlistPicker({
       searchData === undefined &&
       !isSearchError)
 
+  const peopleState = isLoading
+    ? "searching"
+    : isSearchError
+      ? "error"
+      : results.length === 0
+        ? "empty"
+        : null
+  const peopleList = (
+    <div
+      className={groups ? "divide-y" : "divide-y max-h-60 overflow-y-auto pr-2"}
+    >
+      {results.map((u) => (
+        <button
+          key={u.id}
+          type="button"
+          className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-accent transition-colors"
+          onClick={() => {
+            onAdd?.(u)
+            setQuery("")
+            // The result button unmounts with the list; keep focus in the
+            // search rather than letting it drop to <body>.
+            inputRef.current?.focus()
+          }}
+          disabled={isAdding}
+        >
+          <span className="font-medium">{u.full_name || u.email}</span>
+          {u.full_name && (
+            <span className="text-muted-foreground text-xs">{u.email}</span>
+          )}
+        </button>
+      ))}
+    </div>
+  )
+  const peopleBody = peopleState ? (
+    <SectionStatus state={peopleState} noun={groups ? "people" : "users"} />
+  ) : (
+    peopleList
+  )
+
+  const groupState = groupSearch.isSearching
+    ? "searching"
+    : groupSearch.isError
+      ? "error"
+      : groupResults.length === 0
+        ? "empty"
+        : null
+  const groupBody = groupState ? (
+    <SectionStatus state={groupState} noun="groups" />
+  ) : (
+    <div className="divide-y">
+      {groupResults.map((g) => (
+        <button
+          key={g.id}
+          type="button"
+          className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-accent transition-colors"
+          onClick={() => {
+            groups?.onAdd(g)
+            setQuery("")
+            inputRef.current?.focus()
+          }}
+          disabled={isAdding}
+        >
+          <Users className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <span className="truncate font-medium">{g.name}</span>
+          <span className="shrink-0 text-muted-foreground text-xs">
+            {pluralize(g.member_count ?? 0, "member", "members")}
+          </span>
+        </button>
+      ))}
+    </div>
+  )
+
   const headerNode =
     label === null
       ? null
-      : label ?? (
+      : (label ?? (
           <Label className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Users className="h-3.5 w-3.5" />
+            <Share2 className="h-3.5 w-3.5" />
             Shared with
           </Label>
-        )
+        ))
 
   return (
     <div className="space-y-2">
       {headerNode}
-      {selected.length > 0 && (
+      {(selected.length > 0 || selectedGroups.length > 0) && (
         <div className="flex flex-wrap gap-1.5">
-          {selected.map((item) => (
+          {selectedGroups.map((item) => (
             <span
-              key={item.id}
-              className="flex items-center gap-1 bg-secondary text-secondary-foreground text-xs px-2 py-1 rounded-full"
+              key={`group:${item.id}`}
+              className="flex min-w-0 max-w-full items-center gap-1 bg-secondary text-secondary-foreground text-xs px-2 py-1 rounded-full"
             >
-              {item.fallbackLabel || "Unknown user"}
-              <button
-                type="button"
-                onClick={() => onRemove(item)}
-                className="hover:text-destructive transition-colors"
-                disabled={isRemoving}
-                aria-label="Remove user"
-              >
-                <X className="h-3 w-3" />
-              </button>
+              <Users className="h-3 w-3 shrink-0" aria-hidden />
+              <span className="min-w-0 truncate">{item.name}</span>
+              {item.memberCount != null && (
+                <span className="shrink-0 text-muted-foreground">
+                  · {pluralize(item.memberCount, "member", "members")}
+                </span>
+              )}
+              <RemovePillButton
+                label={`Remove group ${item.name}`}
+                disabled={groups?.isRemoving}
+                onClick={() => groups?.onRemove(item)}
+              />
             </span>
           ))}
+          {selected.map((item) => {
+            const pillLabel = item.fallbackLabel || "Unknown user"
+            return (
+              <span
+                key={item.id}
+                className="flex items-center gap-1 bg-secondary text-secondary-foreground text-xs px-2 py-1 rounded-full"
+              >
+                {pillLabel}
+                <RemovePillButton
+                  label={`Remove ${pillLabel}`}
+                  disabled={isRemoving}
+                  onClick={() => onRemove?.(item)}
+                />
+              </span>
+            )
+          })}
         </div>
       )}
       {/* The results render in a portal anchored to the input (Radix Popover),
@@ -203,51 +410,28 @@ export function UserAllowlistPicker({
             }
           }}
         >
-          {isLoading ? (
-            <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              Searching...
-            </div>
-          ) : isSearchError ? (
-            /* Without this branch a failed search renders as "No matching
-               users." — the picker would report a fact about the directory
-               when what actually happened is that the request failed, and the
-               user would conclude the person they are looking for does not
-               exist. */
-            <p className="px-3 py-2 text-xs text-destructive" role="alert">
-              Couldn't search users. This is a failed request, not an empty
-              directory — try again.
-            </p>
-          ) : results.length > 0 ? (
-            <div className="divide-y max-h-60 overflow-y-auto">
-              {results.map((u) => (
-                <button
-                  key={u.id}
-                  type="button"
-                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-accent transition-colors"
-                  onClick={() => {
-                    onAdd(u)
-                    setQuery("")
-                  }}
-                  disabled={isAdding}
-                >
-                  <span className="font-medium">{u.full_name || u.email}</span>
-                  {u.full_name && (
-                    <span className="text-muted-foreground text-xs">{u.email}</span>
-                  )}
-                </button>
-              ))}
+          {groups ? (
+            <div className="max-h-[40vh] overflow-y-auto pr-2">
+              <SectionHeading>Groups</SectionHeading>
+              {groupBody}
+              {people && (
+                <>
+                  <SectionHeading>People</SectionHeading>
+                  {peopleBody}
+                </>
+              )}
             </div>
           ) : (
-            <p className="px-3 py-2 text-xs text-muted-foreground">
-              No matching users.
-            </p>
+            peopleBody
           )}
         </PopoverContent>
       </Popover>
-      {selected.length === 0 && !trimmedQuery && emptyHint && (
-        <p className="text-xs text-muted-foreground">{emptyHint}</p>
-      )}
+      {selected.length === 0 &&
+        selectedGroups.length === 0 &&
+        !trimmedQuery &&
+        emptyHint && (
+          <p className="text-xs text-muted-foreground">{emptyHint}</p>
+        )}
     </div>
   )
 }

@@ -265,7 +265,11 @@ export function DataTable<TData, TValue>({
               table.getRowModel().rows.map((row) => (
                 <TableRow
                   key={row.id}
-                  className={cn(onRowClick && "cursor-pointer")}
+                  // `group/row` (named, so it cannot collide with a `group`
+                  // inside a cell) lets a cell hover-reveal the row's single
+                  // destructive action (§2 Row actions):
+                  // `opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100`.
+                  className={cn("group/row", onRowClick && "cursor-pointer")}
                   onClick={
                     onRowClick
                       ? (event) => {

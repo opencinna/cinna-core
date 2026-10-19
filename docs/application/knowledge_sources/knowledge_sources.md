@@ -102,7 +102,7 @@ This single rule — implemented once in `knowledge_access_service` — governs 
 
 - the source is `is_enabled=true` AND `status=connected`, AND
 - the querying user is **active**, AND
-- the source is **public**, OR the querying user is a **superuser**, OR (the source is **shared** AND the querying user is on its share list)
+- the source is **public**, OR the querying user is a **superuser**, OR (the source is **shared** AND the querying user is on its share list **or** belongs to a [user group](../user_groups/user_groups.md) on it; membership is live)
 
 For agent-driven queries, "the querying user" is resolved as the **agent's owner** — there is no separate agent-level or workspace-level scoping. Inactive users resolve to no accessible sources.
 
@@ -200,3 +200,11 @@ Agent (building mode)
 - **Non-admin user cannot access page**: Knowledge Sources is admin-only. The sidebar entry is inside the Admin dropdown and is only visible to superusers
 - **Can't delete an SSH key**: The API returns 409 if the key is still attached to one or more knowledge sources; check or change the SSH key on those sources first
 - **Can't attach an SSH key to a source**: The key must belong to the admin performing the create/update (400 otherwise) — pick one of your own keys, or ask its owner to attach it
+
+### Sharing with Groups (Admin)
+
+When a source is `shared`, the access card lets an admin add user groups next to individual users (`/knowledge-sources/{id}/shared-groups`, superuser only, idempotent). A group share only takes effect while the access level is `shared`. Removing a member or the group excludes the source from that user's next query; nothing is materialised.
+
+## Changelog
+
+- Shared sources can be shared with user groups.

@@ -1,5 +1,5 @@
 import { Link as RouterLink, useRouterState } from "@tanstack/react-router"
-import { Shield, Users, Store, BookOpen, Library, Server, Sparkles, SlidersHorizontal } from "lucide-react"
+import { Shield, User, Users, Store, BookOpen, Library, Server, Sparkles, SlidersHorizontal } from "lucide-react"
 
 import {
   SidebarMenuButton,
@@ -44,8 +44,16 @@ export function AdminMenu() {
         >
           <DropdownMenuItem asChild>
             <RouterLink to="/admin/users" onClick={handleMenuClick}>
-              <Users className="mr-2 h-4 w-4" />
+              {/* One glyph per principal kind, product-wide: a person is
+                  `User`, a group is `Users`. */}
+              <User className="mr-2 h-4 w-4" />
               Users
+            </RouterLink>
+          </DropdownMenuItem>
+          <DropdownMenuItem asChild>
+            <RouterLink to="/admin/user-groups" onClick={handleMenuClick}>
+              <Users className="mr-2 h-4 w-4" />
+              User Groups
             </RouterLink>
           </DropdownMenuItem>
           <DropdownMenuItem asChild>

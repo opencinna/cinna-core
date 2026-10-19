@@ -174,3 +174,47 @@ def test_generic_update_disabling_sharing_unlinks_and_resyncs_recipients(
     )
     assert shares.status_code == 200, shares.text
     assert shares.json()["count"] == 0
+
+
+def test_revoking_a_direct_share_keeps_the_link_while_a_group_still_covers_the_user(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    patch_environment_adapter,
+) -> None:
+    """D8: loss of access is computed. A group share still covers the recipient,
+    so revoking the direct share neither unlinks nor drops the credential from
+    the container; removing the member afterwards does."""
+    from tests.utils.user_group import create_group, remove_member
+
+    su = superuser_token_headers
+    owner, owner_headers = make_developer(client, su)
+    recipient, recipient_headers = make_developer(client, su)
+    group = create_group(client, su, member_ids=[recipient["id"]])
+
+    cred = _shareable_credential(client, owner_headers)
+    share = share_credential_via_api(client, owner_headers, cred["id"], recipient["email"])
+    r = client.post(
+        f"{API}/credentials/{cred['id']}/group-shares",
+        headers=owner_headers, json={"group_id": group["id"]},
+    )
+    assert r.status_code == 200, r.text
+
+    agent_id, adapter = _agent_with_adapter(
+        client, recipient_headers, patch_environment_adapter, "Revocation-GroupCovered",
+    )
+    link_credential_to_agent(client, recipient_headers, agent_id, cred["id"])
+    drain_tasks()
+
+    r = client.delete(
+        f"{API}/credentials/{cred['id']}/shares/{share['id']}", headers=owner_headers,
+    )
+    assert r.status_code == 200, r.text
+    drain_tasks()
+
+    assert cred["id"] in _linked_credential_ids(client, recipient_headers, agent_id)
+    assert cred["id"] in _synced_credential_ids(adapter)
+
+    remove_member(client, su, group["id"], recipient["id"])
+    drain_tasks()
+    assert _linked_credential_ids(client, recipient_headers, agent_id) == set()
+    assert cred["id"] not in _synced_credential_ids(adapter)

@@ -7,7 +7,7 @@ ownership against the current user.
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response, status
 from pydantic import BaseModel
 from sqlmodel import select
 
@@ -18,7 +18,11 @@ from app.models.bundles.agent_bundle_revision import (
     AgentBundleRevisionPublic,
     PublishRequest,
 )
-from app.models.bundles.bundle_permissions import BundlePermissionsOverview
+from app.models.bundles.bundle_permissions import (
+    BundleGroupGrantCreate,
+    BundlePermissionGroup,
+    BundlePermissionsOverview,
+)
 from app.models.bundles.catalog import (
     BundleCredentialDrift,
     CheckUpdatesResponse,
@@ -39,7 +43,11 @@ from app.services.agents.agent_service import AgentService
 from app.services.bundles.bundle_permissions_service import (
     BundlePermissionsService,
 )
+from app.services.bundles.bundle_service import BundleService
 from app.services.bundles.exceptions import BundleError
+from app.services.catalog.catalog_access_service import BUNDLE
+from app.services.catalog.catalog_events import CatalogEvents
+from app.services.catalog.exceptions import CatalogError
 from app.services.bundles.install_readiness_gate import InstallReadinessGate
 from app.services.bundles.install_service import InstallError, InstallService
 from app.services.bundles.publish_service import PublishService
@@ -421,6 +429,12 @@ def get_bundle_permissions_overview(
     ``get_bundle_credential_drift`` to avoid leaking the existence of a bundle
     to non-publishers.
     """
+    install = _resolve_publisher_install(session, agent_id, current_user)
+    return BundlePermissionsService.build_overview(session, install, current_user)
+
+
+def _resolve_publisher_install(session, agent_id: uuid.UUID, current_user) -> Agent:
+    """The caller's publisher install; 404 otherwise (never leaks a bundle)."""
     install = session.get(Agent, agent_id)
     if (
         install is None
@@ -428,7 +442,81 @@ def get_bundle_permissions_overview(
         or not install.is_publisher_install
     ):
         raise HTTPException(status_code=404, detail="Agent not found")
-    return BundlePermissionsService.build_overview(session, install, current_user)
+    return install
+
+
+def _resolve_managed_bundle(
+    session, agent_id: uuid.UUID, current_user
+) -> AgentBundle:
+    """The bundle behind the caller's publisher install, gated exactly like
+    the person-grant routes (``BundleService.get_for_publisher``)."""
+    install = _resolve_publisher_install(session, agent_id, current_user)
+    if install.bundle_uuid is None:
+        raise HTTPException(status_code=404, detail="Bundle not found")
+    try:
+        return BundleService.get_for_publisher(session, install.bundle_uuid, current_user)
+    except BundleError as e:
+        raise HTTPException(
+            status_code=e.http_status, detail=getattr(e, "detail", None) or str(e)
+        )
+
+
+@router.post(
+    "/{agent_id}/bundle-permissions/group-grants",
+    response_model=BundlePermissionGroup,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_developer)],
+)
+def add_bundle_group_grant(
+    agent_id: uuid.UUID,
+    data: BundleGroupGrantCreate,
+    session: SessionDep,
+    current_user: CurrentUser,
+    background_tasks: BackgroundTasks,
+) -> BundlePermissionGroup:
+    """Give a user group ``use`` on this install's bundle.
+
+    The card carries no level: being listed means members can use and
+    install. Same rules, lock and audit as ``PUT /catalog/items/{uuid}/grants``.
+    404 for an unknown group, 409 when the group already has a grant on the
+    bundle.
+    Members who just gained access get ``catalog.granted``.
+    """
+    bundle = _resolve_managed_bundle(session, agent_id, current_user)
+    try:
+        row, gained = BundlePermissionsService.add_group_grant(
+            session, bundle, data.group_id, current_user
+        )
+    except CatalogError as e:
+        raise HTTPException(
+            status_code=e.http_status, detail=getattr(e, "detail", None) or str(e)
+        )
+    background_tasks.add_task(CatalogEvents.granted, BUNDLE.wire_kind, bundle.id, gained)
+    return row
+
+
+@router.delete(
+    "/{agent_id}/bundle-permissions/group-grants/{grant_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_developer)],
+)
+def revoke_bundle_group_grant(
+    agent_id: uuid.UUID,
+    grant_id: uuid.UUID,
+    session: SessionDep,
+    current_user: CurrentUser,
+) -> Response:
+    """Remove one group grant from this install's bundle (audited like a
+    catalog grant change). 404 when ``grant_id`` is not a group grant of
+    the bundle."""
+    bundle = _resolve_managed_bundle(session, agent_id, current_user)
+    try:
+        BundlePermissionsService.revoke_group_grant(session, bundle, grant_id, current_user)
+    except CatalogError as e:
+        raise HTTPException(
+            status_code=e.http_status, detail=getattr(e, "detail", None) or str(e)
+        )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.put(

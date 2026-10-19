@@ -2,8 +2,9 @@
 
 One rule set for every kind (agent bundles, skill packages), made generic over
 a :class:`CatalogKindSpec`. An item carries ``visibility`` + ``is_listed``; its
-grant rows name a principal (a ``user``, or every holder of a ``role``; the
-``admin`` role also matches superusers) and a level
+grant rows name a principal (a ``user``, every holder of a ``role`` — the
+``admin`` role also matches superusers — or every member of a user ``group``,
+resolved live) and a level
 (:class:`~app.models.catalog.catalog_access.CatalogAccess`).
 
 Effective access (plan P1):
@@ -18,7 +19,7 @@ Effective access (plan P1):
 
 Management through ``/catalog/items`` (grants) is ``maintain`` or superuser
 (:meth:`CatalogAccessService.can_manage`). Only people can maintain, and at
-least one person always does.
+least one person always does. Groups, like roles, are capped at ``edit``.
 """
 from __future__ import annotations
 
@@ -27,7 +28,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, and_, col, select
 
@@ -39,6 +40,8 @@ from app.models.catalog.catalog_access import (
     CatalogGrantIn,
     CatalogMaintainer,
     CatalogPerson,
+    CatalogPrincipal,
+    CatalogPrincipalGroup,
     CatalogPrincipalKind,
     CatalogPrincipalRole,
     CatalogPrincipalUser,
@@ -47,6 +50,7 @@ from app.models.events.security_event import CATALOG_GRANTS_CHANGED
 from app.models.skills.skill_package import SkillPackage
 from app.models.skills.skill_package_access_grant import SkillPackageAccessGrant
 from app.models.users.user import VALID_USER_ROLES, User, UserRole
+from app.models.users.user_group import UserGroup, UserGroupMember
 from app.services.catalog.catalog_events import add_audit_event
 from app.services.catalog.exceptions import (
     CatalogAccessDeniedError,
@@ -54,6 +58,7 @@ from app.services.catalog.exceptions import (
     CatalogNotFoundError,
     CatalogValidationError,
 )
+from app.services.users.user_group_access import UserGroupAccess
 
 NO_MAINTAINER_DETAIL = "This item needs at least one maintainer."
 PEOPLE_ONLY_MAINTAIN_DETAIL = "Only a person can be a maintainer."
@@ -65,8 +70,12 @@ NOT_MAINTAINER_DETAIL = "Only a maintainer of this item can do that."
 _USERS = "users"
 _PUBLIC = "public"
 
-# Sort order of grants in a listing: people before roles.
-_PRINCIPAL_ORDER = {CatalogPrincipalKind.USER: 0, CatalogPrincipalKind.ROLE: 1}
+# Sort order of grants in a listing: people, then groups, then roles.
+_PRINCIPAL_ORDER = {
+    CatalogPrincipalKind.USER: 0,
+    CatalogPrincipalKind.GROUP: 1,
+    CatalogPrincipalKind.ROLE: 2,
+}
 
 
 @dataclass(frozen=True)
@@ -129,6 +138,12 @@ class CatalogAccessService:
                 col(grant.principal_kind) == CatalogPrincipalKind.ROLE,
                 col(grant.principal_id).in_(
                     sorted(CatalogAccessService.user_roles(user))
+                ),
+            ),
+            and_(
+                col(grant.principal_kind) == CatalogPrincipalKind.GROUP,
+                col(grant.group_id).in_(
+                    UserGroupAccess.member_group_ids_subquery(user.id)
                 ),
             ),
         )
@@ -285,9 +300,9 @@ class CatalogAccessService:
         actor: User,
     ) -> list[Any]:
         """``grants`` as unsaved rows of ``item``. A principal listed twice
-        folds to its highest level. Raises 422 for a role maintainer, an
-        unknown role or an unknown/inactive user, and 409 when no person
-        maintains."""
+        folds to its highest level. Raises 422 for a role or group
+        maintainer, an unknown role, an unknown group or an unknown/inactive
+        user, and 409 when no person maintains."""
         user_ids = {
             g.principal.user_id
             for g in grants
@@ -302,19 +317,28 @@ class CatalogAccessService:
                     )
                 ).all()
             )
-        folded: dict[tuple[str, str], tuple[uuid.UUID | None, str]] = {}
+        group_ids = {
+            g.principal.group_id
+            for g in grants
+            if isinstance(g.principal, CatalogPrincipalGroup)
+        }
+        known_group_ids: set[uuid.UUID] = set()
+        if group_ids:
+            known_group_ids = set(
+                session.exec(
+                    select(UserGroup.id).where(col(UserGroup.id).in_(group_ids))
+                ).all()
+            )
+        folded: dict[tuple[str, str], tuple[uuid.UUID | None, uuid.UUID | None, str]] = {}
         for grant in grants:
-            kind, principal_id, user_id = _principal_key(grant.principal)
-            if kind == CatalogPrincipalKind.ROLE:
-                if grant.access == CatalogAccess.MAINTAIN:
-                    raise CatalogValidationError(PEOPLE_ONLY_MAINTAIN_DETAIL)
-                if principal_id not in VALID_USER_ROLES:
-                    raise CatalogValidationError(f"Unknown role '{principal_id}'")
-            elif user_id not in active_ids:
-                raise CatalogValidationError("That person is not an active user")
+            kind, principal_id, user_id, group_id = _principal_key(grant.principal)
+            _check_principal_rule(
+                kind, principal_id, user_id, group_id, grant.access,
+                active_ids, known_group_ids,
+            )
             previous = folded.get((kind, principal_id))
-            access = CatalogAccess.max(previous[1] if previous else None, grant.access)
-            folded[(kind, principal_id)] = (user_id, access or grant.access)
+            access = CatalogAccess.max(previous[2] if previous else None, grant.access)
+            folded[(kind, principal_id)] = (user_id, group_id, access or grant.access)
 
         rows = [
             spec.grant_model(
@@ -322,10 +346,11 @@ class CatalogAccessService:
                 principal_kind=kind,
                 principal_id=principal_id,
                 user_id=user_id,
+                group_id=group_id,
                 access=access,
                 granted_by_user_id=actor.id,
             )
-            for (kind, principal_id), (user_id, access) in folded.items()
+            for (kind, principal_id), (user_id, group_id, access) in folded.items()
         ]
         if not any(
             row.principal_kind == CatalogPrincipalKind.USER
@@ -529,7 +554,7 @@ class CatalogAccessService:
                     "kind": spec.wire_kind,
                     "uuid": str(item.id),
                     "grants": [
-                        {"principal": _principal_label(g), "access": g.access}
+                        {"principal": principal_label(g), "access": g.access}
                         for g in grants
                     ],
                 },
@@ -550,12 +575,108 @@ class CatalogAccessService:
             after - before,
         )
 
+    # ── Single-group add / remove (Bundle tab permissions card) ────
+
+    @staticmethod
+    def find_group_grant(
+        session: Session, spec: CatalogKindSpec, item_id: uuid.UUID, group_id: uuid.UUID
+    ) -> Any | None:
+        grant = spec.grant_model
+        return session.exec(
+            select(grant).where(
+                spec.fk_col == item_id,
+                grant.principal_kind == CatalogPrincipalKind.GROUP,
+                grant.group_id == group_id,
+            )
+        ).first()
+
+    @staticmethod
+    def add_group_grant(
+        session: Session,
+        spec: CatalogKindSpec,
+        item: Any,
+        group_id: uuid.UUID,
+        access: str,
+        actor: User,
+    ) -> tuple[Any, UserGroup, set[uuid.UUID]]:
+        """Add one group grant to ``item`` under the same rules, lock and audit
+        as a full replace; commits. Returns the row, the group (loaded before
+        the commit, so a concurrent group deletion cannot fail the caller) and
+        the users who just gained access. 404 for an unknown group, 422 for ``maintain`` (D6),
+        409 when the group already holds a grant on ``item``."""
+        group = session.get(UserGroup, group_id)
+        if group is None:
+            raise CatalogNotFoundError("Group not found")
+        _check_principal_rule(
+            CatalogPrincipalKind.GROUP, str(group_id), None, group_id, access,
+            set(), {group_id},
+        )
+        try:
+            CatalogAccessService._lock_item(session, spec, item.id)
+            if CatalogAccessService.find_group_grant(session, spec, item.id, group_id):
+                raise CatalogConflictError("This group already has access to this item")
+            before = CatalogAccessService.readers(session, spec, item)
+            row = spec.grant_model(
+                **{spec.grant_fk: item.id},
+                principal_kind=CatalogPrincipalKind.GROUP,
+                principal_id=str(group_id),
+                group_id=group_id,
+                access=access,
+                granted_by_user_id=actor.id,
+            )
+            session.add(row)
+            session.flush()
+            after = CatalogAccessService.readers(session, spec, item)
+            _audit_grants_changed(session, spec, item, actor)
+            # Detach both rows before the commit so their loaded values
+            # survive it: no post-commit reload that a concurrent group
+            # deletion (cascading the grant) could fail.
+            session.expunge(row)
+            session.expunge(group)
+            session.commit()
+        except IntegrityError as exc:
+            session.rollback()
+            raise CatalogConflictError(
+                "Sharing for this item was changed at the same time; try again"
+            ) from exc
+        except Exception:
+            session.rollback()
+            raise
+        return row, group, after - before
+
+    @staticmethod
+    def remove_group_grant(
+        session: Session,
+        spec: CatalogKindSpec,
+        item: Any,
+        grant_id: uuid.UUID,
+        actor: User,
+    ) -> None:
+        """Delete one group grant of ``item`` under the item lock, audit,
+        commit. 404 when ``grant_id`` is not a group grant of ``item``."""
+        try:
+            CatalogAccessService._lock_item(session, spec, item.id)
+            row = session.get(spec.grant_model, grant_id)
+            if (
+                row is None
+                or getattr(row, spec.grant_fk) != item.id
+                or row.principal_kind != CatalogPrincipalKind.GROUP
+            ):
+                raise CatalogNotFoundError("Group grant not found for this item")
+            session.delete(row)
+            session.flush()
+            _audit_grants_changed(session, spec, item, actor)
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+
     @staticmethod
     def grants_public(
         session: Session, spec: CatalogKindSpec, item: Any
     ) -> list[CatalogGrant]:
-        """Every grant of ``item`` on the wire (two queries), highest level
-        first, people before roles."""
+        """Every grant of ``item`` on the wire (at most three queries),
+        highest level first, then people, groups, roles."""
         rows = CatalogAccessService.grant_rows(session, spec, item.id)
         people_ids = {r.user_id for r in rows if r.user_id} | {
             r.granted_by_user_id for r in rows if r.granted_by_user_id
@@ -566,23 +687,40 @@ class CatalogAccessService:
                 u.id: u
                 for u in session.exec(select(User).where(col(User.id).in_(people_ids))).all()
             }
+        groups = _groups_with_member_counts(
+            session,
+            {
+                r.group_id
+                for r in rows
+                if r.principal_kind == CatalogPrincipalKind.GROUP and r.group_id
+            },
+        )
         result: list[CatalogGrant] = []
         for row in rows:
             granted_by = people.get(row.granted_by_user_id) if row.granted_by_user_id else None
+            member_count: int | None = None
+            principal: CatalogPrincipal
             if row.principal_kind == CatalogPrincipalKind.USER and row.user_id:
                 person = people.get(row.user_id)
-                principal: CatalogPrincipalUser | CatalogPrincipalRole = (
-                    CatalogPrincipalUser(user_id=row.user_id)
-                )
+                principal = CatalogPrincipalUser(user_id=row.user_id)
                 name = display_name(person) if person else str(row.user_id)
-            else:
+            elif row.principal_kind == CatalogPrincipalKind.GROUP and row.group_id:
+                principal = CatalogPrincipalGroup(group_id=row.group_id)
+                group_name, member_count = groups.get(row.group_id, (str(row.group_id), 0))
+                name = group_name
+            elif row.principal_kind == CatalogPrincipalKind.ROLE:
                 principal = CatalogPrincipalRole(role=row.principal_id)
                 name = row.principal_id
+            else:
+                # A row the check constraints should make impossible; never
+                # guess its principal.
+                continue
             result.append(
                 CatalogGrant(
                     principal=principal,
                     access=row.access,
                     display_name=name,
+                    member_count=member_count,
                     granted_by=CatalogPerson(
                         user_id=granted_by.id, display_name=display_name(granted_by)
                     )
@@ -594,7 +732,7 @@ class CatalogAccessService:
         result.sort(
             key=lambda g: (
                 -CatalogAccess.rank(g.access),
-                0 if isinstance(g.principal, CatalogPrincipalUser) else 1,
+                _PRINCIPAL_ORDER[_wire_kind(g.principal)],
                 g.display_name.lower(),
             )
         )
@@ -606,10 +744,12 @@ class CatalogAccessService:
     def _readers_for(
         session: Session, item: Any, grants: Iterable[Any]
     ) -> set[uuid.UUID]:
-        """Active users to whom ``grants`` give effective access to ``item``."""
+        """Active users to whom ``grants`` give effective access to ``item``
+        (role and group grants expanded to their current holders)."""
         use_counts = item.visibility == _USERS and item.is_listed
         user_ids: set[uuid.UUID] = set()
         roles: set[str] = set()
+        group_ids: set[uuid.UUID] = set()
         for grant in grants:
             if grant.access == CatalogAccess.USE and not use_counts:
                 continue
@@ -619,7 +759,11 @@ class CatalogAccessService:
                 roles.add(grant.principal_id)
             elif grant.principal_kind == CatalogPrincipalKind.USER and grant.user_id:
                 user_ids.add(grant.user_id)
+            elif grant.principal_kind == CatalogPrincipalKind.GROUP and grant.group_id:
+                group_ids.add(grant.group_id)
 
+        # Active members only; the role/user query below filters on activity too.
+        user_ids |= UserGroupAccess.active_member_ids(session, group_ids)
         predicates = []
         if user_ids:
             predicates.append(col(User.id).in_(user_ids))
@@ -641,16 +785,99 @@ def display_name(user: User) -> str:
     return user.full_name or user.email
 
 
-def _principal_key(
-    principal: CatalogPrincipalUser | CatalogPrincipalRole,
-) -> tuple[str, str, uuid.UUID | None]:
-    """``(principal_kind, principal_id, user_id)`` for a wire principal."""
+def _wire_kind(principal: CatalogPrincipal) -> str:
+    """``principal_kind`` of a wire principal."""
     if isinstance(principal, CatalogPrincipalUser):
-        return CatalogPrincipalKind.USER, str(principal.user_id), principal.user_id
-    return CatalogPrincipalKind.ROLE, principal.role, None
+        return CatalogPrincipalKind.USER
+    if isinstance(principal, CatalogPrincipalGroup):
+        return CatalogPrincipalKind.GROUP
+    return CatalogPrincipalKind.ROLE
 
 
-def _principal_label(grant: CatalogGrantIn) -> str:
-    if isinstance(grant.principal, CatalogPrincipalUser):
-        return f"user:{grant.principal.user_id}"
-    return f"role:{grant.principal.role}"
+def _principal_key(
+    principal: CatalogPrincipal,
+) -> tuple[str, str, uuid.UUID | None, uuid.UUID | None]:
+    """``(principal_kind, principal_id, user_id, group_id)`` for a wire principal."""
+    if isinstance(principal, CatalogPrincipalUser):
+        return CatalogPrincipalKind.USER, str(principal.user_id), principal.user_id, None
+    if isinstance(principal, CatalogPrincipalGroup):
+        return CatalogPrincipalKind.GROUP, str(principal.group_id), None, principal.group_id
+    return CatalogPrincipalKind.ROLE, principal.role, None, None
+
+
+def _check_principal_rule(
+    kind: str,
+    principal_id: str,
+    user_id: uuid.UUID | None,
+    group_id: uuid.UUID | None,
+    access: str,
+    active_ids: set[uuid.UUID],
+    known_group_ids: set[uuid.UUID],
+) -> None:
+    """The per-principal rules of a grant (422): roles and groups never
+    maintain (D6), a role must be known, a group must exist and a person must
+    be an active user."""
+    if kind == CatalogPrincipalKind.ROLE:
+        if access == CatalogAccess.MAINTAIN:
+            raise CatalogValidationError(PEOPLE_ONLY_MAINTAIN_DETAIL)
+        if principal_id not in VALID_USER_ROLES:
+            raise CatalogValidationError(f"Unknown role '{principal_id}'")
+    elif kind == CatalogPrincipalKind.GROUP:
+        if group_id not in known_group_ids:
+            raise CatalogValidationError("Unknown group")
+        if access == CatalogAccess.MAINTAIN:
+            raise CatalogValidationError(PEOPLE_ONLY_MAINTAIN_DETAIL)
+    elif user_id not in active_ids:
+        raise CatalogValidationError("That person is not an active user")
+
+
+def _audit_grants_changed(
+    session: Session, spec: CatalogKindSpec, item: Any, actor: User
+) -> None:
+    """``CATALOG_GRANTS_CHANGED`` carrying ``item``'s full grant list as it
+    stands now — the meta shape of a full replace."""
+    rows = CatalogAccessService.grant_rows(session, spec, item.id)
+    add_audit_event(
+        session,
+        actor.id,
+        CATALOG_GRANTS_CHANGED,
+        {
+            "kind": spec.wire_kind,
+            "uuid": str(item.id),
+            "grants": [
+                {"principal": f"{r.principal_kind}:{r.principal_id}", "access": r.access}
+                for r in rows
+            ],
+        },
+    )
+
+
+def principal_label(grant: CatalogGrantIn) -> str:
+    """``user:<id>`` / ``group:<id>`` / ``role:<value>`` for audit meta."""
+    kind, principal_id, _, _ = _principal_key(grant.principal)
+    return f"{kind}:{principal_id}"
+
+
+def _groups_with_member_counts(
+    session: Session, group_ids: set[uuid.UUID]
+) -> dict[uuid.UUID, tuple[str, int]]:
+    """``{group_id: (name, active_member_count)}`` in one query.
+
+    Only active members count; a group with none still appears with 0.
+    """
+    if not group_ids:
+        return {}
+    rows = session.exec(
+        select(UserGroup.id, UserGroup.name, func.count(col(User.id)))
+        .outerjoin(UserGroupMember, col(UserGroupMember.group_id) == col(UserGroup.id))
+        .outerjoin(
+            User,
+            and_(
+                col(User.id) == col(UserGroupMember.user_id),
+                User.is_active == True,  # noqa: E712
+            ),
+        )
+        .where(col(UserGroup.id).in_(group_ids))
+        .group_by(col(UserGroup.id), col(UserGroup.name))
+    ).all()
+    return {group_id: (name, count) for group_id, name, count in rows}

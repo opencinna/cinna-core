@@ -422,3 +422,11 @@ Two consequences worth knowing when reading this table:
 ---
 
 *Last updated: 2026-09-16 — Anthropic info banner and setup guide now recommend API keys over Claude Code OAuth tokens. Previously: 2026-09-06 — zero-touch onboarding phase 5: the provider adapter registry absorbed the per-provider probe/bag/SDK tables, `leader_session` fixed the discovery scheduler's leaked advisory lock, `share_credential` gained the admin-managed refusal (`is_shareable`, widened from minted-only to every managed child and now raising the typed `AICredentialNotShareableError`), and the `AICredential` invariant is stated here. Earlier: 2026-06-15 — ListModelsButton; bare model override → provider prefix re-qualification in environment_lifecycle.py*
+
+## Group Sharing
+
+Added with [User Groups](../user_groups/user_groups_tech.md) (migration `7896e6f51c03`).
+
+- Table `ai_credential_group_share` (`backend/app/models/credentials/ai_credential_group_share.py`): credential x group, unique pair; schemas `AICredentialGroupShareCreate`, `AICredentialGroupSharePublic`, `AICredentialGroupSharesPublic`. `AICredentialSharePublic`-style rows (`SharedAICredentialsPublic`) carry `via_groups: list[UserGroupRef]`; owned rows carry a group share count.
+- Endpoints (`backend/app/api/routes/ai_credentials.py`): `GET /api/v1/ai-credentials/shared-with-me` (declared above `/{credential_id}`), `POST` / `GET /api/v1/ai-credentials/{credential_id}/group-shares`, `DELETE /api/v1/ai-credentials/{credential_id}/group-shares/{group_id}`.
+- `AICredentialsService`: `share_with_group` (400 when `is_shareable` is false), `list_group_shares`, `revoke_group_share` / `remove_group_share`, `list_shared_with_me`, `users_without_access`, `get_credential_for_use` widened to group members. On loss it NULLs `conversation_ai_credential_id` / `building_ai_credential_id` on the lost users' environments and restarts running ones via `_restart_environment_background` tasks (strong references kept in a module set).

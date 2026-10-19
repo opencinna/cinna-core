@@ -5,6 +5,18 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
+/**
+ * What an empty scope list means, by whose grant it is: a person's empty
+ * grant still identifies them; a group's identifies its members but adds no
+ * scopes; with no grant at all, saving nothing writes nothing.
+ */
+export const SCOPE_EMPTY_HINTS = {
+  person: "No scopes — the user is identified but carries no capabilities.",
+  group:
+    "No scopes — members are identified here, but gain no scopes from this group.",
+  none: "No scopes — nothing is granted on this producer.",
+} as const
+
 export type ScopeCatalogEntry = { name: string; description?: string | null }
 
 interface AgentApiScopeEditorProps {
@@ -31,7 +43,7 @@ export function AgentApiScopeEditor({
   scopes,
   onChange,
   catalogScopes,
-  emptyHint = "No scopes — the user is identified but carries no capabilities.",
+  emptyHint = SCOPE_EMPTY_HINTS.person,
   disabled,
 }: AgentApiScopeEditorProps) {
   const [customScope, setCustomScope] = useState("")
@@ -51,7 +63,9 @@ export function AgentApiScopeEditor({
     setCustomScope("")
   }
 
-  const unassignedCatalog = catalogScopes.filter((s) => !scopes.includes(s.name))
+  const unassignedCatalog = catalogScopes.filter(
+    (s) => !scopes.includes(s.name),
+  )
 
   return (
     <div className="space-y-2">

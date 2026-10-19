@@ -63,3 +63,15 @@ When a picker shows *existing* assignments (edit dialogs), the assignment record
 - [Credential Sharing](../../agents/agent_credentials/credential_sharing.md)
 - [Identity Routing](../../application/identity_routing/identity_routing.md)
 - [Agent Bundles](../../agents/agent_bundles/agent_bundles.md)
+
+## Groups mode
+
+Share pickers can also offer [user groups](../../application/user_groups/user_groups.md). The groups mode is backed by `GET /api/v1/user-groups/search?q=&limit=` (any authenticated user; limit clamped 1-25; empty `q` returns the first groups by name; items are `{id, name, member_count}`, never the members). Group pills show the name and member count. There is no separate group picker component.
+
+Built:
+
+- `frontend/src/components/Common/UserAllowlistPicker.tsx` takes an opt-in `groups` prop (`UserAllowlistGroupsMode`: `selected: GroupSelectedItem[]` with `id`, `groupId`, `name`, `memberCount`; `onAdd(group)`, `onRemove(item)`, `isAdding`, `isRemoving`) and `people={false}` for a groups-only picker (requires `groups`). Groups show first (up to 5 results) above People in one search. Without `groups`, behaviour is unchanged.
+- `frontend/src/components/Common/useUserGroupSearch.ts` is the shared search hook over `GET /user-groups/search`.
+- `frontend/src/components/Catalog/People/CatalogPrincipalPicker.tsx` has `allowGroups` (people, groups or roles).
+- `frontend/src/utils/principalKinds.ts` holds the glyphs: person `User`, group `Users`, role `ShieldCheck`.
+- Opt-in callers: catalog People, `Credentials/CredentialSharing.tsx` (group pills; unsharing that would cut links asks first via `UnshareCredentialGroupDialog`), `UserSettings/AICredentials/AICredentialGroupShareDialog.tsx` (groups-only), `KnowledgeSources/KnowledgeSourceAccessCard.tsx`, and the artifact people form.

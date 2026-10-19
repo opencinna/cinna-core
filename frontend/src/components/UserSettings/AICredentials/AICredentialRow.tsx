@@ -6,11 +6,13 @@ import {
   ShieldCheck,
   Star,
   Trash2,
+  Users,
 } from "lucide-react"
 import { useState } from "react"
 
 import type { AICredentialPublic } from "@/client"
 import { AiCredentialsService } from "@/client"
+import { RowFlag } from "@/components/Common/ListRow"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -27,8 +29,10 @@ import {
 } from "@/components/ui/tooltip"
 import useCustomToast from "@/hooks/useCustomToast"
 import { cn } from "@/lib/utils"
+import { pluralize } from "@/utils/pluralize"
 import { AffectedEnvironmentsDialog } from "../AffectedEnvironmentsDialog"
 import { DeleteAICredentialDialog } from "../DeleteAICredentialDialog"
+import { AICredentialGroupShareDialog } from "./AICredentialGroupShareDialog"
 import { describeExpiry, getTypeDisplayName } from "./credentialTypes"
 import { EditAICredentialDialog } from "./EditAICredentialDialog"
 
@@ -56,6 +60,7 @@ export function AICredentialRow({ credential }: AICredentialRowProps) {
   const [editOpen, setEditOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [affectedOpen, setAffectedOpen] = useState(false)
+  const [shareOpen, setShareOpen] = useState(false)
 
   const setDefaultMutation = useMutation({
     mutationFn: () =>
@@ -89,6 +94,10 @@ export function AICredentialRow({ credential }: AICredentialRowProps) {
         : (expiry?.fact ?? null)
 
   const canEdit = !credential.is_admin_managed
+  // D9: only the owner's own keys are shareable, never an admin-managed one.
+  // Not gated by role (capability is the server's call).
+  const canShare = !credential.is_admin_managed
+  const groupShareCount = credential.group_share_count ?? 0
   const canSetDefault = !credential.is_default
   const hasMenu = canEdit || canSetDefault
 
@@ -154,6 +163,14 @@ export function AICredentialRow({ credential }: AICredentialRowProps) {
       </div>
 
       <div className="flex items-center gap-0.5 shrink-0">
+        {groupShareCount > 0 && (
+          <span className="mr-1">
+            <RowFlag
+              icon={Users}
+              label={`Shared with ${pluralize(groupShareCount, "group", "groups")}`}
+            />
+          </span>
+        )}
         {hasMenu ? (
           <DropdownMenu>
             <Tooltip>
@@ -194,6 +211,17 @@ export function AICredentialRow({ credential }: AICredentialRowProps) {
                   Edit
                 </DropdownMenuItem>
               )}
+              {canShare && (
+                <DropdownMenuItem
+                  onSelect={(e) => {
+                    e.preventDefault()
+                    setShareOpen(true)
+                  }}
+                >
+                  <Users />
+                  Share with groups
+                </DropdownMenuItem>
+              )}
               {canEdit && <DropdownMenuSeparator />}
               {canEdit && (
                 <DropdownMenuItem
@@ -225,6 +253,14 @@ export function AICredentialRow({ credential }: AICredentialRowProps) {
           open
           onOpenChange={setEditOpen}
           onSaved={() => setAffectedOpen(true)}
+        />
+      )}
+
+      {shareOpen && (
+        <AICredentialGroupShareDialog
+          credential={credential}
+          open
+          onOpenChange={setShareOpen}
         />
       )}
 

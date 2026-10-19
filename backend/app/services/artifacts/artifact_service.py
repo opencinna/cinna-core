@@ -43,6 +43,7 @@ from app.models.artifacts.artifact_grant import (
     ArtifactGrant,
     ArtifactGrantIn,
     ArtifactGrantPublic,
+    ArtifactGroupGrant,
 )
 from app.models.artifacts.artifact_link import ArtifactLink, ArtifactLinkPublic
 from app.models.artifacts.artifact_revision import (
@@ -50,8 +51,13 @@ from app.models.artifacts.artifact_revision import (
     ArtifactRevision,
     ArtifactRevisionPublic,
 )
-from app.models.catalog.catalog_access import CatalogPerson, CatalogPrincipalUser
+from app.models.catalog.catalog_access import (
+    CatalogPerson,
+    CatalogPrincipalGroup,
+    CatalogPrincipalUser,
+)
 from app.models.users.user import User
+from app.models.users.user_group import UserGroup
 from app.models.users.user_workspace import UserWorkspace
 from app.services.artifacts import artifact_cap
 from app.services.artifacts.artifact_access import ArtifactAccess
@@ -70,6 +76,7 @@ from app.services.artifacts.artifact_ingest import (
 )
 from app.services.artifacts.artifact_mime import is_html_path
 from app.services.artifacts.artifact_storage import ArtifactStorage
+from app.services.users.user_group_access import UserGroupAccess
 
 LIST_MAX_LIMIT = 200
 
@@ -431,14 +438,14 @@ class ArtifactService:
         grant_counts: dict[uuid.UUID, int] = {}
         link_counts: dict[uuid.UUID, int] = {}
         if owned:
-            grant_counts = {
-                row[0]: int(row[1])
-                for row in db.exec(
-                    select(ArtifactGrant.artifact_id, func.count(ArtifactGrant.id))
-                    .where(col(ArtifactGrant.artifact_id).in_(owned))
-                    .group_by(ArtifactGrant.artifact_id)
-                ).all()
-            }
+            # A share count (people + groups), not a person count.
+            for model in (ArtifactGrant, ArtifactGroupGrant):
+                for artifact_id, n in db.exec(
+                    select(model.artifact_id, func.count(model.id))
+                    .where(col(model.artifact_id).in_(owned))
+                    .group_by(model.artifact_id)
+                ).all():
+                    grant_counts[artifact_id] = grant_counts.get(artifact_id, 0) + int(n)
             link_counts = {
                 row[0]: int(row[1])
                 for row in db.exec(
@@ -504,7 +511,8 @@ class ArtifactService:
         limit: int = 100,
     ) -> ArtifactsPublic:
         """``mine``: owned (workspace / source_key filters apply);
-        ``shared_with_me``: not mine, and instance-visible or granted to me.
+        ``shared_with_me``: not mine, and instance-visible, granted to me, or
+        granted to a group I belong to.
 
         ``user_workspace_id``: None = every workspace, ``""`` = the default
         workspace (NULL), a UUID = that workspace (credentials semantics).
@@ -514,9 +522,19 @@ class ArtifactService:
             granted = exists().where(
                 ArtifactGrant.artifact_id == Artifact.id, ArtifactGrant.user_id == user.id
             )
+            group_granted = exists().where(
+                ArtifactGroupGrant.artifact_id == Artifact.id,
+                col(ArtifactGroupGrant.group_id).in_(
+                    UserGroupAccess.member_group_ids_subquery(user.id)
+                ),
+            )
             stmt = stmt.where(
                 Artifact.owner_id != user.id,
-                or_(Artifact.visibility == ArtifactVisibility.INSTANCE, granted),
+                or_(
+                    Artifact.visibility == ArtifactVisibility.INSTANCE,
+                    granted,
+                    group_granted,
+                ),
             )
         else:
             stmt = stmt.where(Artifact.owner_id == user.id)
@@ -600,32 +618,71 @@ class ArtifactService:
 
     @staticmethod
     def list_grants(db: Session, artifact: Artifact) -> list[ArtifactGrantPublic]:
+        """People first, then groups; each set in grant order."""
         grants = db.exec(
             select(ArtifactGrant)
             .where(ArtifactGrant.artifact_id == artifact.id)
             .order_by(col(ArtifactGrant.created_at), col(ArtifactGrant.id))
         ).all()
-        user_ids = {g.user_id for g in grants} | {g.granted_by for g in grants if g.granted_by}
+        group_grants = db.exec(
+            select(ArtifactGroupGrant)
+            .where(ArtifactGroupGrant.artifact_id == artifact.id)
+            .order_by(col(ArtifactGroupGrant.created_at), col(ArtifactGroupGrant.id))
+        ).all()
+        user_ids = (
+            {g.user_id for g in grants}
+            | {g.granted_by for g in grants if g.granted_by}
+            | {g.granted_by for g in group_grants}
+        )
         users = (
             {u.id: u for u in db.exec(select(User).where(col(User.id).in_(user_ids))).all()}
             if user_ids
             else {}
         )
-        out = []
+        group_ids = {g.group_id for g in group_grants}
+        groups = (
+            {
+                grp.id: grp
+                for grp in db.exec(
+                    select(UserGroup).where(col(UserGroup.id).in_(group_ids))
+                ).all()
+            }
+            if group_ids
+            else {}
+        )
+        member_counts = UserGroupAccess.member_counts(db, group_ids)
+
+        def granter_person(granter_id: uuid.UUID | None) -> CatalogPerson | None:
+            granter = users.get(granter_id) if granter_id else None
+            if granter is None:
+                return None
+            return CatalogPerson(
+                user_id=granter.id, display_name=owner_display_name(granter) or ""
+            )
+
+        out: list[ArtifactGrantPublic] = []
         for g in grants:
-            granter = users.get(g.granted_by) if g.granted_by else None
             out.append(
                 ArtifactGrantPublic(
                     principal=CatalogPrincipalUser(user_id=g.user_id),
                     access="view",
                     display_name=owner_display_name(users.get(g.user_id)) or str(g.user_id),
                     email=users[g.user_id].email if g.user_id in users else None,
-                    granted_by=(
-                        CatalogPerson(user_id=granter.id, display_name=owner_display_name(granter) or "")
-                        if granter
-                        else None
-                    ),
+                    granted_by=granter_person(g.granted_by),
                     created_at=g.created_at,
+                )
+            )
+        for gg in group_grants:
+            group = groups.get(gg.group_id)
+            out.append(
+                ArtifactGrantPublic(
+                    principal=CatalogPrincipalGroup(group_id=gg.group_id),
+                    access="view",
+                    display_name=group.name if group else str(gg.group_id),
+                    email=None,
+                    member_count=member_counts.get(gg.group_id, 0),
+                    granted_by=granter_person(gg.granted_by),
+                    created_at=gg.created_at,
                 )
             )
         return out
@@ -751,14 +808,36 @@ class ArtifactService:
     def replace_grants(
         cls, db: Session, user: User, artifact_id: uuid.UUID, grants: list[ArtifactGrantIn]
     ) -> list[ArtifactGrantPublic]:
-        """Full replace (D21). The owner in the list is dropped; unknown users ⇒ 400."""
+        """Full replace (D21) of both the person and the group grants.
+
+        The owner in the list is dropped; unknown users or groups ⇒ 400.
+        """
         artifact = cls.get_managed(db, artifact_id, user)
-        wanted = {g.principal.user_id for g in grants} - {artifact.owner_id}
-        if wanted:
-            found = set(db.exec(select(User.id).where(col(User.id).in_(wanted))).all())
-            missing = wanted - found
+        wanted_users = {
+            g.principal.user_id
+            for g in grants
+            if isinstance(g.principal, CatalogPrincipalUser)
+        } - {artifact.owner_id}
+        wanted_groups = {
+            g.principal.group_id
+            for g in grants
+            if isinstance(g.principal, CatalogPrincipalGroup)
+        }
+        if wanted_users:
+            found = set(db.exec(select(User.id).where(col(User.id).in_(wanted_users))).all())
+            missing = wanted_users - found
             if missing:
                 raise ArtifactError(400, f"User not found: {sorted(map(str, missing))[0]}")
+        if wanted_groups:
+            found_groups = set(
+                db.exec(select(UserGroup.id).where(col(UserGroup.id).in_(wanted_groups))).all()
+            )
+            missing_groups = wanted_groups - found_groups
+            if missing_groups:
+                raise ArtifactError(
+                    400, f"Group not found: {sorted(map(str, missing_groups))[0]}"
+                )
+
         existing = {
             g.user_id: g
             for g in db.exec(
@@ -766,14 +845,30 @@ class ArtifactService:
             ).all()
         }
         for user_id, grant in existing.items():
-            if user_id not in wanted:
+            if user_id not in wanted_users:
                 db.delete(grant)
-        for user_id in wanted - existing.keys():
+        for user_id in wanted_users - existing.keys():
             db.add(ArtifactGrant(artifact_id=artifact.id, user_id=user_id, granted_by=user.id))
+
+        existing_groups = {
+            g.group_id: g
+            for g in db.exec(
+                select(ArtifactGroupGrant).where(ArtifactGroupGrant.artifact_id == artifact.id)
+            ).all()
+        }
+        for group_id, group_grant in existing_groups.items():
+            if group_id not in wanted_groups:
+                db.delete(group_grant)
+        for group_id in wanted_groups - existing_groups.keys():
+            db.add(
+                ArtifactGroupGrant(
+                    artifact_id=artifact.id, group_id=group_id, granted_by=user.id
+                )
+            )
         try:
             db.commit()
         except IntegrityError as exc:
-            # A concurrent replace inserted the same grant (or the user went away).
+            # A concurrent replace inserted the same grant (or the user/group went away).
             db.rollback()
             raise ArtifactError(409, "The grants changed concurrently; reload and retry") from exc
         return cls.list_grants(db, artifact)

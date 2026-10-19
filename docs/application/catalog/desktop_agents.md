@@ -52,8 +52,8 @@ The new agent has no version until the first share.
 ## Access model
 
 Desktop agents use the catalog access model of bundles: visibility (`private`, `users`, `public`) plus
-`is_listed`, and grants that name a user or every user of a role (`agent-user`, `agent-developer`,
-`admin`) at a level.
+`is_listed`, and grants that name a user, every user of a role (`agent-user`, `agent-developer`,
+`admin`) or every member of a [user group](../user_groups/user_groups.md) at a level. A group holds `use` or `edit`, never `maintain`; membership is live.
 
 - **Levels**: `use` (get), `edit` (also share changes), `maintain` (also edit grants and visibility,
   remove the agent).
@@ -160,6 +160,8 @@ rules above are what keeps keys and credentials out.
   [Data Volumes](../../infrastructure/data_volumes.md).
 
 ## Changelog
+
+- User groups can be grant principals (`use` / `edit`); see [User Groups](../user_groups/user_groups.md).
 
 - Desktop agents are catalog bundles; the separate team library, its `/library` API, `library.*`
   events and admin page were replaced. Existing shared agents were converted: grants map

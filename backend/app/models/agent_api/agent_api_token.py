@@ -352,11 +352,24 @@ class AgentApiAccessEntry(SQLModel):
     keys: list[AgentApiKeyPublic] = []
 
 
+class AgentApiAccessGroupEntry(SQLModel):
+    """One user group holding API scopes on a producer (scopes only, no keys)."""
+
+    grant_id: uuid.UUID
+    group_id: uuid.UUID
+    name: str
+    # Active members only.
+    member_count: int = 0
+    scopes: list[str] = []
+
+
 class AgentApiAccessList(SQLModel):
-    """The producer's API access surface: grants and issued keys per person."""
+    """The producer's API access surface: grants and issued keys per person,
+    plus the user groups holding scopes (sorted by name)."""
 
     data: list[AgentApiAccessEntry]
     count: int
+    groups: list[AgentApiAccessGroupEntry] = []
     external_access_enabled: bool
     identity_enabled: bool
 

@@ -1,20 +1,21 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Lock, Pencil, ShieldCheck, Trash2, UserPlus } from "lucide-react"
+import { Lock, ShieldCheck, UserPlus } from "lucide-react"
 import { useMemo, useState } from "react"
 
 import type {
   AgentPublic,
-  BundlePermissionProducer,
+  BundlePermissionGroup,
   BundlePermissionUser,
 } from "@/client"
 import { AgentApiService, BundlesService, InstallsService } from "@/client"
+import { BundlePermissionGroups } from "@/components/Agents/BundlePermissions/BundlePermissionGroups"
+import { BundlePermissionPeople } from "@/components/Agents/BundlePermissions/BundlePermissionPeople"
 import {
-  BundlePermissionsAddUserModal,
-  type FixedUserContext,
-} from "@/components/Agents/BundlePermissionsAddUserModal"
-import { AgentBadge } from "@/components/Common/AgentBadge"
-import { ListRow, ListRowGroup } from "@/components/Common/ListRow"
-import { RowActionsMenu } from "@/components/Common/RowActionsMenu"
+  existingGrantFor,
+  type PermissionTarget,
+} from "@/components/Agents/BundlePermissions/bundlePermissionsActions"
+import { BundlePermissionsAddUserModal } from "@/components/Agents/BundlePermissionsAddUserModal"
+import { QueryErrorAlert } from "@/components/Common/QueryErrorAlert"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -33,18 +34,11 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import {
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-} from "@/components/ui/dropdown-menu"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
+import { Separator } from "@/components/ui/separator"
+import { Skeleton } from "@/components/ui/skeleton"
 import { agentApiAccessQueryKey } from "@/hooks/useAgentApiKeys"
 import useCustomToast from "@/hooks/useCustomToast"
-import { cn } from "@/lib/utils"
+import { getErrorMessage } from "@/utils"
 
 interface BundlePermissionsCardProps {
   agent: AgentPublic
@@ -54,14 +48,14 @@ interface BundlePermissionsCardProps {
 /**
  * "Permissions management" — the unified publisher-facing card on the Bundle
  * tab that replaces the old inline bundle-grants picker. One compact row per
- * user (mirroring the Revisions card row shape); membership in the list *is*
- * bundle access, so there is no separate on/off toggle. Each row surfaces a
- * scope-chip cluster per manageable connected producer and a single remove
- * action.
+ * person, then one per user group (mirroring the Revisions card row shape);
+ * membership in the list *is* bundle access, so there is no separate on/off
+ * toggle and no level. Each row surfaces a scope-chip cluster per manageable
+ * connected producer and an Edit / Remove menu.
  *
  * The remove action cascades across BOTH authority domains in one confirmed
- * step: it revokes the user's bundle grant (if any) AND every producer-scope
- * grant this user holds across all manageable producers. Producers the
+ * step: it revokes the row's bundle grant (if any) AND every producer-scope
+ * grant it holds across all manageable producers. Producers the
  * publisher does NOT own render only as a header note — their grants are
  * genuinely unreadable (the owner-gated read never ran).
  */
@@ -73,12 +67,18 @@ export function BundlePermissionsCard({
   const { showSuccessToast, showErrorToast } = useCustomToast()
 
   const [addOpen, setAddOpen] = useState(false)
-  const [editUser, setEditUser] = useState<FixedUserContext | null>(null)
+  const [editTarget, setEditTarget] = useState<PermissionTarget | null>(null)
   const [removeTarget, setRemoveTarget] = useState<BundlePermissionUser | null>(
     null,
   )
 
-  const { data: overview, isLoading } = useQuery({
+  const {
+    data: overview,
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useQuery({
     queryKey: ["bundlePermissionsOverview", agent.id],
     queryFn: () =>
       InstallsService.getBundlePermissionsOverview({ agentId: agent.id }),
@@ -92,6 +92,7 @@ export function BundlePermissionsCard({
 
   const producers = overview?.producers ?? []
   const users = overview?.users ?? []
+  const groups = overview?.groups ?? []
   const bundleAccessApplicable = overview?.bundle_access_applicable ?? false
 
   const manageableProducers = useMemo(
@@ -104,6 +105,7 @@ export function BundlePermissionsCard({
   )
 
   const excludeUserIds = useMemo(() => users.map((u) => u.user_id), [users])
+  const excludeGroupIds = useMemo(() => groups.map((g) => g.group_id), [groups])
   const canAddAnything =
     bundleAccessApplicable || manageableProducers.length > 0
 
@@ -134,7 +136,7 @@ export function BundlePermissionsCard({
       }
 
       for (const producer of manageableProducers) {
-        const grant = producer.grants?.find((g) => g.user_id === user.user_id)
+        const grant = existingGrantFor(producer, user.user_id)
         if (grant) {
           tasks.push({
             label: producer.producer_agent_name || "producer scopes",
@@ -180,24 +182,38 @@ export function BundlePermissionsCard({
       }
       setRemoveTarget(null)
     },
-    onError: (e: any) => {
+    onError: (e) => {
       invalidateOverview()
-      showErrorToast(e?.body?.detail || "Failed to remove user access")
+      showErrorToast(getErrorMessage(e, "Failed to remove user access"))
       setRemoveTarget(null)
     },
   })
 
-  if (isLoading) {
+  // Loading and failure keep the card in its grid slot: a failed fetch that
+  // returned `null` here would make the card vanish without a word.
+  if (isLoading || isError) {
     return (
       <Card>
-        <CardHeader>
+        <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 min-w-0">
             <ShieldCheck className="h-5 w-5" />
             Permissions management
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="text-sm text-muted-foreground">Loading…</p>
+          {isError ? (
+            <QueryErrorAlert
+              error={error}
+              fallback="Couldn't load bundle permissions."
+              onRetry={() => refetch()}
+            />
+          ) : (
+            <div className="space-y-1.5">
+              {Array.from({ length: 3 }, (_, i) => (
+                <Skeleton key={i} className="h-[48px] w-full rounded-md" />
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
     )
@@ -205,33 +221,34 @@ export function BundlePermissionsCard({
   if (!overview || !overview.show_card) return null
 
   const openEditForUser = (user: BundlePermissionUser) =>
-    setEditUser({
-      userId: user.user_id,
+    setEditTarget({
+      kind: "user",
+      id: user.user_id,
       email: user.email,
       fullName: user.full_name,
     })
+  const openEditForGroup = (group: BundlePermissionGroup) =>
+    setEditTarget({ kind: "group", id: group.group_id, name: group.name })
 
   return (
     <Card>
-      <CardHeader>
-        <div className="flex items-start justify-between gap-3">
-          <div className="space-y-1.5 min-w-0">
-            <CardTitle className="flex items-center gap-2 min-w-0">
-              <ShieldCheck className="h-5 w-5" />
-              Permissions management
-            </CardTitle>
-            <CardDescription>
-              Everyone listed here can access this bundle. Manage what each user
-              may do on its connected producer APIs, all in one place.
-            </CardDescription>
-          </div>
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between gap-3">
+          <CardTitle className="flex items-center gap-2 min-w-0">
+            <ShieldCheck className="h-5 w-5 shrink-0" />
+            Permissions management
+          </CardTitle>
           {canAddAnything && (
             <Button size="sm" onClick={() => setAddOpen(true)}>
               <UserPlus className="h-4 w-4 mr-1.5" />
-              Add user
+              Add access
             </Button>
           )}
         </div>
+        <CardDescription>
+          Everyone listed here can access this bundle. Manage what each person
+          or group may do on its connected producer APIs, all in one place.
+        </CardDescription>
 
         {/* Producers the publisher does NOT own are surfaced once here — their
             per-user scopes live on their own page and are unreadable here. */}
@@ -258,61 +275,36 @@ export function BundlePermissionsCard({
       </CardHeader>
 
       <CardContent>
-        {users.length === 0 ? (
+        {users.length === 0 && groups.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             {bundleAccessApplicable
-              ? "No users yet. Add a user to grant bundle access and assign producer scopes."
-              : "No users yet. Add a user to assign their producer scopes."}
+              ? "No one yet. Add a person or a group to grant bundle access and assign producer scopes."
+              : "No one yet. Add a person or a group to assign their producer scopes."}
           </p>
-        ) : (
-          <ListRowGroup>
-            {users.map((user) => (
-              <ListRow
-                key={user.user_id}
-                title={user.full_name || user.email || user.user_id}
-                // Membership in this list *is* bundle access, so the row has
-                // no on/off state and therefore no leading dot: a dot that is
-                // green on every row of every list is decoration.
-                meta={user.full_name && user.email ? user.email : undefined}
-                // The scope clusters are this row's passive read: what the
-                // person may do on each connected producer. They are also the
-                // shortcut into the editor, which is why they sit left of the
-                // menu rather than in it.
-                flags={manageableProducers.map((producer) => (
-                  <ProducerScopeInline
-                    key={producer.producer_agent_id}
-                    producer={producer}
-                    user={user}
-                    onEdit={() => openEditForUser(user)}
-                  />
-                ))}
-              >
-                <RowActionsMenu
-                  label={`${user.full_name || user.email || "this user"}'s permissions`}
-                >
-                  <DropdownMenuItem onSelect={() => openEditForUser(user)}>
-                    <Pencil />
-                    Edit permissions
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    variant="destructive"
-                    onSelect={(e) => {
-                      e.preventDefault()
-                      setRemoveTarget(user)
-                    }}
-                  >
-                    <Trash2 />
-                    Remove access
-                  </DropdownMenuItem>
-                </RowActionsMenu>
-              </ListRow>
-            ))}
-          </ListRowGroup>
+        ) : users.length === 0 ? null : (
+          <BundlePermissionPeople
+            users={users}
+            manageableProducers={manageableProducers}
+            showHeading={groups.length > 0}
+            onEdit={openEditForUser}
+            onRemove={setRemoveTarget}
+          />
+        )}
+        {groups.length > 0 && (
+          <>
+            {users.length > 0 && <Separator className="my-4" />}
+            <BundlePermissionGroups
+              agentId={agent.id}
+              bundleUuid={bundleUuid}
+              groups={groups}
+              manageableProducers={manageableProducers}
+              onEdit={openEditForGroup}
+            />
+          </>
         )}
       </CardContent>
 
-      {/* Add user — fresh modal. */}
+      {/* Add a person or a group — fresh modal. */}
       <BundlePermissionsAddUserModal
         open={addOpen}
         onOpenChange={setAddOpen}
@@ -321,20 +313,21 @@ export function BundlePermissionsCard({
         bundleAccessApplicable={bundleAccessApplicable}
         producers={producers}
         excludeUserIds={excludeUserIds}
+        excludeGroupIds={excludeGroupIds}
       />
 
-      {/* Edit an existing user (producer-cluster click). */}
+      {/* Edit an existing person or group (producer-cluster click). */}
       <BundlePermissionsAddUserModal
-        open={!!editUser}
+        open={!!editTarget}
         onOpenChange={(o) => {
-          if (!o) setEditUser(null)
+          if (!o) setEditTarget(null)
         }}
         agentId={agent.id}
         bundleUuid={bundleUuid}
         bundleAccessApplicable={bundleAccessApplicable}
         producers={producers}
         excludeUserIds={excludeUserIds}
-        fixedUser={editUser}
+        fixedTarget={editTarget}
       />
 
       {/* Cascading remove confirmation — mirrors the Delete revision dialog. */}
@@ -375,80 +368,5 @@ export function BundlePermissionsCard({
         </AlertDialogContent>
       </AlertDialog>
     </Card>
-  )
-}
-
-interface ProducerScopeInlineProps {
-  producer: BundlePermissionProducer
-  user: BundlePermissionUser
-  onEdit: () => void
-}
-
-/**
- * Inline scope-chip cluster for one manageable producer on one user's row.
- * Clicking opens the edit modal for that user. Never rendered for
- * non-manageable producers (their per-user data is unavailable).
- */
-function ProducerScopeInline({
-  producer,
-  user,
-  onEdit,
-}: ProducerScopeInlineProps) {
-  const grant = producer.grants?.find((g) => g.user_id === user.user_id)
-  const scopes = grant?.scopes ?? []
-
-  // The count, not the list: a row carrying three producers' worth of scope
-  // chips wraps to three lines and sets the height of the whole list. The
-  // names live in the tooltip and the editor.
-  const summary = !grant
-    ? "assign"
-    : scopes.length === 0
-      ? "none"
-      : `${scopes.length}`
-
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          onClick={onEdit}
-          className="flex h-7 min-w-0 max-w-[160px] items-center gap-1.5 overflow-hidden rounded-md border px-1.5 text-left whitespace-nowrap transition-colors hover:bg-accent"
-        >
-          <AgentBadge
-            agent={{
-              id: producer.producer_agent_id,
-              name: producer.producer_agent_name || "Producer",
-              ui_color_preset: producer.producer_ui_color_preset,
-            }}
-            linkTo="none"
-            // The chip is width-capped, so the producer's name truncates
-            // rather than wrapping the whole cluster to a second line.
-            className="min-w-0 max-w-[110px] [&>svg]:shrink-0"
-          />
-          <span
-            className={cn(
-              "shrink-0 text-[11px]",
-              grant && scopes.length > 0
-                ? "font-medium"
-                : "text-muted-foreground",
-            )}
-          >
-            {summary}
-          </span>
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="top" className="max-w-xs text-xs">
-        <p className="font-medium">
-          {producer.producer_agent_name || "Producer"}
-        </p>
-        <p>
-          {!grant
-            ? "No scopes assigned yet — click to assign."
-            : scopes.length === 0
-              ? "Granted access, but no scopes. Click to edit."
-              : scopes.join(", ")}
-        </p>
-      </TooltipContent>
-    </Tooltip>
   )
 }

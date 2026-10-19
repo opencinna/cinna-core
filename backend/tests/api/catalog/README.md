@@ -121,6 +121,15 @@ C5 — skill credentials for local installs:
   Cloud installs after an unshare: `tests/api/agents/skill_credentials/` and
   `tests/api/agents/bundles_install/` (`*_revoked_share_test.py`).
 
+User Groups (P2) — group principal on grants:
+- `catalog_group_grants_test.py` — `{"group_id"}` principals on
+  `PUT/GET /catalog/items/{uuid}/grants` (use/edit; `maintain` and unknown group
+  422; name + `member_count`, people → groups → roles order); bundle, skill and
+  desktop-agent members list / open / install / publish (`edit`) / git-read, a
+  non-member gets 404, removal revokes at once while cloud installs stay; direct
+  `use` + group `edit` = `edit`, revoking one keeps the other; `catalog.granted`
+  reaches members. Groups are built with `tests/utils/user_group.py`.
+
 Unit (no database): `tests/unit/test_push_policy_bound_manifest_id.py` (the
 policy's bound manifest id), `tests/unit/test_desktop_bundle_id.py` (minting).
 

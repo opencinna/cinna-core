@@ -25,12 +25,23 @@ import {
 } from "@/utils/catalogAccess"
 import {
   CATALOG_VISIBILITY_OPTIONS,
+  type CatalogKind,
   type CatalogVisibility,
 } from "@/utils/catalogItems"
 import { CatalogGrantRow } from "./CatalogGrantRow"
-import { CatalogPrincipalPicker } from "./CatalogPrincipalPicker"
+import {
+  CatalogPrincipalPicker,
+  type PickedPrincipalDetail,
+} from "./CatalogPrincipalPicker"
 
 const NO_MAINTAINER = "At least one person must be a maintainer."
+
+/** Who sees an item at Private, in the kind's own words for `edit`. */
+const PRIVATE_AUDIENCE: Record<CatalogKind, string> = {
+  desktop: "Only people who can share changes or maintain it see it.",
+  skill: "Only people who can publish versions or maintain it see it.",
+  cloud: "Only its maintainers see it.",
+}
 
 function signature(rows: BufferedGrant[]): string {
   return rows
@@ -46,6 +57,7 @@ export interface CatalogPeopleSave {
 
 interface CatalogPeopleFormProps {
   grants: CatalogGrant[]
+  kind: CatalogKind
   visibility: CatalogVisibility
   isSaving: boolean
   /** A server refusal (409/422 sentence), shown in the maintainer Alert's slot. */
@@ -63,6 +75,7 @@ interface CatalogPeopleFormProps {
  */
 export function CatalogPeopleForm({
   grants,
+  kind,
   visibility: initialVisibility,
   isSaving,
   refusal,
@@ -115,10 +128,20 @@ export function CatalogPeopleForm({
     edit(rows.filter((r) => r.key !== key))
   }
 
-  const add = (principal: CatalogPrincipal, title: string) =>
+  const add = (
+    principal: CatalogPrincipal,
+    title: string,
+    { memberCount }: PickedPrincipalDetail,
+  ) =>
     edit([
       ...rows,
-      { key: principalKey(principal), principal, access: "use", title },
+      {
+        key: principalKey(principal),
+        principal,
+        access: "use",
+        title,
+        memberCount,
+      },
     ])
 
   return (
@@ -147,16 +170,16 @@ export function CatalogPeopleForm({
           </Select>
           {visibility === "private" && (
             <p className="text-xs text-muted-foreground">
-              Only people who can share changes or maintain it see it.
+              {PRIVATE_AUDIENCE[kind]}
             </p>
           )}
         </div>
 
         <div className="space-y-2">
-          <h3 className="text-sm font-medium">People and roles</h3>
+          <h3 className="text-sm font-medium">People, groups and roles</h3>
           {rows.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No one is listed yet. Add people or roles below.
+              No one is listed yet. Add people, groups or roles below.
             </p>
           ) : (
             <div className="max-h-[40vh] overflow-y-auto pr-2">
@@ -167,6 +190,7 @@ export function CatalogPeopleForm({
                   <CatalogGrantRow
                     key={row.key}
                     grant={row}
+                    kind={kind}
                     disabled={isSaving}
                     onAccessChange={changeAccess}
                     onRemove={remove}
@@ -177,8 +201,8 @@ export function CatalogPeopleForm({
           )}
           {hasInertUse && (
             <p className="text-xs text-muted-foreground">
-              Can use rows apply only when access is limited to the people and
-              roles below.
+              Can use rows apply only when access is limited to the people,
+              groups and roles below.
             </p>
           )}
           <CatalogPrincipalPicker

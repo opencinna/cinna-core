@@ -244,14 +244,29 @@ class DesktopCredentialService:
     def _shared_sources(
         session: Session, user_id: uuid.UUID
     ) -> dict[uuid.UUID, str | None]:
-        """``{credential_id: share.source}`` for every share held by ``user_id``."""
-        return dict(
+        """``{credential_id: share.source}`` for every share held by ``user_id``.
+
+        A credential held only through a user group maps to ``None`` (a direct,
+        "mine" share for local copy, D13); a direct row's source wins.
+        """
+        from app.services.credentials.credential_share_service import (
+            CredentialShareService,
+        )
+
+        sources: dict[uuid.UUID, str | None] = {
+            credential_id: None
+            for credential_id in session.exec(
+                CredentialShareService.group_shared_credential_ids_subquery(user_id)
+            ).all()
+        }
+        sources.update(
             session.exec(
                 select(CredentialShare.credential_id, CredentialShare.source).where(
                     CredentialShare.shared_with_user_id == user_id
                 )
             ).all()
         )
+        return sources
 
     @staticmethod
     def _categories(

@@ -928,3 +928,68 @@ def test_install_preview_guards(
         client, other_headers, other_agent, package_uuid,
         revision_number=999, expected_status=404,
     )
+
+
+# ---------------------------------------------------------------------------
+# Scenario 9: a group-shared credential keeps the slot satisfied (User Groups P3)
+# ---------------------------------------------------------------------------
+
+
+def test_slot_resolution_sees_a_group_shared_credential(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    patch_environment_adapter,
+) -> None:
+    """
+    1. B (a group member) installs the skill → linked_publisher + direct share
+    2. The owner removes the direct share: the group still covers B, so the
+       link stays and the slot reads satisfied (no credential_issues)
+    3. B is removed from the group → link dropped, slot reads not_linked
+    """
+    from tests.utils.user_group import create_group, remove_member
+
+    su = superuser_token_headers
+    pub, pub_headers = make_developer(client, su)
+    pub_agent, pub_env = make_agent_with_env(client, pub_headers, "GroupSlot-Publisher")
+    cred = create_random_credential(client, pub_headers, credential_type="api_token")
+    update_credential(
+        client, pub_headers, cred["id"], service_uri="slot-group", allow_sharing=True,
+    )
+    link_credential_to_agent(client, pub_headers, pub_agent, cred["id"])
+    write_skill_with_credentials(
+        pub_env, "group-skill", [{"slot": "slot-group", "type": "api_token"}],
+    )
+    revision = publish_skill(client, pub_headers, pub_agent, "group-skill", visibility="public")
+
+    b, b_headers = make_developer(client, su)
+    b_agent, _ = make_agent_with_env(client, b_headers, "GroupSlot-Consumer")
+    adapter = _install_adapter(patch_environment_adapter)
+    group = create_group(client, su, member_ids=[b["id"]])
+    r = client.post(
+        f"{API}/credentials/{cred['id']}/group-shares",
+        headers=pub_headers, json={"group_id": group["id"]},
+    )
+    assert r.status_code == 200, r.text
+
+    result = install_skill(client, b_headers, b_agent, revision["package_id"])
+    assert result["credential_provisioning"][0]["outcome"] == "linked_publisher"
+
+    shares = client.get(f"{API}/credentials/{cred['id']}/shares", headers=pub_headers).json()["data"]
+    share = next(s for s in shares if s["shared_with_user_id"] == b["id"])
+    r = client.delete(f"{API}/credentials/{cred['id']}/shares/{share['id']}", headers=pub_headers)
+    assert r.status_code == 200, r.text
+
+    assert cred["id"] in {
+        c["id"] for c in get_agent_credentials(client, b_headers, b_agent)["data"]
+    }
+    row = _addon_row_for_skill(client, b_headers, b_agent, adapter, "group-skill")
+    assert row["credential_issues"] == []
+
+    remove_member(client, su, group["id"], b["id"])
+    assert cred["id"] not in {
+        c["id"] for c in get_agent_credentials(client, b_headers, b_agent)["data"]
+    }
+    row = _addon_row_for_skill(client, b_headers, b_agent, adapter, "group-skill")
+    assert row["credential_issues"] == [
+        {"slot": "slot-group", "type": "api_token", "reason": "not_linked"}
+    ]

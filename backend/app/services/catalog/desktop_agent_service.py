@@ -32,7 +32,11 @@ from app.models.events.security_event import CATALOG_DESKTOP_AGENT_CREATED
 from app.models.library.git_repo import GitRepo, GitRepoKind
 from app.models.users.user import User
 from app.services.bundles.bundle_id_service import BundleIdService
-from app.services.catalog.catalog_access_service import BUNDLE, CatalogAccessService
+from app.services.catalog.catalog_access_service import (
+    BUNDLE,
+    CatalogAccessService,
+    principal_label,
+)
 from app.services.catalog.catalog_events import add_audit_event
 from app.services.catalog.exceptions import CatalogConflictError
 from app.services.library.git_repo_storage import GitRepoStorage
@@ -117,7 +121,7 @@ class DesktopAgentService:
                 "slug": body.slug,
                 "visibility": body.visibility,
                 "grants": [
-                    {"principal": _principal_label(g), "access": g.access} for g in grants
+                    {"principal": principal_label(g), "access": g.access} for g in grants
                 ],
             },
         )
@@ -256,8 +260,3 @@ class DesktopAgentService:
             return CatalogConflictError(MANIFEST_TAKEN_DETAIL)
         return CatalogConflictError("This agent was added at the same time; try again.")
 
-
-def _principal_label(grant: CatalogGrantIn) -> str:
-    if isinstance(grant.principal, CatalogPrincipalUser):
-        return f"user:{grant.principal.user_id}"
-    return f"role:{grant.principal.role}"

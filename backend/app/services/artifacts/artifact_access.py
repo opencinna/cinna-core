@@ -4,7 +4,9 @@ Every route and the content route decide access here, so a change to who can
 see an artifact lands in one place:
 
 - **view**: the owner; or ``visibility='instance'`` and a valid signed-in
-  account; or a grant to that user. A public link is checked separately
+  account; or a grant to that user; or a grant to a user group the user
+  belongs to (membership resolved live, so a removed member's next request
+  fails). A public link is checked separately
   (:meth:`ArtifactAccess.link_serves`) because it has no user; it also dies
   with the owner's account.
 - **manage** (republish, edit, share, delete): the owner only.
@@ -21,17 +23,18 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from app.models.artifacts.artifact import (
     Artifact,
     ArtifactSourceKind,
     ArtifactVisibility,
 )
-from app.models.artifacts.artifact_grant import ArtifactGrant
+from app.models.artifacts.artifact_grant import ArtifactGrant, ArtifactGroupGrant
 from app.models.artifacts.artifact_link import ArtifactLink
 from app.models.users.user import User
 from app.services.users.access_policy_service import AccessPolicyService
+from app.services.users.user_group_access import UserGroupAccess
 
 
 def _aware(dt: datetime) -> datetime:
@@ -53,7 +56,17 @@ class ArtifactAccess:
                 ArtifactGrant.user_id == user.id,
             )
         ).first()
-        return grant_id is not None
+        if grant_id is not None:
+            return True
+        group_grant_id = db.exec(
+            select(ArtifactGroupGrant.id).where(
+                ArtifactGroupGrant.artifact_id == artifact.id,
+                col(ArtifactGroupGrant.group_id).in_(
+                    UserGroupAccess.member_group_ids_subquery(user.id)
+                ),
+            )
+        ).first()
+        return group_grant_id is not None
 
     @staticmethod
     def can_manage(artifact: Artifact, user: User | None) -> bool:

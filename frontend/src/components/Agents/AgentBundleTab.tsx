@@ -381,24 +381,22 @@ export function AgentBundleTab({ agent }: AgentBundleTabProps) {
 
         {/* RIGHT: Revisions — primary action lives in the header corner. */}
         <Card>
-          <CardHeader>
-            <div className="flex items-start justify-between gap-3">
-              <div className="space-y-1.5 min-w-0">
-                <CardTitle className="flex items-center gap-2 min-w-0">
-                  <History className="h-5 w-5" />
-                  Revisions
-                </CardTitle>
-                <CardDescription>
-                  {isPublished
-                    ? "Append-only history. Each publish snapshots the workspace and notifies foreign installs."
-                    : "Snapshot the current workspace (scripts, docs, knowledge, files, requirements) and make it available for install."}
-                </CardDescription>
-              </div>
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between gap-3">
+              <CardTitle className="flex items-center gap-2 min-w-0">
+                <History className="h-5 w-5 shrink-0" />
+                Revisions
+              </CardTitle>
               <Button size="sm" onClick={() => setPublishOpen(true)}>
                 <Plus className="h-4 w-4 mr-1" />
                 {isPublished ? "Publish revision" : "Publish"}
               </Button>
             </div>
+            <CardDescription>
+              {isPublished
+                ? "Append-only history. Each publish snapshots the workspace and notifies foreign installs."
+                : "Snapshot the current workspace (scripts, docs, knowledge, files, requirements) and make it available for install."}
+            </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             {/* What the publish that just happened means for installers.

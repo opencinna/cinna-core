@@ -20,6 +20,7 @@ import {
   INITIAL_ENV_CONFIG,
   composeEnvModeConfigFields,
 } from "./EnvironmentConfigForm"
+import { useSharedAICredentials } from "./useSharedAICredentials"
 
 interface AddEnvironmentProps {
   agentId: string
@@ -37,6 +38,8 @@ export function AddEnvironment({ agentId }: AddEnvironmentProps) {
     queryKey: ["aiCredentialsList"],
     queryFn: () => AiCredentialsService.listAiCredentials(),
   })
+  // A key shared with the user resolves the SDK id the same way an owned one does.
+  const sharedAiCredentials = useSharedAICredentials()
 
   const createMutation = useMutation({
     mutationFn: (data: AgentEnvironmentCreate) =>
@@ -57,7 +60,10 @@ export function AddEnvironment({ agentId }: AddEnvironmentProps) {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
 
-    const fields = composeEnvModeConfigFields(envConfig, aiCredentials?.data ?? [])
+    const fields = composeEnvModeConfigFields(envConfig, [
+      ...(aiCredentials?.data ?? []),
+      ...sharedAiCredentials,
+    ])
 
     createMutation.mutate({
       env_name: envConfig.envName,

@@ -76,6 +76,10 @@ Link table: users granted query access to a `shared` source.
 
 Unique: `uq_knowledge_repo_user_share` on `(git_repo_id, user_id)`
 
+### Table: `ai_knowledge_git_repo_group_share`
+
+Groups granted query access to a `shared` source (migration `7896e6f51c03`): `git_repo_id` (FK CASCADE), `group_id` (FK `user_group` CASCADE), `granted_by` metadata, unique pair. Routes in `knowledge_sources.py` (superuser): `GET` / `POST /knowledge-sources/{source_id}/shared-groups`, `DELETE /knowledge-sources/{source_id}/shared-groups/{group_id}`. Service: `knowledge_source_service.list_shared_groups` / `add_shared_group` / `remove_shared_group`; `knowledge_access_service` ORs `UserGroupAccess.member_group_ids_subquery(user.id)` into the shared-with-user clause. See [User Groups](../user_groups/user_groups_tech.md).
+
 ### Table: `knowledge_articles`
 
 | Column | Type | Constraints |

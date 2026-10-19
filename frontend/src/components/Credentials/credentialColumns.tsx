@@ -39,13 +39,18 @@ export interface CredentialRowModel {
   used_in_bundle: boolean
   is_shared: boolean
   // Owner rows only (`!is_shared`).
+  /** People it is shared with directly. */
   share_count?: number
+  /** User groups it is shared with. */
+  group_share_count?: number
   status?: string | null
   /** Issued agent_api keys only (owner rows): the key's status. */
   agent_api_key_status?: string | null
   // Shared-in rows only (`is_shared`).
   owner_email?: string | null
   shared_at?: string | null
+  /** The user groups the share reaches this user through, if any (D12). */
+  via_groups?: string[]
 }
 
 /** The name as shown; an empty string arrives from the wire, not just null. */

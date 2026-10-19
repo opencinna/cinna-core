@@ -15,16 +15,19 @@ import logging
 from datetime import UTC, datetime
 from typing import Optional
 
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select, func
 
 from app.models.knowledge.knowledge import (
     AIKnowledgeGitRepo,
     AIKnowledgeGitRepoCreate,
     AIKnowledgeGitRepoPublic,
+    AIKnowledgeGitRepoGroupShare,
     AIKnowledgeGitRepoUpdate,
     AIKnowledgeGitRepoUserShare,
     KnowledgeArticle,
     KnowledgeArticleDetail,
+    KnowledgeSourceSharedGroupPublic,
     KnowledgeSourceSharedUserPublic,
     SourceStatus,
     CheckAccessResponse,
@@ -32,7 +35,9 @@ from app.models.knowledge.knowledge import (
 )
 from app.models.users.ssh_key import UserSSHKey
 from app.models.users.user import User
+from app.models.users.user_group import UserGroup
 from app.services.users.ssh_key_service import SSHKeyService
+from app.services.users.user_group_access import UserGroupAccess
 from app.services.knowledge.git_operations import (
     create_ssh_key_file,
     verify_repository_access,
@@ -135,6 +140,13 @@ def _to_public_list(
             .group_by(AIKnowledgeGitRepoUserShare.git_repo_id)
         ).all()
     )
+    group_share_counts = dict(
+        session.exec(
+            select(AIKnowledgeGitRepoGroupShare.git_repo_id, func.count())
+            .where(AIKnowledgeGitRepoGroupShare.git_repo_id.in_(source_ids))
+            .group_by(AIKnowledgeGitRepoGroupShare.git_repo_id)
+        ).all()
+    )
     creators = {
         user.id: user
         for user in session.exec(select(User).where(User.id.in_(creator_ids))).all()
@@ -150,6 +162,7 @@ def _to_public_list(
                 created_by_name=creator.full_name if creator else None,
                 article_count=article_counts.get(source.id, 0),
                 shared_user_count=share_counts.get(source.id, 0),
+                shared_group_count=group_share_counts.get(source.id, 0),
             )
         )
     return result
@@ -896,5 +909,125 @@ def remove_shared_user(
     ).first()
     if share is None:
         raise KnowledgeSourceNotFoundError("User is not on this source's share list")
+    session.delete(share)
+    session.commit()
+
+
+# ── Group shares (access_level == shared) ────────────────────────────────────
+# Members are resolved live (knowledge_access_service); nothing is released
+# when a group share goes away: the next query simply excludes the source.
+
+
+def _group_share_public(
+    *,
+    share: AIKnowledgeGitRepoGroupShare,
+    group: UserGroup,
+    member_count: int,
+) -> KnowledgeSourceSharedGroupPublic:
+    return KnowledgeSourceSharedGroupPublic(
+        group_id=group.id,
+        name=group.name,
+        member_count=member_count,
+        created_at=share.created_at,
+    )
+
+
+def list_shared_groups(
+    *,
+    session: Session,
+    source_id: uuid.UUID,
+) -> list[KnowledgeSourceSharedGroupPublic]:
+    """List user groups on the source's share list (ordered by name).
+
+    Raises:
+        KnowledgeSourceNotFoundError: if the source does not exist
+    """
+    _require_source(session=session, source_id=source_id)
+    rows = session.exec(
+        select(AIKnowledgeGitRepoGroupShare, UserGroup)
+        .join(UserGroup, AIKnowledgeGitRepoGroupShare.group_id == UserGroup.id)
+        .where(AIKnowledgeGitRepoGroupShare.git_repo_id == source_id)
+        .order_by(func.lower(UserGroup.name), UserGroup.id)
+    ).all()
+    member_counts = UserGroupAccess.member_counts(
+        session, [group.id for _, group in rows]
+    )
+    return [
+        _group_share_public(
+            share=share, group=group, member_count=member_counts.get(group.id, 0)
+        )
+        for share, group in rows
+    ]
+
+
+def add_shared_group(
+    *,
+    session: Session,
+    source_id: uuid.UUID,
+    group_id: uuid.UUID,
+    granted_by_user_id: uuid.UUID,
+) -> KnowledgeSourceSharedGroupPublic:
+    """Add a user group to the source's share list. Idempotent: an existing share is returned.
+
+    Raises:
+        KnowledgeSourceNotFoundError: if the source or the group does not exist
+    """
+    _require_source(session=session, source_id=source_id)
+    group = session.get(UserGroup, group_id)
+    if not group:
+        raise KnowledgeSourceNotFoundError("User group not found")
+
+    def find_share() -> AIKnowledgeGitRepoGroupShare | None:
+        return session.exec(
+            select(AIKnowledgeGitRepoGroupShare).where(
+                AIKnowledgeGitRepoGroupShare.git_repo_id == source_id,
+                AIKnowledgeGitRepoGroupShare.group_id == group_id,
+            )
+        ).first()
+
+    share = find_share()
+    if share is None:
+        share = AIKnowledgeGitRepoGroupShare(
+            git_repo_id=source_id,
+            group_id=group_id,
+            granted_by_user_id=granted_by_user_id,
+        )
+        session.add(share)
+        try:
+            session.commit()
+            session.refresh(share)
+        except IntegrityError:
+            # A concurrent add won the unique (source, group) key: return its row.
+            # (A source or group deleted meanwhile also lands here.)
+            session.rollback()
+            share = find_share()
+            if share is None:
+                raise KnowledgeSourceNotFoundError("Knowledge source or user group not found")
+
+    member_count = UserGroupAccess.member_counts(session, [group.id]).get(group.id, 0)
+    return _group_share_public(share=share, group=group, member_count=member_count)
+
+
+def remove_shared_group(
+    *,
+    session: Session,
+    source_id: uuid.UUID,
+    group_id: uuid.UUID,
+) -> None:
+    """Remove a user group from the source's share list.
+
+    Raises:
+        KnowledgeSourceNotFoundError: if the source does not exist or the group
+            is not on its share list
+    """
+    _require_source(session=session, source_id=source_id)
+    share = session.exec(
+        select(AIKnowledgeGitRepoGroupShare).where(
+            AIKnowledgeGitRepoGroupShare.git_repo_id == source_id,
+            AIKnowledgeGitRepoGroupShare.group_id == group_id,
+        )
+    ).first()
+    if share is None:
+        raise KnowledgeSourceNotFoundError("Group is not on this source's share list")
     session.delete(share)
     session.commit()

@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING
 from sqlmodel import Field, Relationship, SQLModel
 from sqlalchemy import Index, UniqueConstraint, ForeignKeyConstraint
 
+from app.models.users.user_group import UserGroupRef
+
 if TYPE_CHECKING:
     from app.models.credentials.credential import Credential
     from app.models.users.user import User
@@ -196,6 +198,9 @@ class SharedCredentialPublic(SQLModel):
     # Always False for shared rows in MVP (bundle badge is an owner concept);
     # kept for shape symmetry with CredentialPublic.
     used_in_bundle: bool = False
+    # The user groups through which the caller holds this credential (D12).
+    # Empty for a direct-only share; a group-only row has ``source=None``.
+    via_groups: list[UserGroupRef] = []
 
 
 class SharedCredentialsPublic(SQLModel):

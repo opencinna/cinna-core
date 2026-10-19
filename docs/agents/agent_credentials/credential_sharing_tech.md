@@ -305,3 +305,15 @@ Each entry the publish flow emits:
 3. **Per-type templatable allowlist** — `_TEMPLATE_TEMPLATABLE_FIELDS_BY_TYPE` (e.g. `ssh_key` → only `host_aliases`) drops anything outside the allowlist
 4. **Force-private types** — `_TEMPLATE_FORCE_PRIVATE_TYPES` (OAuth + service account) zeros out `template_data` regardless of UI state; only credential `notes` ride through via `spec.description`
 5. **Materialised row defaults** — `_materialise_template_credential` always writes `allow_sharing=False` and `allow_template_sharing=False` on the installer's row; downstream re-sharing requires an explicit toggle
+
+## Group Shares
+
+Added with [User Groups](../../application/user_groups/user_groups_tech.md) (migration `7896e6f51c03`).
+
+- Table `credential_group_share` (`backend/app/models/credentials/credential_group_share.py`): credential x group, unique pair, shared-by user. Models `CredentialGroupShareCreate`, `CredentialGroupSharePublic`, `CredentialGroupSharesPublic`.
+- Endpoints in `backend/app/api/routes/credential_shares.py`: `POST` / `GET /api/v1/credentials/{credential_id}/group-shares`, `DELETE /api/v1/credentials/{credential_id}/group-shares/{group_id}`. Errors via `CredentialGroupShareError` (carries status and detail). Owner only.
+- `CredentialShareService`: `share_with_group`, `list_group_shares`, `revoke_group_share` / `remove_group_share`, `group_shared_credential_ids_subquery`, `group_shared_ids`, `via_groups`, `users_without_access(session, credential_id, user_ids)` (owner, direct share or any group share keeps access), `get_group_share_count_for_credential`, `get_group_member_count_for_credential`, `delete_group_shares_for_credential`.
+- `CredentialsService.unlink_credential_from_revoked_recipients` filters recipients through `users_without_access` first (D8), then deletes links and emits `event_credential_unshared` re-syncs.
+- Group shares never touch `credential_share_revocation` or `CredentialShare.source` (D7).
+- Read paths widened to group members: shared-with-me, `get_credential_for_use`, `skill_credential_requirements`, `install_readiness_gate`, `desktop_credential_service` (source `None` = direct).
+- `CredentialPublic.group_share_count` on owned rows.

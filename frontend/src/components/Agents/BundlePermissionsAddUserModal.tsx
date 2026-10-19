@@ -1,15 +1,20 @@
-import { useQueryClient } from "@tanstack/react-query"
-import { Plus, X } from "lucide-react"
 import { useState } from "react"
 
 import type { BundlePermissionProducer } from "@/client"
-import { AgentApiService, BundlesService } from "@/client"
-import { AgentBadge } from "@/components/Common/AgentBadge"
+import { BundlePermissionsTargetPicker } from "@/components/Agents/BundlePermissions/BundlePermissionsTargetPicker"
 import {
-  UserAllowlistPicker,
-  type UserAllowlistSelectedItem,
+  buildActions,
+  type PermissionTarget,
+  type ScopesByProducer,
+  scopeGrantFor,
+} from "@/components/Agents/BundlePermissions/bundlePermissionsActions"
+import { ProducerScopeBlock } from "@/components/Agents/BundlePermissions/ProducerScopeBlock"
+import { useBundlePermissionsSave } from "@/components/Agents/BundlePermissions/useBundlePermissionsSave"
+import { SCOPE_EMPTY_HINTS } from "@/components/Common/AgentApiScopeEditor"
+import type {
+  GroupSelectedItem,
+  UserAllowlistSelectedItem,
 } from "@/components/Common/UserAllowlistPicker"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -19,17 +24,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { agentApiAccessQueryKey } from "@/hooks/useAgentApiKeys"
-import useCustomToast from "@/hooks/useCustomToast"
-
-/** The fixed user when the modal opens in edit mode (user cannot change). */
-export interface FixedUserContext {
-  userId: string
-  email?: string | null
-  fullName?: string | null
-}
 
 interface BundlePermissionsAddUserModalProps {
   open: boolean
@@ -41,31 +35,28 @@ interface BundlePermissionsAddUserModalProps {
   producers: BundlePermissionProducer[]
   /** User ids already in the table — filtered out of the add-mode picker. */
   excludeUserIds: string[]
-  /** When set, the modal edits this fixed user (no picker, blocks prefilled). */
-  fixedUser?: FixedUserContext | null
+  /** Group ids already in the table — not offered again. */
+  excludeGroupIds?: string[]
+  /**
+   * When set, the modal edits this fixed person or group (no picker, blocks
+   * prefilled).
+   */
+  fixedTarget?: PermissionTarget | null
 }
 
-type ScopesByProducer = Record<string, string[]>
-
-interface PlannedAction {
-  key: string
-  /** Producer agent id when this is a producer section (for cache invalidation). */
-  producerAgentId?: string
-  run: () => Promise<unknown>
+/** "Full Name (email)" for a person, the name for a group. */
+function targetLabel(target: PermissionTarget): string {
+  if (target.kind === "group") return target.name
+  if (target.fullName && target.email)
+    return `${target.fullName} (${target.email})`
+  return target.fullName || target.email || target.id
 }
-
-const sameScopes = (a: string[], b: string[]): boolean => {
-  if (a.length !== b.length) return false
-  const sa = new Set(a)
-  return b.every((s) => sa.has(s))
-}
-
-const extractError = (e: any): string =>
-  e?.body?.detail || e?.message || "Request failed"
 
 /**
- * Add a user (or edit a fixed user) across two independent authority domains in
- * one modal: bundle catalog access + per-manageable-producer capability scopes.
+ * Add a person or a group (or edit a fixed one) across two independent
+ * authority domains in one modal: bundle catalog access + per-manageable-
+ * producer capability scopes. A group's scopes add to each active member's
+ * own.
  *
  * Submit fans out to the existing, already owner-gated endpoints sequentially,
  * accumulating a per-section result. Successful sections persist even when a
@@ -82,12 +73,10 @@ export function BundlePermissionsAddUserModal({
   bundleAccessApplicable,
   producers,
   excludeUserIds,
-  fixedUser,
+  excludeGroupIds,
+  fixedTarget,
 }: BundlePermissionsAddUserModalProps) {
-  const queryClient = useQueryClient()
-  const { showSuccessToast, showErrorToast } = useCustomToast()
-
-  const isEdit = !!fixedUser
+  const isEdit = !!fixedTarget
   const manageableProducers = producers.filter((p) => p.can_manage)
 
   const [selectedUser, setSelectedUser] =
@@ -95,30 +84,33 @@ export function BundlePermissionsAddUserModal({
   // The picked user's email — kept distinct from the pill's display label so a
   // future change to ``fallbackLabel`` can't silently break bundle grants.
   const [selectedEmail, setSelectedEmail] = useState<string | null>(null)
+  // A group instead of a person. Picking one clears the other.
+  const [selectedGroup, setSelectedGroup] = useState<GroupSelectedItem | null>(
+    null,
+  )
+  const groupsOffered =
+    !isEdit && (bundleAccessApplicable || manageableProducers.length > 0)
   const [scopesByProducer, setScopesByProducer] = useState<ScopesByProducer>({})
-  const [sectionErrors, setSectionErrors] = useState<Record<string, string>>({})
-  const [submitting, setSubmitting] = useState(false)
-
-  const existingGrantFor = (producer: BundlePermissionProducer, userId: string) =>
-    producer.grants?.find((g) => g.user_id === userId)
+  const { submitting, sectionErrors, resetSaveState, submitActions } =
+    useBundlePermissionsSave({ agentId, bundleUuid, onOpenChange })
 
   // Reset local state whenever the dialog (re)opens. The key tracks ``open`` too
-  // so a close→reopen with the SAME fixed user still re-fires the reset.
-  const resetKey = `${open}:${fixedUser?.userId ?? "add"}`
+  // so a close→reopen with the SAME fixed target still re-fires the reset.
+  const resetKey = `${open}:${fixedTarget ? `${fixedTarget.kind}:${fixedTarget.id}` : "add"}`
   const [lastResetKey, setLastResetKey] = useState("")
   if (resetKey !== lastResetKey) {
     setLastResetKey(resetKey)
     if (open) {
       setSelectedUser(null)
       setSelectedEmail(null)
-      setSectionErrors({})
-      setSubmitting(false)
+      setSelectedGroup(null)
+      resetSaveState()
       const seeded: ScopesByProducer = {}
       for (const p of manageableProducers) {
-        const existing = isEdit
-          ? existingGrantFor(p, fixedUser!.userId)
-          : undefined
-        seeded[p.producer_agent_id] = existing ? [...(existing.scopes ?? [])] : []
+        const existing = fixedTarget ? scopeGrantFor(p, fixedTarget) : undefined
+        seeded[p.producer_agent_id] = existing
+          ? [...(existing.scopes ?? [])]
+          : []
       }
       setScopesByProducer(seeded)
     }
@@ -127,170 +119,118 @@ export function BundlePermissionsAddUserModal({
   const setProducerScopes = (producerAgentId: string, scopes: string[]) =>
     setScopesByProducer((prev) => ({ ...prev, [producerAgentId]: scopes }))
 
-  const buildActions = (userId: string, email?: string | null): PlannedAction[] => {
-    const actions: PlannedAction[] = []
+  const target: PermissionTarget | null = fixedTarget
+    ? fixedTarget
+    : selectedGroup
+      ? { kind: "group", id: selectedGroup.groupId, name: selectedGroup.name }
+      : selectedUser
+        ? { kind: "user", id: selectedUser.userId, email: selectedEmail }
+        : null
 
-    // Bundle access — in ADD mode, adding a user grants bundle access (no
-    // opt-out). In EDIT mode we never touch bundle access: it was granted when
-    // the row was created, and revocation now happens only via the row-level
-    // remove on the card, not per-field toggling here.
-    if (!isEdit && bundleAccessApplicable && bundleUuid && email) {
-      actions.push({
-        key: "bundle",
-        run: () =>
-          BundlesService.addGrant({
-            bundleUuid,
-            requestBody: { email },
-          }),
+  const plannedActions = target
+    ? buildActions({
+        target,
+        isEdit,
+        agentId,
+        bundleAccessApplicable,
+        bundleUuid,
+        manageableProducers,
+        scopesByProducer,
       })
-    }
-
-    // Per-manageable-producer scope sections.
-    for (const p of manageableProducers) {
-      const desired = scopesByProducer[p.producer_agent_id] ?? []
-      const existing = existingGrantFor(p, userId)
-      const key = `producer:${p.producer_agent_id}`
-      if (!existing) {
-        if (desired.length > 0) {
-          actions.push({
-            key,
-            producerAgentId: p.producer_agent_id,
-            run: () =>
-              AgentApiService.createAgentApiGrant({
-                agentId: p.producer_agent_id,
-                requestBody: { user_id: userId, scopes: desired },
-              }),
-          })
-        }
-      } else if (!sameScopes(existing.scopes ?? [], desired)) {
-        actions.push({
-          key,
-          producerAgentId: p.producer_agent_id,
-          run: () =>
-            AgentApiService.updateAgentApiGrant({
-              agentId: p.producer_agent_id,
-              grantId: existing.grant_id,
-              requestBody: { scopes: desired },
-            }),
-        })
-      }
-    }
-    return actions
-  }
-
-  const effectiveUserId = isEdit ? fixedUser?.userId : selectedUser?.userId
-  const effectiveEmail = isEdit ? fixedUser?.email : selectedEmail
-  const plannedActions = effectiveUserId
-    ? buildActions(effectiveUserId, effectiveEmail)
     : []
-  const canSubmit =
-    !submitting &&
-    (isEdit || !!selectedUser) &&
-    plannedActions.length > 0
+  const canSubmit = !submitting && plannedActions.length > 0
+
+  // An empty list means different things: a person's or group's existing
+  // grant still identifies them; with no grant, saving nothing writes nothing.
+  const emptyHintFor = (producer: BundlePermissionProducer) => {
+    if (!target || !scopeGrantFor(producer, target))
+      return SCOPE_EMPTY_HINTS.none
+    return target.kind === "group"
+      ? SCOPE_EMPTY_HINTS.group
+      : SCOPE_EMPTY_HINTS.person
+  }
 
   const handleSubmit = async () => {
-    const userId = effectiveUserId
-    if (!userId) return
-    const actions = buildActions(userId, effectiveEmail)
-    if (actions.length === 0) return
-
-    setSubmitting(true)
-    setSectionErrors({})
-
-    const errors: Record<string, string> = {}
-    let bundleTouched = false
-    const touchedProducerIds = new Set<string>()
-
-    for (const action of actions) {
-      try {
-        await action.run()
-        if (action.key === "bundle") bundleTouched = true
-        if (action.producerAgentId) touchedProducerIds.add(action.producerAgentId)
-      } catch (e) {
-        errors[action.key] = extractError(e)
-      }
-    }
-
-    // The overview re-query is the source of truth after any persisted change.
-    queryClient.invalidateQueries({
-      queryKey: ["bundlePermissionsOverview", agentId],
-    })
-    if (bundleTouched && bundleUuid) {
-      queryClient.invalidateQueries({
-        queryKey: ["bundles", bundleUuid, "grants"],
-      })
-    }
-    for (const producerId of touchedProducerIds) {
-      // The producer's API access card reads grants through its own list.
-      queryClient.invalidateQueries({
-        queryKey: agentApiAccessQueryKey(producerId),
-      })
-    }
-
-    setSubmitting(false)
-
-    const failedCount = Object.keys(errors).length
-    if (failedCount === 0) {
-      showSuccessToast(isEdit ? "Permissions updated" : "User added")
-      onOpenChange(false)
-    } else {
-      setSectionErrors(errors)
-      showErrorToast(
-        `Saved with ${failedCount} issue${failedCount === 1 ? "" : "s"} — see details`,
-      )
-    }
+    if (!target) return
+    await submitActions(
+      plannedActions,
+      isEdit
+        ? "Permissions updated"
+        : target.kind === "group"
+          ? `${target.name} added`
+          : "User added",
+      target.kind === "group",
+    )
   }
 
-  const fixedLabel =
-    fixedUser?.fullName && fixedUser?.email
-      ? `${fixedUser.fullName} (${fixedUser.email})`
-      : fixedUser?.fullName || fixedUser?.email || fixedUser?.userId
+  const description = fixedTarget ? (
+    <>
+      Manage producer scopes for{" "}
+      <span className="font-medium text-foreground">
+        {targetLabel(fixedTarget)}
+      </span>
+      .
+      {fixedTarget.kind === "group" && " They add to each member's own scopes."}
+    </>
+  ) : !groupsOffered ? (
+    "Pick a user and assign their producer scopes."
+  ) : bundleAccessApplicable ? (
+    "Adding a person or a group grants them access to this bundle. Optionally assign producer scopes in the same step; a group's scopes add to each member's own."
+  ) : (
+    "Pick a person or a group and assign their producer scopes. A group's scopes add to each member's own."
+  )
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent
+        className="sm:max-w-lg [&>*]:min-w-0"
+        // Radix would focus the first focusable control, which in edit mode is
+        // a scope chip's remove X — Enter would then drop a scope. Start on
+        // the first text field instead (the picker's search, or the first
+        // producer's "Add a scope name" input).
+        onOpenAutoFocus={(e) => {
+          const field = (
+            e.currentTarget as HTMLElement
+          ).querySelector<HTMLInputElement>("input:not([disabled])")
+          if (field) {
+            e.preventDefault()
+            field.focus()
+          }
+        }}
+      >
         <DialogHeader>
-          <DialogTitle>{isEdit ? "Edit permissions" : "Add user"}</DialogTitle>
-          <DialogDescription>
-            {isEdit ? (
-              <>
-                Manage producer scopes for{" "}
-                <span className="font-medium text-foreground">{fixedLabel}</span>.
-              </>
-            ) : bundleAccessApplicable ? (
-              "Adding a user grants them access to this bundle. Optionally assign producer scopes in the same step."
-            ) : (
-              "Pick a user and assign their producer scopes."
-            )}
+          <DialogTitle>
+            {isEdit
+              ? "Edit permissions"
+              : groupsOffered
+                ? "Add access"
+                : "Add user"}
+          </DialogTitle>
+          <DialogDescription className="break-words">
+            {description}
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4 py-1 max-h-[60vh] overflow-y-auto">
+        <div className="space-y-4 py-1 -mr-2 pr-2 max-h-[60vh] overflow-y-auto">
           {!isEdit && (
-            <UserAllowlistPicker
+            <BundlePermissionsTargetPicker
               enabled={open}
-              selected={selectedUser ? [selectedUser] : []}
+              groupsOffered={groupsOffered}
               excludeUserIds={excludeUserIds}
-              label={<Label className="text-xs text-muted-foreground">User</Label>}
-              searchPlaceholder="Search users to add..."
-              onAdd={(u) => {
-                setSelectedUser({
-                  id: u.id,
-                  userId: u.id,
-                  fallbackLabel: u.full_name || u.email,
-                })
-                setSelectedEmail(u.email)
+              excludeGroupIds={excludeGroupIds}
+              selectedUser={selectedUser}
+              selectedGroup={selectedGroup}
+              onUserChange={(user, email) => {
+                setSelectedUser(user)
+                setSelectedEmail(email)
               }}
-              onRemove={() => {
-                setSelectedUser(null)
-                setSelectedEmail(null)
-              }}
+              onGroupChange={setSelectedGroup}
             />
           )}
 
-          {!isEdit && bundleAccessApplicable && sectionErrors["bundle"] && (
+          {!isEdit && bundleAccessApplicable && sectionErrors.bundle && (
             <p className="text-xs text-destructive">
-              Bundle access: {sectionErrors["bundle"]}
+              Bundle access: {sectionErrors.bundle}
             </p>
           )}
 
@@ -302,6 +242,7 @@ export function BundlePermissionsAddUserModal({
               onChange={(next) =>
                 setProducerScopes(producer.producer_agent_id, next)
               }
+              emptyHint={emptyHintFor(producer)}
               error={sectionErrors[`producer:${producer.producer_agent_id}`]}
             />
           ))}
@@ -331,129 +272,16 @@ export function BundlePermissionsAddUserModal({
             Cancel
           </Button>
           <Button onClick={handleSubmit} disabled={!canSubmit}>
-            {submitting ? "Saving..." : isEdit ? "Save changes" : "Add user"}
+            {submitting
+              ? "Saving..."
+              : isEdit
+                ? "Save changes"
+                : selectedGroup
+                  ? "Add group"
+                  : "Add user"}
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  )
-}
-
-interface ProducerScopeBlockProps {
-  producer: BundlePermissionProducer
-  scopes: string[]
-  onChange: (scopes: string[]) => void
-  error?: string
-}
-
-/**
- * Scope multiselect for one manageable producer: removable assigned chips,
- * catalog quick-add chips, and a free-text add — lifted from the GrantDialog
- * body in ``ApiAccessScopesDialog.tsx`` so the two surfaces feel identical.
- */
-function ProducerScopeBlock({
-  producer,
-  scopes,
-  onChange,
-  error,
-}: ProducerScopeBlockProps) {
-  const [customScope, setCustomScope] = useState("")
-  const catalog = producer.scope_catalog ?? []
-  const unassignedCatalog = catalog.filter((s) => !scopes.includes(s.name))
-
-  const toggleScope = (scope: string) =>
-    onChange(
-      scopes.includes(scope)
-        ? scopes.filter((s) => s !== scope)
-        : [...scopes, scope],
-    )
-
-  const addCustomScope = () => {
-    const value = customScope.trim()
-    if (value && !scopes.includes(value)) onChange([...scopes, value])
-    setCustomScope("")
-  }
-
-  return (
-    <div className="space-y-2 rounded-md border p-3">
-      <div className="flex items-center gap-2">
-        <AgentBadge
-          agent={{
-            id: producer.producer_agent_id,
-            name: producer.producer_agent_name || "Producer",
-            ui_color_preset: producer.producer_ui_color_preset,
-          }}
-        />
-        <span className="text-xs text-muted-foreground">scopes</span>
-      </div>
-
-      {/* Assigned scopes (removable chips). */}
-      <div className="flex flex-wrap gap-1.5">
-        {scopes.length === 0 ? (
-          <span className="text-xs text-muted-foreground italic">
-            No scopes — identified but no capabilities granted.
-          </span>
-        ) : (
-          scopes.map((scope) => (
-            <Badge key={scope} variant="secondary" className="gap-1 text-xs">
-              {scope}
-              <button
-                type="button"
-                onClick={() => toggleScope(scope)}
-                className="hover:text-destructive transition-colors"
-                aria-label={`Remove scope ${scope}`}
-              >
-                <X className="h-3 w-3" />
-              </button>
-            </Badge>
-          ))
-        )}
-      </div>
-
-      {/* Quick-add from the producer's policy.yaml catalog. */}
-      {unassignedCatalog.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {unassignedCatalog.map((s) => (
-            <button
-              key={s.name}
-              type="button"
-              onClick={() => toggleScope(s.name)}
-              title={s.description ?? undefined}
-              className="inline-flex items-center gap-1 rounded-full border border-dashed px-2 py-0.5 text-xs text-muted-foreground hover:bg-accent transition-colors"
-            >
-              <Plus className="h-3 w-3" />
-              {s.name}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* Free-text scope add (catalog may be empty). */}
-      <div className="flex items-center gap-1.5">
-        <Input
-          value={customScope}
-          onChange={(e) => setCustomScope(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault()
-              addCustomScope()
-            }
-          }}
-          placeholder="Add a scope name..."
-          className="h-8 text-xs"
-        />
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-8 shrink-0"
-          onClick={addCustomScope}
-          disabled={!customScope.trim()}
-        >
-          Add
-        </Button>
-      </div>
-
-      {error && <p className="text-xs text-destructive">{error}</p>}
-    </div>
   )
 }

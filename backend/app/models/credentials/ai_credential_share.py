@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING
 from sqlmodel import Field, Relationship, SQLModel
 from sqlalchemy import Index, UniqueConstraint
 
+from app.models.users.user_group import UserGroupRef
+
 if TYPE_CHECKING:
     from app.models.credentials.ai_credential import AICredential
     from app.models.users.user import User
@@ -90,6 +92,12 @@ class SharedAICredentialPublic(SQLModel):
     owner_id: uuid.UUID
     owner_email: str
     shared_at: datetime
+    # Non-secret fields the environment form needs to offer the key.
+    base_url: str | None = None
+    model: str | None = None
+    default_model: str | None = None
+    # The user groups through which the caller holds this key (D12).
+    via_groups: list[UserGroupRef] = []
 
 
 class SharedAICredentialsPublic(SQLModel):

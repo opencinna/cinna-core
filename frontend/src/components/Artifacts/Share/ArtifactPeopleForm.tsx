@@ -1,9 +1,9 @@
-import { AlertCircle, User, X } from "lucide-react"
+import { AlertCircle, X } from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
 
 import type { ArtifactGrantIn, ArtifactGrantPublic } from "@/client"
 import { CatalogPrincipalPicker } from "@/components/Catalog/People/CatalogPrincipalPicker"
-import { ListRow, ListRowGroup } from "@/components/Common/ListRow"
+import { ListRow, ListRowGroup, RowInfo } from "@/components/Common/ListRow"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { DialogFooter } from "@/components/ui/dialog"
@@ -22,14 +22,27 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { APP_NAME } from "@/utils"
+import { pluralize } from "@/utils/pluralize"
+import { PRINCIPAL_KIND_ICON } from "@/utils/principalKinds"
 
 export type ArtifactVisibility = "private" | "instance"
 
+/** A person or a user group on the artifact's list. */
 interface Person {
-  userId: string
+  /** `user:<id>` / `group:<id>` — the picker's granted-key shape. */
+  key: string
+  kind: "user" | "group"
+  id: string
   name: string
   /** Secondary text that tells two people with one name apart. */
   email: string | null
+  memberCount: number | null
+}
+
+function toPrincipal(person: Person): ArtifactGrantIn["principal"] {
+  return person.kind === "group"
+    ? { group_id: person.id }
+    : { user_id: person.id }
 }
 
 export interface ArtifactPeopleSave {
@@ -41,7 +54,7 @@ export interface ArtifactPeopleSave {
 
 function signature(people: Person[]): string {
   return people
-    .map((p) => p.userId)
+    .map((p) => p.key)
     .sort()
     .join("|")
 }
@@ -58,7 +71,8 @@ interface ArtifactPeopleFormProps {
 
 /**
  * The People half of the share dialog: the `CatalogPeopleForm` skeleton,
- * people only (D21). Buffered — nothing is written until Save.
+ * people and user groups, no roles (D21) and no level. Buffered — nothing is
+ * written until Save.
  */
 export function ArtifactPeopleForm({
   grants,
@@ -71,11 +85,28 @@ export function ArtifactPeopleForm({
 }: ArtifactPeopleFormProps) {
   const initial = useMemo<Person[]>(
     () =>
-      grants.map((g) => ({
-        userId: g.principal.user_id,
-        name: g.display_name || g.email || "Unknown person",
-        email: g.email || null,
-      })),
+      grants.map((g): Person => {
+        if ("group_id" in g.principal) {
+          const id = g.principal.group_id
+          return {
+            key: `group:${id}`,
+            kind: "group",
+            id,
+            name: g.display_name || "Unknown group",
+            email: null,
+            memberCount: g.member_count ?? null,
+          }
+        }
+        const id = g.principal.user_id
+        return {
+          key: `user:${id}`,
+          kind: "user",
+          id,
+          name: g.display_name || g.email || "Unknown person",
+          email: g.email || null,
+          memberCount: null,
+        }
+      }),
     [grants],
   )
   const [people, setPeople] = useState<Person[]>(initial)
@@ -84,10 +115,7 @@ export function ArtifactPeopleForm({
 
   const grantsChanged = signature(people) !== signature(initial)
   const visibilityChanged = visibility !== initialVisibility
-  const grantedKeys = useMemo(
-    () => new Set(people.map((p) => `user:${p.userId}`)),
-    [people],
-  )
+  const grantedKeys = useMemo(() => new Set(people.map((p) => p.key)), [people])
 
   // The remove button unmounts with its row; focus moves on deliberately —
   // the next row's remove, else the previous one's, else the add trigger.
@@ -104,11 +132,11 @@ export function ArtifactPeopleForm({
     setFocusAfterRemove(null)
   }, [focusAfterRemove])
 
-  const remove = (userId: string) => {
-    const index = people.findIndex((p) => p.userId === userId)
+  const remove = (key: string) => {
+    const index = people.findIndex((p) => p.key === key)
     const neighbour = people[index + 1] ?? people[index - 1]
-    setFocusAfterRemove(neighbour ? neighbour.userId : "")
-    setPeople(people.filter((p) => p.userId !== userId))
+    setFocusAfterRemove(neighbour ? neighbour.key : "")
+    setPeople(people.filter((p) => p.key !== key))
     onEdited()
   }
 
@@ -141,7 +169,7 @@ export function ArtifactPeopleForm({
         </div>
 
         <div className="space-y-2">
-          <h3 className="text-sm font-medium">People</h3>
+          <h3 className="text-sm font-medium">People and groups</h3>
           {people.length === 0 ? (
             <p className="text-sm text-muted-foreground">Nobody else yet.</p>
           ) : (
@@ -149,42 +177,55 @@ export function ArtifactPeopleForm({
               {/* `mx-0`: inside a scroll box the group's bleed would put each
                   row's remove button back under the scrollbar. */}
               <ListRowGroup className="mx-0">
-                {people.map((person) => (
-                  <ListRow
-                    key={person.userId}
-                    icon={
-                      <span className="flex h-6 w-6 items-center justify-center rounded-md bg-muted">
-                        <User className="h-3.5 w-3.5 text-muted-foreground" />
-                      </span>
-                    }
-                    title={person.name}
-                    meta={
-                      person.email && person.email !== person.name
-                        ? person.email
-                        : undefined
-                    }
-                  >
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
-                          aria-label={`Remove ${person.name}`}
-                          data-remove-key={person.userId}
-                          disabled={isSaving}
-                          onClick={() => remove(person.userId)}
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="text-xs">
-                        Remove {person.name}
-                      </TooltipContent>
-                    </Tooltip>
-                  </ListRow>
-                ))}
+                {people.map((person) => {
+                  const Icon = PRINCIPAL_KIND_ICON[person.kind]
+                  return (
+                    <ListRow
+                      key={person.key}
+                      icon={
+                        <span className="flex h-6 w-6 items-center justify-center rounded-md bg-muted">
+                          <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+                        </span>
+                      }
+                      title={person.name}
+                      meta={
+                        person.email && person.email !== person.name
+                          ? person.email
+                          : undefined
+                      }
+                      flags={
+                        person.kind === "group" &&
+                        person.memberCount != null ? (
+                          <RowInfo
+                            facts={[
+                              `Group · ${pluralize(person.memberCount, "member", "members")}`,
+                            ]}
+                          />
+                        ) : undefined
+                      }
+                    >
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+                            aria-label={`Remove ${person.name}`}
+                            data-remove-key={person.key}
+                            disabled={isSaving}
+                            onClick={() => remove(person.key)}
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="text-xs">
+                          Remove {person.name}
+                        </TooltipContent>
+                      </Tooltip>
+                    </ListRow>
+                  )
+                })}
               </ListRowGroup>
             </div>
           )}
@@ -192,16 +233,30 @@ export function ArtifactPeopleForm({
             allowRoles={false}
             grantedKeys={grantedKeys}
             disabled={isSaving}
-            onPick={(principal, title, email) => {
-              if (!("user_id" in principal)) return
-              setPeople([
-                ...people,
-                {
-                  userId: principal.user_id,
+            onPick={(principal, title, { email, memberCount }) => {
+              let next: Person
+              if ("group_id" in principal) {
+                next = {
+                  key: `group:${principal.group_id}`,
+                  kind: "group",
+                  id: principal.group_id,
+                  name: title,
+                  email: null,
+                  memberCount: memberCount ?? null,
+                }
+              } else if ("user_id" in principal) {
+                next = {
+                  key: `user:${principal.user_id}`,
+                  kind: "user",
+                  id: principal.user_id,
                   name: title,
                   email: email || null,
-                },
-              ])
+                  memberCount: null,
+                }
+              } else {
+                return
+              }
+              setPeople([...people, next])
               onEdited()
             }}
           />
@@ -232,7 +287,7 @@ export function ArtifactPeopleForm({
             onSave({
               visibility,
               grants: people.map((p) => ({
-                principal: { user_id: p.userId },
+                principal: toPrincipal(p),
                 access: "view",
               })),
               visibilityChanged,

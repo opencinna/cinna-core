@@ -20,6 +20,12 @@ from app.models.credentials.ai_credential import (
     AICredentialTestResult,
     AffectedEnvironmentsPublic,
 )
+from app.models.credentials.ai_credential_group_share import (
+    AICredentialGroupShareCreate,
+    AICredentialGroupSharePublic,
+    AICredentialGroupSharesPublic,
+)
+from app.models.credentials.ai_credential_share import SharedAICredentialsPublic
 from app.models.credentials.managed_ai_credential_membership import (
     UserKeyProvisioningPublic,
 )
@@ -63,6 +69,18 @@ def list_my_key_provisionings(
     return key_provisioning_service.list_user_provisionings(
         session, current_user.id
     )
+
+
+@router.get("/shared-with-me", response_model=SharedAICredentialsPublic)
+def list_ai_credentials_shared_with_me(
+    session: SessionDep, current_user: CurrentUser
+) -> Any:
+    """AI credentials other people share with you, directly or through a user group.
+
+    Declared above ``/{credential_id}`` so the literal path wins.
+    """
+    credentials = ai_credentials_service.list_shared_with_me(session, current_user.id)
+    return SharedAICredentialsPublic(data=credentials, count=len(credentials))
 
 
 @router.get("/resolve-default/{sdk_engine}", response_model=AICredentialPublic | None)
@@ -208,3 +226,57 @@ def get_affected_environments(
     return ai_credentials_service.get_affected_environments(
         session, credential_id, current_user.id
     )
+
+
+# ── Group shares (user groups) ───────────────────────────────────────────────
+
+
+@router.post(
+    "/{credential_id}/group-shares", response_model=AICredentialGroupSharePublic
+)
+def share_ai_credential_with_group(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    credential_id: uuid.UUID,
+    body: AICredentialGroupShareCreate,
+) -> Any:
+    """Share an AI credential you own with a user group.
+
+    Members can then choose it in their environments' AI configuration.
+    Admin-provisioned keys cannot be shared (400).
+    """
+    return ai_credentials_service.share_with_group(
+        session, credential_id, current_user.id, body.group_id
+    )
+
+
+@router.get(
+    "/{credential_id}/group-shares", response_model=AICredentialGroupSharesPublic
+)
+def list_ai_credential_group_shares(
+    session: SessionDep, current_user: CurrentUser, credential_id: uuid.UUID
+) -> Any:
+    """The user groups an AI credential you own is shared with."""
+    shares = ai_credentials_service.list_group_shares(
+        session, credential_id, current_user.id
+    )
+    return AICredentialGroupSharesPublic(data=shares, count=len(shares))
+
+
+@router.delete("/{credential_id}/group-shares/{group_id}", response_model=Message)
+async def revoke_ai_credential_group_share(
+    session: SessionDep,
+    current_user: CurrentUser,
+    credential_id: uuid.UUID,
+    group_id: uuid.UUID,
+) -> Message:
+    """Stop sharing an AI credential with a user group.
+
+    Members with no other path to it have it cleared from their environments,
+    and the running ones are restarted so the key leaves the container.
+    """
+    await ai_credentials_service.revoke_group_share(
+        session, credential_id, current_user.id, group_id
+    )
+    return Message(message="Group share revoked successfully")

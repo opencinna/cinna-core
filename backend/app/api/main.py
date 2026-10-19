@@ -8,6 +8,7 @@ from app.api.routes import (
     admin_ai_providers,
     admin_llm_providers,
     admin_routing,
+    admin_user_groups,
     agent_api,
     agent_api_public,
     artifact_agent_api,
@@ -75,6 +76,7 @@ from app.api.routes import (
     user_channels,
     users,
     user_dashboards,
+    user_groups,
     user_workspaces,
     utils,
     webhooks,
@@ -156,6 +158,10 @@ api_router.include_router(admin_ai_providers.router)
 # member.
 api_router.include_router(admin_ai_keys.router)
 api_router.include_router(admin_routing.router)
+# /admin/user-groups/* — superuser group + membership management; the
+# share-picker search for every authenticated user is /user-groups/search.
+api_router.include_router(admin_user_groups.router)
+api_router.include_router(user_groups.router)
 api_router.include_router(server_config.router)
 api_router.include_router(server_channels.router)
 # Per-user channel settings on /users/me/channels/*. Separate router from

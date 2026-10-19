@@ -44,6 +44,7 @@ from app.models import (
     Agent,
     AgentApiAccessEntry,
     AgentApiAccessGrant,
+    AgentApiAccessGroupEntry,
     AgentApiAccessList,
     AgentApiConnectedAgent,
     AgentApiKeyCreate,
@@ -70,6 +71,7 @@ from app.models.events.security_event import (
     AGENT_API_EXTERNAL_KEY_ROTATED,
 )
 from app.services.agent_api.agent_api_grant_service import AgentApiGrantService
+from app.services.users.user_group_access import UserGroupAccess
 from app.services.agent_api.agent_api_key_status import (
     AGENT_API_KEY_ROTATION_GRACE,
     REVOKED_BY_ISSUER_REASON,
@@ -370,9 +372,38 @@ class AgentApiKeyService:
         return AgentApiAccessList(
             data=data,
             count=len(data),
+            groups=AgentApiKeyService._group_entries(
+                session, producer_agent_id, user_id, is_superuser
+            ),
             external_access_enabled=agent.agent_api_external_access_enabled,
             identity_enabled=agent.agent_api_identity_enabled,
         )
+
+    @staticmethod
+    def _group_entries(
+        session: Session,
+        producer_agent_id: uuid.UUID,
+        user_id: uuid.UUID,
+        is_superuser: bool,
+    ) -> list[AgentApiAccessGroupEntry]:
+        """The user groups holding scopes on this producer, sorted by name."""
+        grants = AgentApiGrantService.list_group_grants(
+            session, producer_agent_id, user_id, is_superuser
+        )
+        counts = UserGroupAccess.member_counts(session, {g.group_id for g in grants})
+        entries: list[AgentApiAccessGroupEntry] = []
+        for grant in grants:
+            row = AgentApiGrantService.group_to_public(session, grant, counts)
+            entries.append(
+                AgentApiAccessGroupEntry(
+                    grant_id=row["id"],
+                    group_id=row["group_id"],
+                    name=row["group"]["name"] if row["group"] else "",
+                    member_count=row["member_count"],
+                    scopes=row["scopes"],
+                )
+            )
+        return entries
 
     # ------------------------------------------------------------------ #
     # Revoke (issuer)                                                      #
@@ -617,14 +648,11 @@ class AgentApiKeyService:
             base_url = AgentApiTokenService.build_base_url(agent.id)
             spec_url = AgentApiTokenService.build_spec_url(agent.id)
             if token.subject_user_id is not None:
-                grant = session.exec(
-                    select(AgentApiAccessGrant).where(
-                        AgentApiAccessGrant.producer_agent_id == agent.id,
-                        AgentApiAccessGrant.user_id == token.subject_user_id,
-                    )
-                ).first()
-                if grant is not None:
-                    scopes = list(grant.scopes or [])
+                # Personal grant ∪ the recipient's active groups: what the
+                # proxy will actually inject on a call with this key.
+                scopes = AgentApiGrantService.effective_scopes(
+                    session, agent.id, token.subject_user_id
+                )
 
         issuer: AgentApiKeyUser | None = None
         if token.owner_id is not None:

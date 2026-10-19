@@ -3,6 +3,7 @@ AI Credentials Service
 
 Handles CRUD operations for named AI credentials and syncing defaults to User profile.
 """
+import asyncio
 import json
 import logging
 import uuid
@@ -10,7 +11,8 @@ from collections.abc import Iterable
 from datetime import datetime, timezone, timedelta
 
 from fastapi import HTTPException
-from sqlmodel import Session, col, select
+from sqlalchemy.exc import IntegrityError
+from sqlmodel import Session, col, func, or_, select
 
 from app.core.security import encrypt_field, decrypt_field
 from app.services.ai_providers import registry
@@ -30,9 +32,20 @@ from app.models.credentials.ai_credential_share import (
     AICredentialSharePublic,
     SharedAICredentialPublic,
 )
+from app.models.credentials.ai_credential_group_share import (
+    AICredentialEnvironmentsAtRisk,
+    AICredentialGroupShare,
+    AICredentialGroupSharePublic,
+)
 from app.models.users.user import User, AIServiceCredentials, AIServiceCredentialsUpdate
+from app.models.users.user_group import UserGroup, UserGroupMember, UserGroupRef
+from app.services.users.user_group_access import UserGroupAccess
 
 logger = logging.getLogger(__name__)
+
+# Strong references to fire-and-forget restart tasks, so the event loop's weak
+# reference is not the only one and a pending restart is not garbage-collected.
+_background_tasks: set[asyncio.Task] = set()
 
 
 class AICredentialNotShareableError(HTTPException):
@@ -87,7 +100,26 @@ class AICredentialsService:
             .order_by(AICredential.created_at.desc())
         )
         credentials = session.exec(statement).all()
-        return [self._to_public(cred, session) for cred in credentials]
+        group_counts = self._group_share_counts(session, [c.id for c in credentials])
+        return [
+            self._to_public(cred, session, group_share_count=group_counts.get(cred.id, 0))
+            for cred in credentials
+        ]
+
+    @staticmethod
+    def _group_share_counts(
+        session: Session, credential_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, int]:
+        """``{credential_id: number of user groups it is shared with}`` (one query)."""
+        if not credential_ids:
+            return {}
+        return dict(
+            session.exec(
+                select(AICredentialGroupShare.ai_credential_id, func.count())
+                .where(col(AICredentialGroupShare.ai_credential_id).in_(credential_ids))
+                .group_by(col(AICredentialGroupShare.ai_credential_id))
+            ).all()
+        )
 
     def get_credential(
         self, session: Session, credential_id: uuid.UUID, user_id: uuid.UUID
@@ -298,6 +330,9 @@ class AICredentialsService:
         return AICredentialDeletionImpact(
             tier=2 if usages else 0,
             bundle_usages=usages,
+            group_share_count=self._group_share_counts(
+                session, [credential_id]
+            ).get(credential_id, 0),
         )
 
     def delete_credential(
@@ -604,8 +639,21 @@ class AICredentialsService:
         adapter = registry.find_adapter(cred_type)
         return adapter is not None and adapter.classify_key(api_key).is_oauth_token
 
-    def _to_public(self, credential: AICredential, session: Session) -> AICredentialPublic:
-        """Convert credential to public representation"""
+    def _to_public(
+        self,
+        credential: AICredential,
+        session: Session,
+        group_share_count: int | None = None,
+    ) -> AICredentialPublic:
+        """Convert credential to public representation.
+
+        ``group_share_count`` is batched by list callers; single-row callers
+        leave it ``None`` and it is counted here.
+        """
+        if group_share_count is None:
+            group_share_count = self._group_share_counts(
+                session, [credential.id]
+            ).get(credential.id, 0)
         # Decrypt to get non-sensitive fields
         data = self.decrypt_credential(credential)
 
@@ -630,6 +678,7 @@ class AICredentialsService:
             # admin_curated_model_list). NULL for self-created credentials.
             default_model=credential.default_model,
             available_models=credential.available_models,
+            group_share_count=group_share_count,
             expiry_notification_date=credential.expiry_notification_date,
             created_at=credential.created_at,
             updated_at=credential.updated_at,
@@ -860,13 +909,8 @@ class AICredentialsService:
         if credential.owner_id == user_id:
             return self.decrypt_credential(credential)
 
-        # Check if user has a share
-        statement = select(AICredentialShare).where(
-            AICredentialShare.ai_credential_id == credential_id,
-            AICredentialShare.shared_with_user_id == user_id,
-        )
-        share = session.exec(statement).first()
-        if share:
+        # Direct or user-group share
+        if self.has_share(session, credential_id, user_id):
             return self.decrypt_credential(credential)
 
         return None
@@ -886,12 +930,380 @@ class AICredentialsService:
         if credential.owner_id == user_id:
             return True
 
-        # Check share
-        statement = select(AICredentialShare).where(
-            AICredentialShare.ai_credential_id == credential_id,
-            AICredentialShare.shared_with_user_id == user_id,
+        return self.has_share(session, credential_id, user_id)
+
+    # ============= User group access =============
+
+    @staticmethod
+    def has_share(
+        session: Session, credential_id: uuid.UUID, user_id: uuid.UUID
+    ) -> bool:
+        """Whether ``user_id`` holds a direct ``AICredentialShare`` or a group share.
+
+        Ownership is not checked; callers test it first.
+        """
+        direct = session.exec(
+            select(AICredentialShare.id).where(
+                AICredentialShare.ai_credential_id == credential_id,
+                AICredentialShare.shared_with_user_id == user_id,
+            )
+        ).first()
+        if direct is not None:
+            return True
+        group = session.exec(
+            select(AICredentialGroupShare.id).where(
+                AICredentialGroupShare.ai_credential_id == credential_id,
+                col(AICredentialGroupShare.group_id).in_(
+                    UserGroupAccess.member_group_ids_subquery(user_id)
+                ),
+            )
+        ).first()
+        return group is not None
+
+    @staticmethod
+    def users_without_access(
+        session: Session,
+        credential_id: uuid.UUID,
+        user_ids: Iterable[uuid.UUID],
+        *,
+        exclude_group_id: uuid.UUID | None = None,
+    ) -> set[uuid.UUID]:
+        """Users among ``user_ids`` with no remaining path to the AI credential.
+
+        Excludes the owner, direct ``AICredentialShare`` holders and members of
+        any group it is shared with. ``exclude_group_id`` ignores one group
+        share, to preview what revoking it would cost.
+        """
+        remaining = {uid for uid in user_ids if uid is not None}
+        if not remaining:
+            return set()
+        credential = session.get(AICredential, credential_id)
+        if credential is None:
+            return remaining
+        remaining.discard(credential.owner_id)
+        if not remaining:
+            return set()
+        direct = set(
+            session.exec(
+                select(AICredentialShare.shared_with_user_id).where(
+                    AICredentialShare.ai_credential_id == credential_id,
+                    col(AICredentialShare.shared_with_user_id).in_(remaining),
+                )
+            ).all()
         )
-        return session.exec(statement).first() is not None
+        group_stmt = (
+            select(UserGroupMember.user_id)
+            .join(
+                AICredentialGroupShare,
+                col(AICredentialGroupShare.group_id) == col(UserGroupMember.group_id),
+            )
+            .where(
+                AICredentialGroupShare.ai_credential_id == credential_id,
+                col(UserGroupMember.user_id).in_(remaining),
+            )
+        )
+        if exclude_group_id is not None:
+            group_stmt = group_stmt.where(
+                AICredentialGroupShare.group_id != exclude_group_id
+            )
+        return remaining - direct - set(session.exec(group_stmt).all())
+
+    @staticmethod
+    def _pinning_environments(
+        session: Session, credential_id: uuid.UUID, owner_ids: set[uuid.UUID]
+    ) -> list:
+        """Environments of agents owned by ``owner_ids`` that pin the credential
+        for conversation or building."""
+        from app.models.agents.agent import Agent
+        from app.models.environments.environment import AgentEnvironment
+
+        if not owner_ids:
+            return []
+        return list(
+            session.exec(
+                select(AgentEnvironment)
+                .join(Agent, col(Agent.id) == col(AgentEnvironment.agent_id))
+                .where(
+                    col(Agent.owner_id).in_(owner_ids),
+                    or_(
+                        AgentEnvironment.conversation_ai_credential_id == credential_id,
+                        AgentEnvironment.building_ai_credential_id == credential_id,
+                    ),
+                )
+            ).all()
+        )
+
+    @staticmethod
+    def _group_member_ids(session: Session, group_id: uuid.UUID) -> set[uuid.UUID]:
+        """Every member of the group, active or not (an inactive one may still
+        own environments pinning the key)."""
+        return set(
+            session.exec(
+                select(UserGroupMember.user_id).where(
+                    UserGroupMember.group_id == group_id
+                )
+            ).all()
+        )
+
+    def _environments_at_risk(
+        self,
+        session: Session,
+        credential_id: uuid.UUID,
+        group_id: uuid.UUID,
+        member_ids: set[uuid.UUID],
+    ) -> AICredentialEnvironmentsAtRisk:
+        lost = self.users_without_access(
+            session, credential_id, member_ids, exclude_group_id=group_id
+        )
+        envs = self._pinning_environments(session, credential_id, lost)
+        return AICredentialEnvironmentsAtRisk(
+            total=len(envs),
+            running=sum(1 for env in envs if env.status == "running"),
+        )
+
+    @staticmethod
+    def _members_by_group(
+        session: Session, group_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, tuple[set[uuid.UUID], int]]:
+        """``{group_id: (all member ids, active member count)}`` in one query.
+
+        Every member feeds ``environments_at_risk``; ``member_count`` counts
+        active members only.
+        """
+        result: dict[uuid.UUID, tuple[set[uuid.UUID], int]] = {
+            gid: (set(), 0) for gid in group_ids
+        }
+        if not group_ids:
+            return result
+        rows = session.exec(
+            select(UserGroupMember.group_id, UserGroupMember.user_id, User.is_active)
+            .join(User, col(User.id) == col(UserGroupMember.user_id))
+            .where(col(UserGroupMember.group_id).in_(group_ids))
+        ).all()
+        for gid, uid, is_active in rows:
+            members, active = result[gid]
+            members.add(uid)
+            result[gid] = (members, active + (1 if is_active else 0))
+        return result
+
+    def _group_share_public(
+        self,
+        session: Session,
+        share: AICredentialGroupShare,
+        group: UserGroup,
+        members: tuple[set[uuid.UUID], int] | None = None,
+    ) -> AICredentialGroupSharePublic:
+        if members is None:
+            members = self._members_by_group(session, [group.id])[group.id]
+        member_ids, active_count = members
+        return AICredentialGroupSharePublic(
+            group_id=group.id,
+            group_name=group.name,
+            member_count=active_count,
+            shared_by_user_id=share.shared_by_user_id,
+            shared_at=share.shared_at,
+            environments_at_risk=self._environments_at_risk(
+                session, share.ai_credential_id, group.id, member_ids
+            ),
+        )
+
+    def _owned_for_group_share(
+        self, session: Session, credential_id: uuid.UUID, owner_id: uuid.UUID
+    ) -> AICredential:
+        credential = session.get(AICredential, credential_id)
+        if not credential:
+            raise HTTPException(status_code=404, detail="AI credential not found")
+        if credential.owner_id != owner_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Only the owner can manage this credential's group shares",
+            )
+        return credential
+
+    def share_with_group(
+        self,
+        session: Session,
+        credential_id: uuid.UUID,
+        owner_id: uuid.UUID,
+        group_id: uuid.UUID,
+    ) -> AICredentialGroupSharePublic:
+        """Share an owned AI credential with a user group (D9).
+
+        404 unknown credential / group, 403 not the owner, 400 admin-managed
+        (``AICredentialNotShareableError``), 409 duplicate.
+        """
+        credential = self._owned_for_group_share(session, credential_id, owner_id)
+        if not self.is_shareable(credential):
+            raise AICredentialNotShareableError(credential.id)
+        # Read lock: a concurrent group delete / member removal (FOR UPDATE)
+        # waits for this share, so its coverage snapshot includes it.
+        group = session.exec(
+            select(UserGroup).where(UserGroup.id == group_id).with_for_update(read=True)
+        ).first()
+        if group is None:
+            raise HTTPException(status_code=404, detail="User group not found")
+        existing = session.exec(
+            select(AICredentialGroupShare.id).where(
+                AICredentialGroupShare.ai_credential_id == credential_id,
+                AICredentialGroupShare.group_id == group_id,
+            )
+        ).first()
+        if existing is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"AI credential is already shared with group '{group.name}'",
+            )
+        share = AICredentialGroupShare(
+            ai_credential_id=credential_id,
+            group_id=group_id,
+            shared_by_user_id=owner_id,
+        )
+        session.add(share)
+        try:
+            session.commit()
+        except IntegrityError as exc:
+            # A concurrent request created the same share after our check.
+            session.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail=f"AI credential is already shared with group '{group.name}'",
+            ) from exc
+        session.refresh(share)
+        logger.info(
+            "AI credential %s shared with user group %s by owner %s",
+            credential_id,
+            group_id,
+            owner_id,
+        )
+        return self._group_share_public(session, share, group)
+
+    def list_group_shares(
+        self, session: Session, credential_id: uuid.UUID, owner_id: uuid.UUID
+    ) -> list[AICredentialGroupSharePublic]:
+        """Every group share of an owned AI credential, by group name."""
+        self._owned_for_group_share(session, credential_id, owner_id)
+        rows = session.exec(
+            select(AICredentialGroupShare, UserGroup)
+            .join(UserGroup, col(UserGroup.id) == col(AICredentialGroupShare.group_id))
+            .where(AICredentialGroupShare.ai_credential_id == credential_id)
+            .order_by(col(UserGroup.name))
+        ).all()
+        members = self._members_by_group(session, [group.id for _, group in rows])
+        return [
+            self._group_share_public(session, share, group, members[group.id])
+            for share, group in rows
+        ]
+
+    async def revoke_group_share(
+        self,
+        session: Session,
+        credential_id: uuid.UUID,
+        owner_id: uuid.UUID,
+        group_id: uuid.UUID,
+    ) -> None:
+        """Owner revoke of a group share; see :meth:`remove_group_share`."""
+        self._owned_for_group_share(session, credential_id, owner_id)
+        await self.remove_group_share(
+            session, credential_id, group_id, actor_id=owner_id
+        )
+
+    async def remove_group_share(
+        self,
+        session: Session,
+        credential_id: uuid.UUID,
+        group_id: uuid.UUID,
+        *,
+        actor_id: uuid.UUID,
+    ) -> None:
+        """Remove a group share, then release it from members who lost every path.
+
+        No ownership check: callers authorise (the owner route, or the
+        superuser group page). 404 when the share does not exist.
+        """
+        share = session.exec(
+            select(AICredentialGroupShare).where(
+                AICredentialGroupShare.ai_credential_id == credential_id,
+                AICredentialGroupShare.group_id == group_id,
+            )
+        ).first()
+        if share is None:
+            raise HTTPException(status_code=404, detail="Group share not found")
+        member_ids = self._group_member_ids(session, group_id)
+        session.delete(share)
+        session.commit()
+        logger.info(
+            "AI credential %s group share with %s revoked by %s",
+            credential_id,
+            group_id,
+            actor_id,
+        )
+        await self.release_lost(
+            session, credential_ids={credential_id}, user_ids=member_ids
+        )
+
+    def lost_environments(
+        self,
+        session: Session,
+        credential_id: uuid.UUID,
+        user_ids: Iterable[uuid.UUID],
+        *,
+        exclude_group_id: uuid.UUID | None = None,
+    ) -> tuple[set[uuid.UUID], list]:
+        """``(users who would lose the key, their environments pinning it)``.
+
+        Read-only; ``exclude_group_id`` previews the loss of one group share.
+        """
+        lost = self.users_without_access(
+            session,
+            credential_id,
+            {uid for uid in user_ids if uid is not None},
+            exclude_group_id=exclude_group_id,
+        )
+        return lost, self._pinning_environments(session, credential_id, lost)
+
+    async def release_lost(
+        self,
+        session: Session,
+        *,
+        credential_ids: Iterable[uuid.UUID],
+        user_ids: Iterable[uuid.UUID],
+    ) -> None:
+        """Drop AI credentials from the environments of users who lost them (D10).
+
+        The caller passes exactly the pairs a change covered (the credentials ×
+        the affected users), snapshotted before the change. Only users with no
+        remaining path (owner, direct share, another group) are touched: their
+        environments pinning the key get the matching column(s) set to NULL
+        (committed), and the running ones are restarted in the background so
+        ``.env`` is regenerated without it. Call after the change that removed
+        access has been committed.
+        """
+        targets = {uid for uid in user_ids if uid is not None}
+        if not targets:
+            return
+
+        to_restart: list[uuid.UUID] = []
+        for cid in dict.fromkeys(credential_ids):
+            _, envs = self.lost_environments(session, cid, targets)
+            for env in envs:
+                if env.conversation_ai_credential_id == cid:
+                    env.conversation_ai_credential_id = None
+                if env.building_ai_credential_id == cid:
+                    env.building_ai_credential_id = None
+                session.add(env)
+                if env.status == "running":
+                    to_restart.append(env.id)
+        session.commit()
+
+        for env_id in dict.fromkeys(to_restart):
+            task = asyncio.create_task(_restart_environment_background(env_id))
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
+        if to_restart:
+            logger.info(
+                "AI credential release: %s environment(s) scheduled for restart",
+                len(to_restart),
+            )
 
     @staticmethod
     def is_shareable(credential: AICredential) -> bool:
@@ -1015,27 +1427,89 @@ class AICredentialsService:
         session: Session,
         user_id: uuid.UUID,
     ) -> list[SharedAICredentialPublic]:
-        """List AI credentials shared with the current user"""
+        """List AI credentials shared with the current user, directly or through
+        a user group. A direct share's ``shared_at`` wins; ``via_groups`` names
+        the groups either way. Newest first."""
         statement = (
             select(AICredentialShare)
             .where(AICredentialShare.shared_with_user_id == user_id)
             .order_by(AICredentialShare.shared_at.desc())
         )
-        shares = session.exec(statement).all()
+        shared_at_by_id: dict[uuid.UUID, datetime] = {
+            share.ai_credential_id: share.shared_at
+            for share in session.exec(statement).all()
+        }
+        group_rows = session.exec(
+            select(
+                AICredentialGroupShare.ai_credential_id,
+                UserGroup.id,
+                UserGroup.name,
+                AICredentialGroupShare.shared_at,
+            )
+            .join(UserGroup, col(UserGroup.id) == col(AICredentialGroupShare.group_id))
+            .where(
+                col(AICredentialGroupShare.group_id).in_(
+                    UserGroupAccess.member_group_ids_subquery(user_id)
+                )
+            )
+            .order_by(col(UserGroup.name))
+        ).all()
+        groups_by_id: dict[uuid.UUID, list[UserGroupRef]] = {}
+        group_first_shared: dict[uuid.UUID, datetime] = {}
+        for cred_id, gid, gname, group_shared_at in group_rows:
+            groups_by_id.setdefault(cred_id, []).append(UserGroupRef(id=gid, name=gname))
+            current = group_first_shared.get(cred_id)
+            if current is None or group_shared_at < current:
+                group_first_shared[cred_id] = group_shared_at
+        for cred_id, group_shared_at in group_first_shared.items():
+            shared_at_by_id.setdefault(cred_id, group_shared_at)
+
+        credentials = {
+            c.id: c
+            for c in session.exec(
+                select(AICredential).where(
+                    col(AICredential.id).in_(list(shared_at_by_id)),
+                    AICredential.owner_id != user_id,
+                )
+            ).all()
+        } if shared_at_by_id else {}
+        owners = {
+            u.id: u
+            for u in session.exec(
+                select(User).where(
+                    col(User.id).in_({c.owner_id for c in credentials.values()})
+                )
+            ).all()
+        } if credentials else {}
 
         result = []
-        for share in shares:
-            credential = session.get(AICredential, share.ai_credential_id)
-            owner = session.get(User, credential.owner_id) if credential else None
-            if credential and owner:
-                result.append(SharedAICredentialPublic(
-                    id=credential.id,
-                    name=credential.name,
-                    type=credential.type if isinstance(credential.type, str) else credential.type.value,
-                    owner_id=credential.owner_id,
-                    owner_email=owner.email,
-                    shared_at=share.shared_at,
-                ))
+        for cred_id, shared_at in shared_at_by_id.items():
+            credential = credentials.get(cred_id)
+            if not credential:
+                continue
+            owner = owners.get(credential.owner_id)
+            if not owner:
+                continue
+            data = self.decrypt_credential(credential)
+            result.append(SharedAICredentialPublic(
+                id=credential.id,
+                name=credential.name,
+                type=credential.type if isinstance(credential.type, str) else credential.type.value,
+                owner_id=credential.owner_id,
+                owner_email=owner.email,
+                shared_at=shared_at,
+                base_url=data.base_url,
+                model=data.model,
+                default_model=credential.default_model,
+                via_groups=groups_by_id.get(credential.id, []),
+            ))
+        # Direct share timestamps are naive (UTC), group ones are aware.
+        result.sort(
+            key=lambda row: row.shared_at
+            if row.shared_at.tzinfo
+            else row.shared_at.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )
         return result
 
     def get_credential_public_info(
@@ -1048,6 +1522,21 @@ class AICredentialsService:
         if not credential:
             return None
         return (credential.name, credential.type if isinstance(credential.type, str) else credential.type.value)
+
+
+async def _restart_environment_background(env_id: uuid.UUID) -> None:
+    """Restart one environment on its own session so ``.env`` is regenerated
+    without a released AI credential (D10). Failures are logged, not raised."""
+    from app.core.db import create_session
+    from app.services.environments.environment_service import EnvironmentService
+
+    try:
+        with create_session() as bg_session:
+            await EnvironmentService.restart_environment(bg_session, env_id)
+    except Exception:
+        logger.exception(
+            "Restart after AI credential release failed for environment %s", env_id
+        )
 
 
 # Singleton instance

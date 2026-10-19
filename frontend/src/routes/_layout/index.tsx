@@ -35,6 +35,7 @@ import {
   USE_DEFAULT_SENTINEL,
   composeSDKId,
 } from "@/components/Environments/EnvironmentConfigForm"
+import { useSharedAICredentials } from "@/components/Environments/useSharedAICredentials"
 import { usePageHeader } from "@/routes/_layout"
 import useCustomToast from "@/hooks/useCustomToast"
 import useWorkspace from "@/hooks/useWorkspace"
@@ -263,6 +264,8 @@ function Dashboard() {
     queryKey: ["aiCredentialsList"],
     queryFn: () => AiCredentialsService.listAiCredentials(),
   })
+  // A key shared with the user resolves the SDK id the same way an owned one does.
+  const sharedAiCredentials = useSharedAICredentials()
 
   const {
     data: agentsData,
@@ -494,7 +497,10 @@ function Dashboard() {
 
       // Compose SDK IDs from the env config form state — same logic as
       // AddEnvironment.tsx so dashboard and agent-tab produce identical payloads.
-      const allCredentials = aiCredentials?.data ?? []
+      const allCredentials = [
+        ...(aiCredentials?.data ?? []),
+        ...sharedAiCredentials,
+      ]
       const convIsDefault = envConfig.conversationCredentialId === USE_DEFAULT_SENTINEL
       const buildIsDefault = envConfig.buildingCredentialId === USE_DEFAULT_SENTINEL
       const selConv = allCredentials.find((c) => c.id === envConfig.conversationCredentialId) ?? null

@@ -13,7 +13,7 @@ from datetime import datetime, UTC
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import JSON, Column, ForeignKey, Index, Text, UniqueConstraint, Uuid
+from sqlalchemy import JSON, Column, DateTime, ForeignKey, Index, Text, UniqueConstraint, Uuid
 from sqlmodel import Field, Relationship, SQLModel
 
 
@@ -110,6 +110,7 @@ class AIKnowledgeGitRepoPublic(AIKnowledgeGitRepoBase):
     updated_at: datetime
     article_count: int = 0
     shared_user_count: int = 0
+    shared_group_count: int = 0
 
 
 class AIKnowledgeGitRepoCreate(SQLModel):
@@ -149,6 +150,44 @@ class AIKnowledgeGitRepoUserShare(SQLModel, table=True):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+class AIKnowledgeGitRepoGroupShare(SQLModel, table=True):
+    """Link table: user groups granted query access to a ``shared`` knowledge source.
+
+    Members are resolved live through ``user_group_member``.
+    """
+
+    __tablename__ = "ai_knowledge_git_repo_group_share"
+    __table_args__ = (
+        UniqueConstraint("git_repo_id", "group_id", name="uq_knowledge_repo_group_share"),
+    )
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    git_repo_id: uuid.UUID = Field(
+        foreign_key="ai_knowledge_git_repo.id", ondelete="CASCADE", index=True
+    )
+    group_id: uuid.UUID = Field(foreign_key="user_group.id", ondelete="CASCADE", index=True)
+    # SET NULL DEFERRABLE INITIALLY DEFERRED: sources outlive their admins, and
+    # an admin deleted alongside other cascades must not trip an immediate check.
+    granted_by_user_id: Optional[uuid.UUID] = Field(
+        default=None,
+        sa_column=Column(
+            Uuid,
+            ForeignKey(
+                "user.id",
+                ondelete="SET NULL",
+                deferrable=True,
+                initially="DEFERRED",
+            ),
+            nullable=True,
+        ),
+    )
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC),
+        sa_type=DateTime(timezone=True),
+        nullable=False,
+    )
+
+
 class KnowledgeSourceShareCreate(SQLModel):
     """Request body for adding a user to a knowledge source's share list."""
 
@@ -161,6 +200,21 @@ class KnowledgeSourceSharedUserPublic(SQLModel):
     user_id: uuid.UUID
     email: str
     full_name: Optional[str] = None
+    created_at: datetime
+
+
+class KnowledgeSourceGroupShareCreate(SQLModel):
+    """Request body for adding a user group to a knowledge source's share list."""
+
+    group_id: uuid.UUID
+
+
+class KnowledgeSourceSharedGroupPublic(SQLModel):
+    """A user group on a knowledge source's share list."""
+
+    group_id: uuid.UUID
+    name: str
+    member_count: int = 0
     created_at: datetime
 
 

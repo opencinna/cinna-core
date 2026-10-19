@@ -2,11 +2,14 @@
 Credential Share Service - Business logic for credential sharing operations.
 """
 import logging
+from collections.abc import Iterable
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlmodel import Session, col, delete, select, and_
+from sqlalchemy import union
+from sqlalchemy.exc import IntegrityError
+from sqlmodel import Session, col, delete, func, select, and_
 
 from app.models.agents.agent import Agent
 from app.models.bundles.agent_bundle import AgentBundle
@@ -20,13 +23,28 @@ from app.models.credentials.credential_share import (
     CredentialShareRevocation,
     SharedCredentialPublic,
 )
+from app.models.credentials.credential_group_share import (
+    CredentialGroupShare,
+    CredentialGroupSharePublic,
+)
 from app.models.credentials.link_models import AgentCredentialLink
 from app.models.plugins.llm_plugin import AgentPluginLink, PluginSource
 from app.models.skills.skill_package_revision import SkillPackageRevision
 from app.models.users.user import User
+from app.models.users.user_group import UserGroup, UserGroupMember, UserGroupRef
 from app.services.credentials.credentials_service import CredentialsService
+from app.services.users.user_group_access import UserGroupAccess
 
 logger = logging.getLogger(__name__)
+
+
+class CredentialGroupShareError(Exception):
+    """A refused group-share operation; ``status_code`` is the HTTP answer."""
+
+    def __init__(self, status_code: int, detail: str) -> None:
+        super().__init__(detail)
+        self.status_code = status_code
+        self.detail = detail
 
 
 class CredentialShareService:
@@ -470,7 +488,11 @@ class CredentialShareService:
         """
         Get all credentials shared with a user.
 
-        Returns list of SharedCredentialPublic objects where user has read access via CredentialShare.
+        Returns one SharedCredentialPublic per credential the user holds through
+        a direct ``CredentialShare`` and/or a group share. When both exist the
+        direct row's ``source`` / ``shared_at`` wins; a group-only row has
+        ``source=None`` (classifies as "mine") and the earliest group share's
+        ``shared_at``. ``via_groups`` names the groups either way.
         """
         # Query all shares where user is the recipient
         statement = select(CredentialShare).where(
@@ -480,14 +502,42 @@ class CredentialShareService:
 
         # Resolve all credentials first, then batch the agent-usage counts so we
         # never issue a per-row count query (avoids the N+1 flagged in the plan).
-        resolved: list[tuple[CredentialShare, Credential]] = []
+        # A row is (source, shared_at, access_level, credential).
+        resolved: list[tuple[str | None, datetime, str, Credential]] = []
+        seen: set[UUID] = set()
         for share in shares:
             credential = session.get(Credential, share.credential_id)
             if not credential:
                 continue  # Skip if credential was deleted
-            resolved.append((share, credential))
+            seen.add(credential.id)
+            resolved.append(
+                (share.source, share.shared_at, share.access_level, credential)
+            )
 
-        credential_ids = [credential.id for _, credential in resolved]
+        group_rows = session.exec(
+            select(Credential, func.min(CredentialGroupShare.shared_at))
+            .join(
+                CredentialGroupShare,
+                col(CredentialGroupShare.credential_id) == col(Credential.id),
+            )
+            .where(
+                col(CredentialGroupShare.group_id).in_(
+                    UserGroupAccess.member_group_ids_subquery(user_id)
+                ),
+                Credential.owner_id != user_id,
+            )
+            .group_by(col(Credential.id))
+        ).all()
+        for credential, shared_at in group_rows:
+            if credential.id in seen:
+                continue
+            seen.add(credential.id)
+            resolved.append((None, shared_at, "read", credential))
+
+        credential_ids = [credential.id for *_, credential in resolved]
+        groups_by_credential = CredentialShareService.via_groups(
+            session, user_id=user_id, credential_ids=credential_ids
+        )
         usage_counts = CredentialsService.get_agent_usage_counts(
             session=session,
             credential_ids=credential_ids,
@@ -495,7 +545,7 @@ class CredentialShareService:
         )
 
         result = []
-        for share, credential in resolved:
+        for source, shared_at, access_level, credential in resolved:
             owner = session.get(User, credential.owner_id)
             # `agent_api_kind` is deliberately omitted: this projection is for
             # credentials shared WITH the caller, and a shared row's category
@@ -507,7 +557,7 @@ class CredentialShareService:
             category = CredentialsService.classify_credential_category(
                 is_owned=False,
                 credential_type=credential.type,
-                share_source=share.source,
+                share_source=source,
             )
             result.append(SharedCredentialPublic(
                 id=credential.id,
@@ -516,12 +566,13 @@ class CredentialShareService:
                 notes=credential.notes,
                 owner_id=credential.owner_id,
                 owner_email=owner.email if owner else "",
-                shared_at=share.shared_at,
-                access_level=share.access_level,
+                shared_at=shared_at,
+                access_level=access_level,
                 category=category,
-                source=share.source,
+                source=source,
                 agent_usage_count=usage_counts.get(credential.id, 0),
                 used_in_bundle=False,
+                via_groups=groups_by_credential.get(credential.id, []),
             ))
 
         return result
@@ -585,6 +636,11 @@ class CredentialShareService:
             revoked_recipient_ids = [share.shared_with_user_id for share in shares]
             for share in shares:
                 session.delete(share)
+            revoked_recipient_ids.extend(
+                CredentialShareService.delete_group_shares_for_credential(
+                    session, credential_id
+                )
+            )
             logger.info(
                 f"Disabled sharing for credential {credential_id}, "
                 f"deleted {len(shares)} share(s)"
@@ -614,7 +670,7 @@ class CredentialShareService:
 
         Returns True if:
         - User owns the credential, OR
-        - User has CredentialShare for the credential
+        - User has a direct CredentialShare or belongs to a group it is shared with
         """
         credential = session.get(Credential, credential_id)
         if not credential:
@@ -624,15 +680,483 @@ class CredentialShareService:
         if credential.owner_id == user_id:
             return True
 
-        # Check if user has a share
-        statement = select(CredentialShare).where(
-            and_(
-                CredentialShare.credential_id == credential_id,
-                CredentialShare.shared_with_user_id == user_id
+        return CredentialShareService.has_share(session, credential_id, user_id)
+
+    # ── Group-aware access (user groups: D4 live membership, D8) ─────────
+
+    @staticmethod
+    def group_shared_credential_ids_subquery(user_id: UUID):
+        """Credential ids group-shared with any group ``user_id`` belongs to."""
+        return select(CredentialGroupShare.credential_id).where(
+            col(CredentialGroupShare.group_id).in_(
+                UserGroupAccess.member_group_ids_subquery(user_id)
             )
         )
-        share = session.exec(statement).first()
-        return share is not None
+
+    @staticmethod
+    def shared_credential_ids_subquery(user_id: UUID):
+        """Ids of every credential shared with ``user_id``, directly or by group.
+
+        Use as ``col(Credential.id).in_(CredentialShareService.shared_credential_ids_subquery(uid))``.
+        """
+        direct = select(CredentialShare.credential_id).where(
+            CredentialShare.shared_with_user_id == user_id
+        )
+        return union(direct, CredentialShareService.group_shared_credential_ids_subquery(user_id))
+
+    @staticmethod
+    def has_share(session: Session, credential_id: UUID, user_id: UUID) -> bool:
+        """Whether ``user_id`` holds a direct or a group share of the credential.
+
+        Ownership is not checked; callers test it first.
+        """
+        direct = session.exec(
+            select(CredentialShare.id).where(
+                CredentialShare.credential_id == credential_id,
+                CredentialShare.shared_with_user_id == user_id,
+            )
+        ).first()
+        if direct is not None:
+            return True
+        group = session.exec(
+            select(CredentialGroupShare.id).where(
+                CredentialGroupShare.credential_id == credential_id,
+                col(CredentialGroupShare.group_id).in_(
+                    UserGroupAccess.member_group_ids_subquery(user_id)
+                ),
+            )
+        ).first()
+        return group is not None
+
+    @staticmethod
+    def group_shared_ids(
+        session: Session, *, user_id: UUID, credential_ids: list[UUID]
+    ) -> set[UUID]:
+        """Ids among ``credential_ids`` group-shared with ``user_id``. No query when empty."""
+        if not credential_ids:
+            return set()
+        return set(
+            session.exec(
+                select(CredentialGroupShare.credential_id).where(
+                    col(CredentialGroupShare.credential_id).in_(credential_ids),
+                    col(CredentialGroupShare.group_id).in_(
+                        UserGroupAccess.member_group_ids_subquery(user_id)
+                    ),
+                )
+            ).all()
+        )
+
+    @staticmethod
+    def via_groups(
+        session: Session, *, user_id: UUID, credential_ids: list[UUID]
+    ) -> dict[UUID, list[UserGroupRef]]:
+        """``{credential_id: [groups]}`` through which ``user_id`` holds each one."""
+        if not credential_ids:
+            return {}
+        rows = session.exec(
+            select(CredentialGroupShare.credential_id, UserGroup.id, UserGroup.name)
+            .join(UserGroup, col(UserGroup.id) == col(CredentialGroupShare.group_id))
+            .where(
+                col(CredentialGroupShare.credential_id).in_(credential_ids),
+                col(CredentialGroupShare.group_id).in_(
+                    UserGroupAccess.member_group_ids_subquery(user_id)
+                ),
+            )
+            .order_by(col(UserGroup.name))
+        ).all()
+        result: dict[UUID, list[UserGroupRef]] = {}
+        for credential_id, group_id, group_name in rows:
+            result.setdefault(credential_id, []).append(
+                UserGroupRef(id=group_id, name=group_name)
+            )
+        return result
+
+    @staticmethod
+    def users_without_access(
+        session: Session,
+        credential_id: UUID,
+        user_ids: set[UUID] | list[UUID],
+        *,
+        exclude_group_id: UUID | None = None,
+    ) -> set[UUID]:
+        """The users among ``user_ids`` with no remaining path to the credential.
+
+        Excludes the owner, direct share holders and members of any group the
+        credential is shared with (D8). ``exclude_group_id`` ignores one group
+        share, to preview what revoking it would cost.
+        """
+        remaining = {uid for uid in user_ids if uid is not None}
+        if not remaining:
+            return set()
+        credential = session.get(Credential, credential_id)
+        if credential is None:
+            return remaining
+        remaining.discard(credential.owner_id)
+        if not remaining:
+            return set()
+        direct = set(
+            session.exec(
+                select(CredentialShare.shared_with_user_id).where(
+                    CredentialShare.credential_id == credential_id,
+                    col(CredentialShare.shared_with_user_id).in_(remaining),
+                )
+            ).all()
+        )
+        group_stmt = (
+            select(UserGroupMember.user_id)
+            .join(
+                CredentialGroupShare,
+                col(CredentialGroupShare.group_id) == col(UserGroupMember.group_id),
+            )
+            .where(
+                CredentialGroupShare.credential_id == credential_id,
+                col(UserGroupMember.user_id).in_(remaining),
+            )
+        )
+        if exclude_group_id is not None:
+            group_stmt = group_stmt.where(
+                CredentialGroupShare.group_id != exclude_group_id
+            )
+        via_group = set(session.exec(group_stmt).all())
+        return remaining - direct - via_group
+
+    @staticmethod
+    def share_counts_by_credential(
+        session: Session, credential_ids: list[UUID]
+    ) -> tuple[dict[UUID, int], dict[UUID, int]]:
+        """``(direct share counts, group share counts)`` per credential, two
+        grouped queries for a whole page. Missing ids count 0."""
+        if not credential_ids:
+            return {}, {}
+        direct = dict(
+            session.exec(
+                select(CredentialShare.credential_id, func.count())
+                .where(col(CredentialShare.credential_id).in_(credential_ids))
+                .group_by(col(CredentialShare.credential_id))
+            ).all()
+        )
+        group = dict(
+            session.exec(
+                select(CredentialGroupShare.credential_id, func.count())
+                .where(col(CredentialGroupShare.credential_id).in_(credential_ids))
+                .group_by(col(CredentialGroupShare.credential_id))
+            ).all()
+        )
+        return direct, group
+
+    @staticmethod
+    def get_group_share_count_for_credential(
+        session: Session, credential_id: UUID
+    ) -> int:
+        """Number of user groups the credential is shared with."""
+        return session.exec(
+            select(func.count())
+            .select_from(CredentialGroupShare)
+            .where(CredentialGroupShare.credential_id == credential_id)
+        ).one()
+
+    @staticmethod
+    def get_group_member_count_for_credential(
+        session: Session, credential_id: UUID
+    ) -> int:
+        """Distinct active members reached through the credential's group shares."""
+        group_ids = session.exec(
+            select(CredentialGroupShare.group_id).where(
+                CredentialGroupShare.credential_id == credential_id
+            )
+        ).all()
+        return len(UserGroupAccess.active_member_ids(session, group_ids))
+
+    @staticmethod
+    def delete_group_shares_for_credential(
+        session: Session, credential_id: UUID
+    ) -> list[UUID]:
+        """Delete every group share of a credential (sharing turned off).
+
+        Does not commit. Returns every member of the groups, inactive ones
+        included (they may still own agents linking the credential), for the
+        caller to pass to ``unlink_credential_from_revoked_recipients`` after
+        its commit.
+        No revocation rows are written (D7).
+        """
+        group_shares = session.exec(
+            select(CredentialGroupShare).where(
+                CredentialGroupShare.credential_id == credential_id
+            )
+        ).all()
+        if not group_shares:
+            return []
+        member_ids = set(
+            session.exec(
+                select(UserGroupMember.user_id).where(
+                    col(UserGroupMember.group_id).in_(
+                        [share.group_id for share in group_shares]
+                    )
+                )
+            ).all()
+        )
+        for share in group_shares:
+            session.delete(share)
+        logger.info(
+            "Deleted %s group share(s) of credential %s",
+            len(group_shares),
+            credential_id,
+        )
+        return list(member_ids)
+
+    # ── Group share operations (owner) ───────────────────────────────────
+
+    @staticmethod
+    def _owned_credential(
+        session: Session, credential_id: UUID, owner_id: UUID
+    ) -> Credential:
+        credential = session.get(Credential, credential_id)
+        if credential is None:
+            raise CredentialGroupShareError(404, "Credential not found")
+        if credential.owner_id != owner_id:
+            raise CredentialGroupShareError(
+                403, "Only the owner can manage this credential's group shares"
+            )
+        return credential
+
+    @staticmethod
+    def _links_at_risk(
+        session: Session, credential_id: UUID, group_id: UUID, member_ids: set[UUID]
+    ) -> int:
+        """Agent links revoking the group share would drop (members left with no path)."""
+        _, links = CredentialShareService.lost_links(
+            session, credential_id, member_ids, exclude_group_id=group_id
+        )
+        return links
+
+    @staticmethod
+    def lost_links(
+        session: Session,
+        credential_id: UUID,
+        user_ids: set[UUID],
+        *,
+        exclude_group_id: UUID | None = None,
+    ) -> tuple[set[UUID], int]:
+        """``(users who would lose the credential, agent links they would lose)``.
+
+        Read-only; ``exclude_group_id`` previews the loss of one group share.
+        """
+        lost = CredentialShareService.users_without_access(
+            session, credential_id, user_ids, exclude_group_id=exclude_group_id
+        )
+        if not lost:
+            return set(), 0
+        links = session.exec(
+            select(func.count())
+            .select_from(AgentCredentialLink)
+            .join(Agent, col(Agent.id) == col(AgentCredentialLink.agent_id))
+            .where(
+                AgentCredentialLink.credential_id == credential_id,
+                col(Agent.owner_id).in_(lost),
+            )
+        ).one()
+        return lost, links
+
+    @staticmethod
+    def _members_by_group(
+        session: Session, group_ids: list[UUID]
+    ) -> dict[UUID, tuple[set[UUID], int]]:
+        """``{group_id: (all member ids, active member count)}`` in one query.
+
+        Every member feeds ``links_at_risk`` (an inactive one may still own
+        linking agents); ``member_count`` counts active members only.
+        """
+        result: dict[UUID, tuple[set[UUID], int]] = {
+            gid: (set(), 0) for gid in group_ids
+        }
+        if not group_ids:
+            return result
+        rows = session.exec(
+            select(UserGroupMember.group_id, UserGroupMember.user_id, User.is_active)
+            .join(User, col(User.id) == col(UserGroupMember.user_id))
+            .where(col(UserGroupMember.group_id).in_(group_ids))
+        ).all()
+        for gid, uid, is_active in rows:
+            members, active = result[gid]
+            members.add(uid)
+            result[gid] = (members, active + (1 if is_active else 0))
+        return result
+
+    @staticmethod
+    def _group_share_public(
+        session: Session,
+        share: CredentialGroupShare,
+        group: UserGroup,
+        members: tuple[set[UUID], int] | None = None,
+    ) -> CredentialGroupSharePublic:
+        if members is None:
+            members = CredentialShareService._members_by_group(session, [group.id])[
+                group.id
+            ]
+        member_ids, active_count = members
+        return CredentialGroupSharePublic(
+            group_id=group.id,
+            group_name=group.name,
+            member_count=active_count,
+            shared_by_user_id=share.shared_by_user_id,
+            shared_at=share.shared_at,
+            links_at_risk=CredentialShareService._links_at_risk(
+                session, share.credential_id, group.id, member_ids
+            ),
+        )
+
+    @staticmethod
+    def share_with_group(
+        session: Session, credential_id: UUID, owner_id: UUID, group_id: UUID
+    ) -> CredentialGroupSharePublic:
+        """Share a credential with a user group (owner only).
+
+        Raises CredentialGroupShareError: 404 credential / group, 403 not the
+        owner, 400 sharing off or not allowed for this credential, 409 duplicate.
+        """
+        credential = CredentialShareService._owned_credential(
+            session, credential_id, owner_id
+        )
+        if not credential.allow_sharing:
+            raise CredentialGroupShareError(
+                400, "This credential does not allow sharing. Enable sharing first."
+            )
+        try:
+            CredentialsService.assert_sharing_allowed(session, credential)
+        except ValueError as exc:
+            raise CredentialGroupShareError(400, str(exc)) from exc
+        # Read lock: a concurrent group delete / member removal (FOR UPDATE)
+        # waits for this share, so its coverage snapshot includes it.
+        group = session.exec(
+            select(UserGroup).where(UserGroup.id == group_id).with_for_update(read=True)
+        ).first()
+        if group is None:
+            raise CredentialGroupShareError(404, "User group not found")
+        existing = session.exec(
+            select(CredentialGroupShare.id).where(
+                CredentialGroupShare.credential_id == credential_id,
+                CredentialGroupShare.group_id == group_id,
+            )
+        ).first()
+        if existing is not None:
+            raise CredentialGroupShareError(
+                409, f"Credential is already shared with group '{group.name}'"
+            )
+        share = CredentialGroupShare(
+            credential_id=credential_id,
+            group_id=group_id,
+            shared_by_user_id=owner_id,
+        )
+        session.add(share)
+        try:
+            session.commit()
+        except IntegrityError as exc:
+            # A concurrent request created the same share after our check.
+            session.rollback()
+            raise CredentialGroupShareError(
+                409, f"Credential is already shared with group '{group.name}'"
+            ) from exc
+        session.refresh(share)
+        logger.info(
+            "Credential %s shared with user group %s by owner %s",
+            credential_id,
+            group_id,
+            owner_id,
+        )
+        return CredentialShareService._group_share_public(session, share, group)
+
+    @staticmethod
+    def list_group_shares(
+        session: Session, credential_id: UUID, owner_id: UUID
+    ) -> list[CredentialGroupSharePublic]:
+        """Every group share of an owned credential, by group name."""
+        CredentialShareService._owned_credential(session, credential_id, owner_id)
+        rows = session.exec(
+            select(CredentialGroupShare, UserGroup)
+            .join(UserGroup, col(UserGroup.id) == col(CredentialGroupShare.group_id))
+            .where(CredentialGroupShare.credential_id == credential_id)
+            .order_by(col(UserGroup.name))
+        ).all()
+        members = CredentialShareService._members_by_group(
+            session, [group.id for _, group in rows]
+        )
+        return [
+            CredentialShareService._group_share_public(
+                session, share, group, members[group.id]
+            )
+            for share, group in rows
+        ]
+
+    @staticmethod
+    async def revoke_group_share(
+        session: Session, credential_id: UUID, owner_id: UUID, group_id: UUID
+    ) -> None:
+        """Owner revoke of a group share; see :meth:`remove_group_share`."""
+        CredentialShareService._owned_credential(session, credential_id, owner_id)
+        await CredentialShareService.remove_group_share(
+            session, credential_id, group_id, actor_id=owner_id
+        )
+
+    @staticmethod
+    async def remove_group_share(
+        session: Session, credential_id: UUID, group_id: UUID, *, actor_id: UUID
+    ) -> None:
+        """Remove a group share, then unlink + re-sync members who lost every path.
+
+        No ownership check: callers authorise (the owner route, or the
+        superuser group page). Writes no revocation rows (D7): the members
+        never held a per-person share. Raises CredentialGroupShareError 404.
+        """
+        share = session.exec(
+            select(CredentialGroupShare).where(
+                CredentialGroupShare.credential_id == credential_id,
+                CredentialGroupShare.group_id == group_id,
+            )
+        ).first()
+        if share is None:
+            raise CredentialGroupShareError(404, "Group share not found")
+        # Every member, active or not: an inactive one may still own agents
+        # linking the credential.
+        member_ids = set(
+            session.exec(
+                select(UserGroupMember.user_id).where(
+                    UserGroupMember.group_id == group_id
+                )
+            ).all()
+        )
+        session.delete(share)
+        session.commit()
+        logger.info(
+            "Credential %s group share with %s revoked by %s",
+            credential_id,
+            group_id,
+            actor_id,
+        )
+        await CredentialShareService.release_lost(
+            session, credential_ids={credential_id}, user_ids=member_ids
+        )
+
+    @staticmethod
+    async def release_lost(
+        session: Session, *, credential_ids: Iterable[UUID], user_ids: Iterable[UUID]
+    ) -> None:
+        """Drop the links of ``user_ids`` to ``credential_ids`` they lost.
+
+        The caller passes exactly the pairs a group change covered (the
+        group's credential shares × the affected members), snapshotted before
+        the change. Runs after the change is committed, so the D8 filter inside
+        ``unlink_credential_from_revoked_recipients`` keeps whatever the users
+        still hold through the owner, a direct share or another group.
+        """
+        targets = [uid for uid in user_ids if uid is not None]
+        if not targets:
+            return
+        for credential_id in dict.fromkeys(credential_ids):
+            await CredentialsService.unlink_credential_from_revoked_recipients(
+                session=session,
+                credential_id=credential_id,
+                recipient_user_ids=targets,
+            )
 
     @staticmethod
     def delete_all_shares_for_credential(

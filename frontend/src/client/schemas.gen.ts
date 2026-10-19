@@ -445,6 +445,11 @@ export const AICredentialDeletionImpactSchema = {
             type: 'array',
             title: 'Bundle Usages',
             default: []
+        },
+        group_share_count: {
+            type: 'integer',
+            title: 'Group Share Count',
+            default: 0
         }
     },
     type: 'object',
@@ -463,6 +468,96 @@ degrading affected bundles to "user provides". \`\`tier\`\` grades the impact:
 (There is no Tier 1 for AI credentials: direct AI-credential shares are
 materialised from bundle PBP wiring, so the bundle reference is the
 meaningful blast radius.)`
+} as const;
+
+export const AICredentialEnvironmentsAtRiskSchema = {
+    properties: {
+        total: {
+            type: 'integer',
+            title: 'Total',
+            default: 0
+        },
+        running: {
+            type: 'integer',
+            title: 'Running',
+            default: 0
+        }
+    },
+    type: 'object',
+    title: 'AICredentialEnvironmentsAtRisk',
+    description: `Environments that lose this AI credential if the group share goes (D10).
+
+\`\`total\`\` environments of members with no other path pin the credential;
+\`\`running\`\` of them are restarted so their \`\`.env\`\` drops the key.`
+} as const;
+
+export const AICredentialGroupShareCreateSchema = {
+    properties: {
+        group_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Group Id'
+        }
+    },
+    type: 'object',
+    required: ['group_id'],
+    title: 'AICredentialGroupShareCreate',
+    description: 'Request body for ``POST /ai-credentials/{id}/group-shares``.'
+} as const;
+
+export const AICredentialGroupSharePublicSchema = {
+    properties: {
+        group_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Group Id'
+        },
+        group_name: {
+            type: 'string',
+            title: 'Group Name'
+        },
+        member_count: {
+            type: 'integer',
+            title: 'Member Count',
+            default: 0
+        },
+        shared_by_user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Shared By User Id'
+        },
+        shared_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Shared At'
+        },
+        environments_at_risk: {
+            '$ref': '#/components/schemas/AICredentialEnvironmentsAtRisk'
+        }
+    },
+    type: 'object',
+    required: ['group_id', 'group_name', 'shared_by_user_id', 'shared_at'],
+    title: 'AICredentialGroupSharePublic',
+    description: 'One group share of an AI credential, as its owner sees it.'
+} as const;
+
+export const AICredentialGroupSharesPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/AICredentialGroupSharePublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'AICredentialGroupSharesPublic'
 } as const;
 
 export const AICredentialPublicSchema = {
@@ -595,6 +690,11 @@ export const AICredentialPublicSchema = {
                 }
             ],
             title: 'Available Models'
+        },
+        group_share_count: {
+            type: 'integer',
+            title: 'Group Share Count',
+            default: 0
         },
         created_at: {
             type: 'string',
@@ -1116,6 +1216,11 @@ export const AIKnowledgeGitRepoPublicSchema = {
         shared_user_count: {
             type: 'integer',
             title: 'Shared User Count',
+            default: 0
+        },
+        shared_group_count: {
+            type: 'integer',
+            title: 'Shared Group Count',
             default: 0
         }
     },
@@ -2176,6 +2281,14 @@ export const AccountAgentApiAccessSchema = {
         count: {
             type: 'integer',
             title: 'Count'
+        },
+        groups: {
+            items: {
+                '$ref': '#/components/schemas/AgentApiAccessGroupEntry'
+            },
+            type: 'array',
+            title: 'Groups',
+            default: []
         },
         external_access_enabled: {
             type: 'boolean',
@@ -5608,6 +5721,172 @@ export const AgentApiAccessGrantsPublicSchema = {
     title: 'AgentApiAccessGrantsPublic'
 } as const;
 
+export const AgentApiAccessGroupEntrySchema = {
+    properties: {
+        grant_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Grant Id'
+        },
+        group_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Group Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        member_count: {
+            type: 'integer',
+            title: 'Member Count',
+            default: 0
+        },
+        scopes: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Scopes',
+            default: []
+        }
+    },
+    type: 'object',
+    required: ['grant_id', 'group_id', 'name'],
+    title: 'AgentApiAccessGroupEntry',
+    description: 'One user group holding API scopes on a producer (scopes only, no keys).'
+} as const;
+
+export const AgentApiAccessGroupGrantCreateSchema = {
+    properties: {
+        group_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Group Id'
+        },
+        scopes: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Scopes',
+            default: []
+        }
+    },
+    type: 'object',
+    required: ['group_id'],
+    title: 'AgentApiAccessGroupGrantCreate',
+    description: 'Body of ``POST /agents/{id}/agent-api/group-grants``.'
+} as const;
+
+export const AgentApiAccessGroupGrantPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        producer_agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Producer Agent Id'
+        },
+        group_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Group Id'
+        },
+        group: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/UserGroupRef'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        member_count: {
+            type: 'integer',
+            title: 'Member Count',
+            default: 0
+        },
+        scopes: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Scopes'
+        },
+        created_by: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Created By'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        }
+    },
+    type: 'object',
+    required: ['id', 'producer_agent_id', 'group_id', 'scopes', 'created_at', 'updated_at'],
+    title: 'AgentApiAccessGroupGrantPublic'
+} as const;
+
+export const AgentApiAccessGroupGrantUpdateSchema = {
+    properties: {
+        scopes: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Scopes'
+        }
+    },
+    type: 'object',
+    title: 'AgentApiAccessGroupGrantUpdate',
+    description: 'Body of ``PUT .../group-grants/{grant_id}`` (scopes only).'
+} as const;
+
+export const AgentApiAccessGroupGrantsPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/AgentApiAccessGroupGrantPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'AgentApiAccessGroupGrantsPublic'
+} as const;
+
 export const AgentApiAccessListSchema = {
     properties: {
         data: {
@@ -5621,6 +5900,14 @@ export const AgentApiAccessListSchema = {
             type: 'integer',
             title: 'Count'
         },
+        groups: {
+            items: {
+                '$ref': '#/components/schemas/AgentApiAccessGroupEntry'
+            },
+            type: 'array',
+            title: 'Groups',
+            default: []
+        },
         external_access_enabled: {
             type: 'boolean',
             title: 'External Access Enabled'
@@ -5633,7 +5920,8 @@ export const AgentApiAccessListSchema = {
     type: 'object',
     required: ['data', 'count', 'external_access_enabled', 'identity_enabled'],
     title: 'AgentApiAccessList',
-    description: "The producer's API access surface: grants and issued keys per person."
+    description: `The producer's API access surface: grants and issued keys per person,
+plus the user groups holding scopes (sorted by name).`
 } as const;
 
 export const AgentApiConnectedAgentSchema = {
@@ -12677,7 +12965,15 @@ export const ArtifactFromEnvironmentRequestSchema = {
 export const ArtifactGrantInSchema = {
     properties: {
         principal: {
-            '$ref': '#/components/schemas/CatalogPrincipalUser'
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/CatalogPrincipalUser'
+                },
+                {
+                    '$ref': '#/components/schemas/CatalogPrincipalGroup'
+                }
+            ],
+            title: 'Principal'
         },
         access: {
             type: 'string',
@@ -12695,7 +12991,15 @@ export const ArtifactGrantInSchema = {
 export const ArtifactGrantPublicSchema = {
     properties: {
         principal: {
-            '$ref': '#/components/schemas/CatalogPrincipalUser'
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/CatalogPrincipalUser'
+                },
+                {
+                    '$ref': '#/components/schemas/CatalogPrincipalGroup'
+                }
+            ],
+            title: 'Principal'
         },
         access: {
             type: 'string',
@@ -12717,6 +13021,17 @@ export const ArtifactGrantPublicSchema = {
                 }
             ],
             title: 'Email'
+        },
+        member_count: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Member Count'
         },
         granted_by: {
             anyOf: [
@@ -14563,6 +14878,22 @@ has never been published (no latest revision) reports \`\`stale=False\`\`
 with an empty \`\`drift\`\` list — there is nothing to be stale against.`
 } as const;
 
+export const BundleGroupGrantCreateSchema = {
+    properties: {
+        group_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Group Id'
+        }
+    },
+    type: 'object',
+    required: ['group_id'],
+    title: 'BundleGroupGrantCreate',
+    description: `Body of \`\`POST /agents/{agent_id}/bundle-permissions/group-grants\`\`.
+
+The card always grants \`\`use\`\`; an extra \`\`access\`\` key is ignored.`
+} as const;
+
 export const BundlePermissionGrantSchema = {
     properties: {
         user_id: {
@@ -14591,6 +14922,71 @@ export const BundlePermissionGrantSchema = {
 
 Minimal — display info lives in the top-level \`\`users\`\` union to avoid
 duplicating user resolution per producer.`
+} as const;
+
+export const BundlePermissionGroupSchema = {
+    properties: {
+        bundle_grant_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Bundle Grant Id'
+        },
+        group_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Group Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        member_count: {
+            type: 'integer',
+            title: 'Member Count',
+            default: 0
+        }
+    },
+    type: 'object',
+    required: ['group_id', 'name'],
+    title: 'BundlePermissionGroup',
+    description: `One user group in the card: a bundle grant, producer scopes, or both.
+
+The card carries no level: being listed with a bundle grant means the
+group's members can use and install the bundle.`
+} as const;
+
+export const BundlePermissionGroupGrantSchema = {
+    properties: {
+        group_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Group Id'
+        },
+        grant_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Grant Id'
+        },
+        scopes: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Scopes',
+            default: []
+        }
+    },
+    type: 'object',
+    required: ['group_id', 'grant_id'],
+    title: 'BundlePermissionGroupGrant',
+    description: 'Scope state for one user group on one producer.'
 } as const;
 
 export const BundlePermissionProducerSchema = {
@@ -14671,6 +15067,14 @@ export const BundlePermissionProducerSchema = {
             },
             type: 'array',
             title: 'Grants',
+            default: []
+        },
+        group_grants: {
+            items: {
+                '$ref': '#/components/schemas/BundlePermissionGroupGrant'
+            },
+            type: 'array',
+            title: 'Group Grants',
             default: []
         }
     },
@@ -14810,6 +15214,14 @@ export const BundlePermissionsOverviewSchema = {
             },
             type: 'array',
             title: 'Users',
+            default: []
+        },
+        groups: {
+            items: {
+                '$ref': '#/components/schemas/BundlePermissionGroup'
+            },
+            type: 'array',
+            title: 'Groups',
             default: []
         },
         show_card: {
@@ -15448,6 +15860,9 @@ export const CatalogGrantSchema = {
                 },
                 {
                     '$ref': '#/components/schemas/CatalogPrincipalRole'
+                },
+                {
+                    '$ref': '#/components/schemas/CatalogPrincipalGroup'
                 }
             ],
             title: 'Principal'
@@ -15460,6 +15875,17 @@ export const CatalogGrantSchema = {
         display_name: {
             type: 'string',
             title: 'Display Name'
+        },
+        member_count: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Member Count'
         },
         granted_by: {
             anyOf: [
@@ -15491,6 +15917,9 @@ export const CatalogGrantInSchema = {
                 },
                 {
                     '$ref': '#/components/schemas/CatalogPrincipalRole'
+                },
+                {
+                    '$ref': '#/components/schemas/CatalogPrincipalGroup'
                 }
             ],
             title: 'Principal'
@@ -16138,6 +16567,20 @@ export const CatalogPersonSchema = {
     type: 'object',
     required: ['user_id', 'display_name'],
     title: 'CatalogPerson'
+} as const;
+
+export const CatalogPrincipalGroupSchema = {
+    properties: {
+        group_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Group Id'
+        }
+    },
+    additionalProperties: false,
+    type: 'object',
+    required: ['group_id'],
+    title: 'CatalogPrincipalGroup'
 } as const;
 
 export const CatalogPrincipalRoleSchema = {
@@ -17636,6 +18079,16 @@ export const CredentialDeletionImpactSchema = {
             title: 'Direct Share Count',
             default: 0
         },
+        group_share_count: {
+            type: 'integer',
+            title: 'Group Share Count',
+            default: 0
+        },
+        group_member_count: {
+            type: 'integer',
+            title: 'Group Member Count',
+            default: 0
+        },
         bundle_usages: {
             items: {
                 '$ref': '#/components/schemas/CredentialBundleUsage'
@@ -17725,6 +18178,81 @@ that link the credential and carry a catalog install of one of those
 **packages** — any revision of it, since upgrading away from the providing
 revision leaves the share and the link in place. Both together drive the
 skill half of Tier 2.`
+} as const;
+
+export const CredentialGroupShareCreateSchema = {
+    properties: {
+        group_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Group Id'
+        }
+    },
+    type: 'object',
+    required: ['group_id'],
+    title: 'CredentialGroupShareCreate',
+    description: 'Request body for ``POST /credentials/{id}/group-shares``.'
+} as const;
+
+export const CredentialGroupSharePublicSchema = {
+    properties: {
+        group_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Group Id'
+        },
+        group_name: {
+            type: 'string',
+            title: 'Group Name'
+        },
+        member_count: {
+            type: 'integer',
+            title: 'Member Count',
+            default: 0
+        },
+        shared_by_user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Shared By User Id'
+        },
+        shared_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Shared At'
+        },
+        links_at_risk: {
+            type: 'integer',
+            title: 'Links At Risk',
+            default: 0
+        }
+    },
+    type: 'object',
+    required: ['group_id', 'group_name', 'shared_by_user_id', 'shared_at'],
+    title: 'CredentialGroupSharePublic',
+    description: `One group share of a credential, as its owner sees it.
+
+\`\`links_at_risk\`\` counts the agent links revoking this share would drop:
+links held by members who have no other path to the credential (owner,
+direct share or another group share).`
+} as const;
+
+export const CredentialGroupSharesPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/CredentialGroupSharePublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'CredentialGroupSharesPublic'
 } as const;
 
 export const CredentialPublicSchema = {
@@ -17833,6 +18361,11 @@ export const CredentialPublicSchema = {
         share_count: {
             type: 'integer',
             title: 'Share Count',
+            default: 0
+        },
+        group_share_count: {
+            type: 'integer',
+            title: 'Group Share Count',
             default: 0
         },
         is_shared: {
@@ -18409,6 +18942,11 @@ export const CredentialWithDataSchema = {
         share_count: {
             type: 'integer',
             title: 'Share Count',
+            default: 0
+        },
+        group_share_count: {
+            type: 'integer',
+            title: 'Group Share Count',
             default: 0
         },
         is_shared: {
@@ -24427,6 +24965,20 @@ export const KnowledgeSourceAccessLevelSchema = {
 - shared: superusers plus the users listed in the source's share list`
 } as const;
 
+export const KnowledgeSourceGroupShareCreateSchema = {
+    properties: {
+        group_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Group Id'
+        }
+    },
+    type: 'object',
+    required: ['group_id'],
+    title: 'KnowledgeSourceGroupShareCreate',
+    description: "Request body for adding a user group to a knowledge source's share list."
+} as const;
+
 export const KnowledgeSourceShareCreateSchema = {
     properties: {
         user_id: {
@@ -24439,6 +24991,34 @@ export const KnowledgeSourceShareCreateSchema = {
     required: ['user_id'],
     title: 'KnowledgeSourceShareCreate',
     description: "Request body for adding a user to a knowledge source's share list."
+} as const;
+
+export const KnowledgeSourceSharedGroupPublicSchema = {
+    properties: {
+        group_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Group Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        member_count: {
+            type: 'integer',
+            title: 'Member Count',
+            default: 0
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        }
+    },
+    type: 'object',
+    required: ['group_id', 'name', 'created_at'],
+    title: 'KnowledgeSourceSharedGroupPublic',
+    description: "A user group on a knowledge source's share list."
 } as const;
 
 export const KnowledgeSourceSharedUserPublicSchema = {
@@ -32357,6 +32937,103 @@ use that field, but the frontend banner renders its own copy from the
 typed \`\`missing\`\` list.`
 } as const;
 
+export const SharedAICredentialPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        type: {
+            type: 'string',
+            title: 'Type'
+        },
+        owner_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Owner Id'
+        },
+        owner_email: {
+            type: 'string',
+            title: 'Owner Email'
+        },
+        shared_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Shared At'
+        },
+        base_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Base Url'
+        },
+        model: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Model'
+        },
+        default_model: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Default Model'
+        },
+        via_groups: {
+            items: {
+                '$ref': '#/components/schemas/UserGroupRef'
+            },
+            type: 'array',
+            title: 'Via Groups',
+            default: []
+        }
+    },
+    type: 'object',
+    required: ['id', 'name', 'type', 'owner_id', 'owner_email', 'shared_at'],
+    title: 'SharedAICredentialPublic',
+    description: 'Response model for AI credentials shared with the current user.'
+} as const;
+
+export const SharedAICredentialsPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/SharedAICredentialPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'SharedAICredentialsPublic',
+    description: 'Response model for list of AI credentials shared with current user.'
+} as const;
+
 export const SharedCredentialPublicSchema = {
     properties: {
         id: {
@@ -32426,6 +33103,14 @@ export const SharedCredentialPublicSchema = {
             type: 'boolean',
             title: 'Used In Bundle',
             default: false
+        },
+        via_groups: {
+            items: {
+                '$ref': '#/components/schemas/UserGroupRef'
+            },
+            type: 'array',
+            title: 'Via Groups',
+            default: []
         }
     },
     type: 'object',
@@ -36803,6 +37488,394 @@ export const UserDetailsUpdateSchema = {
 
 Free-text env-file content (\`\`KEY = value\`\` lines). May be empty to
 clear the user's details. Parsed/normalized server-side.`
+} as const;
+
+export const UserGroupCreateSchema = {
+    properties: {
+        name: {
+            type: 'string',
+            maxLength: 100,
+            minLength: 1,
+            title: 'Name'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 500
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        }
+    },
+    type: 'object',
+    required: ['name'],
+    title: 'UserGroupCreate',
+    description: 'Body of ``POST /admin/user-groups``. ``name`` is trimmed before storage.'
+} as const;
+
+export const UserGroupImpactSchema = {
+    properties: {
+        member_count: {
+            type: 'integer',
+            title: 'Member Count',
+            default: 0
+        },
+        shares_by_type: {
+            additionalProperties: {
+                type: 'integer'
+            },
+            type: 'object',
+            title: 'Shares By Type'
+        },
+        users_losing_credential_access: {
+            type: 'integer',
+            title: 'Users Losing Credential Access',
+            default: 0
+        },
+        credential_links_removed: {
+            type: 'integer',
+            title: 'Credential Links Removed',
+            default: 0
+        },
+        ai_environments_cleared: {
+            type: 'integer',
+            title: 'Ai Environments Cleared',
+            default: 0
+        },
+        ai_environments_restarted: {
+            type: 'integer',
+            title: 'Ai Environments Restarted',
+            default: 0
+        }
+    },
+    type: 'object',
+    title: 'UserGroupImpact',
+    description: `What deleting a group, removing members or revoking one share would cost.
+
+Read-only preview. Users and counts are those left with **no other path**
+(owner, direct share, another group) once this group's shares stop
+applying to them.`
+} as const;
+
+export const UserGroupMemberPublicSchema = {
+    properties: {
+        user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'User Id'
+        },
+        email: {
+            type: 'string',
+            title: 'Email'
+        },
+        full_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Full Name'
+        },
+        is_active: {
+            type: 'boolean',
+            title: 'Is Active'
+        },
+        added_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Added At'
+        }
+    },
+    type: 'object',
+    required: ['user_id', 'email', 'is_active', 'added_at'],
+    title: 'UserGroupMemberPublic'
+} as const;
+
+export const UserGroupMembersAddSchema = {
+    properties: {
+        user_ids: {
+            items: {
+                type: 'string',
+                format: 'uuid'
+            },
+            type: 'array',
+            maxItems: 100,
+            minItems: 1,
+            title: 'User Ids'
+        }
+    },
+    type: 'object',
+    required: ['user_ids'],
+    title: 'UserGroupMembersAdd',
+    description: 'Body of ``POST /admin/user-groups/{id}/members``.'
+} as const;
+
+export const UserGroupMembersPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/UserGroupMemberPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'UserGroupMembersPublic'
+} as const;
+
+export const UserGroupPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        member_count: {
+            type: 'integer',
+            title: 'Member Count',
+            default: 0
+        },
+        share_count: {
+            type: 'integer',
+            title: 'Share Count',
+            default: 0
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        },
+        created_by: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/CatalogPerson'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        }
+    },
+    type: 'object',
+    required: ['id', 'name', 'created_at', 'updated_at'],
+    title: 'UserGroupPublic'
+} as const;
+
+export const UserGroupRefSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        }
+    },
+    type: 'object',
+    required: ['id', 'name'],
+    title: 'UserGroupRef',
+    description: "A group as other families' share lists name it."
+} as const;
+
+export const UserGroupSearchResultSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        member_count: {
+            type: 'integer',
+            title: 'Member Count',
+            default: 0
+        }
+    },
+    type: 'object',
+    required: ['id', 'name'],
+    title: 'UserGroupSearchResult',
+    description: 'One share-picker hit: name and size only, never the members.'
+} as const;
+
+export const UserGroupSharePublicSchema = {
+    properties: {
+        resource_type: {
+            type: 'string',
+            enum: ['agent_bundle', 'desktop_agent', 'skill_package', 'credential', 'ai_credential', 'artifact', 'knowledge_source', 'agent_api_scopes'],
+            title: 'Resource Type'
+        },
+        resource_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Resource Id'
+        },
+        resource_name: {
+            type: 'string',
+            title: 'Resource Name'
+        },
+        level: {
+            type: 'string',
+            title: 'Level'
+        },
+        owner: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/CatalogPerson'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        granted_by: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/CatalogPerson'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        granted_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Granted At'
+        }
+    },
+    type: 'object',
+    required: ['resource_type', 'resource_id', 'resource_name', 'level', 'granted_at'],
+    title: 'UserGroupSharePublic',
+    description: `One resource shared with a group, as the group page lists it.
+
+\`\`level\`\` is the family's own word: the catalog grant level, \`\`read\`\` for
+credentials, \`\`use\`\` for AI credentials, the artifact grant level,
+\`\`query\`\` for knowledge sources, and the comma-joined scope names (or
+\`\`"no scopes"\`\`) for producer API scopes (\`\`resource_id\`\` = producer agent).`
+} as const;
+
+export const UserGroupSharesPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/UserGroupSharePublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'UserGroupSharesPublic'
+} as const;
+
+export const UserGroupUpdateSchema = {
+    properties: {
+        name: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 100,
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Name'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 500
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        }
+    },
+    type: 'object',
+    title: 'UserGroupUpdate',
+    description: 'Body of ``PATCH /admin/user-groups/{id}``; omitted fields are unchanged.'
+} as const;
+
+export const UserGroupsPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/UserGroupPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'UserGroupsPublic'
+} as const;
+
+export const UserGroupsSearchPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/UserGroupSearchResult'
+            },
+            type: 'array',
+            title: 'Data'
+        }
+    },
+    type: 'object',
+    required: ['data'],
+    title: 'UserGroupsSearchPublic'
 } as const;
 
 export const UserInfoResponseSchema = {

@@ -61,6 +61,7 @@ import { Route as LayoutAgenticTeamsTeamIdRouteImport } from './routes/_layout/a
 import { Route as LayoutAgentCreatingRouteImport } from './routes/_layout/agent/creating'
 import { Route as LayoutAgentAgentIdRouteImport } from './routes/_layout/agent/$agentId'
 import { Route as LayoutAdminUsersRouteImport } from './routes/_layout/admin/users'
+import { Route as LayoutAdminUserGroupsRouteImport } from './routes/_layout/admin/user-groups'
 import { Route as LayoutAdminServerConfigurationRouteImport } from './routes/_layout/admin/server-configuration'
 import { Route as LayoutAdminRoutingTuningRouteImport } from './routes/_layout/admin/routing-tuning'
 import { Route as LayoutAdminMarketplacesRouteImport } from './routes/_layout/admin/marketplaces'
@@ -76,6 +77,7 @@ import { Route as LayoutCatalogSkillsPackageIdRouteImport } from './routes/_layo
 import { Route as LayoutCatalogItemsUuidRouteImport } from './routes/_layout/catalog/items/$uuid'
 import { Route as LayoutCatalogAgentsInstallRouteImport } from './routes/_layout/catalog/agents/install'
 import { Route as LayoutAgentAgentIdConversationsRouteImport } from './routes/_layout/agent/$agentId/conversations'
+import { Route as LayoutAdminUserGroupGroupIdRouteImport } from './routes/_layout/admin/user-group/$groupId'
 import { Route as LayoutAdminMarketplaceMarketplaceIdRouteImport } from './routes/_layout/admin/marketplace/$marketplaceId'
 import { Route as LayoutCatalogAgentsInstallBundleIdRouteImport } from './routes/_layout/catalog/agents/install/$bundleId'
 import { Route as LayoutAdminMarketplacePluginPluginIdRouteImport } from './routes/_layout/admin/marketplace/plugin/$pluginId'
@@ -347,6 +349,11 @@ const LayoutAdminUsersRoute = LayoutAdminUsersRouteImport.update({
   path: '/admin/users',
   getParentRoute: () => LayoutRoute,
 } as any)
+const LayoutAdminUserGroupsRoute = LayoutAdminUserGroupsRouteImport.update({
+  id: '/admin/user-groups',
+  path: '/admin/user-groups',
+  getParentRoute: () => LayoutRoute,
+} as any)
 const LayoutAdminServerConfigurationRoute =
   LayoutAdminServerConfigurationRouteImport.update({
     id: '/admin/server-configuration',
@@ -432,6 +439,12 @@ const LayoutAgentAgentIdConversationsRoute =
     path: '/conversations',
     getParentRoute: () => LayoutAgentAgentIdRoute,
   } as any)
+const LayoutAdminUserGroupGroupIdRoute =
+  LayoutAdminUserGroupGroupIdRouteImport.update({
+    id: '/admin/user-group/$groupId',
+    path: '/admin/user-group/$groupId',
+    getParentRoute: () => LayoutRoute,
+  } as any)
 const LayoutAdminMarketplaceMarketplaceIdRoute =
   LayoutAdminMarketplaceMarketplaceIdRouteImport.update({
     id: '/admin/marketplace/$marketplaceId',
@@ -491,6 +504,7 @@ export interface FileRoutesByFullPath {
   '/admin/marketplaces': typeof LayoutAdminMarketplacesRoute
   '/admin/routing-tuning': typeof LayoutAdminRoutingTuningRoute
   '/admin/server-configuration': typeof LayoutAdminServerConfigurationRoute
+  '/admin/user-groups': typeof LayoutAdminUserGroupsRoute
   '/admin/users': typeof LayoutAdminUsersRoute
   '/agent/$agentId': typeof LayoutAgentAgentIdRouteWithChildren
   '/agent/creating': typeof LayoutAgentCreatingRoute
@@ -511,6 +525,7 @@ export interface FileRoutesByFullPath {
   '/sessions/': typeof LayoutSessionsIndexRoute
   '/tasks': typeof LayoutTasksIndexRoute
   '/admin/marketplace/$marketplaceId': typeof LayoutAdminMarketplaceMarketplaceIdRoute
+  '/admin/user-group/$groupId': typeof LayoutAdminUserGroupGroupIdRoute
   '/agent/$agentId/conversations': typeof LayoutAgentAgentIdConversationsRoute
   '/catalog/agents/install': typeof LayoutCatalogAgentsInstallRouteWithChildren
   '/catalog/items/$uuid': typeof LayoutCatalogItemsUuidRoute
@@ -558,6 +573,7 @@ export interface FileRoutesByTo {
   '/admin/marketplaces': typeof LayoutAdminMarketplacesRoute
   '/admin/routing-tuning': typeof LayoutAdminRoutingTuningRoute
   '/admin/server-configuration': typeof LayoutAdminServerConfigurationRoute
+  '/admin/user-groups': typeof LayoutAdminUserGroupsRoute
   '/admin/users': typeof LayoutAdminUsersRoute
   '/agent/$agentId': typeof LayoutAgentAgentIdRouteWithChildren
   '/agent/creating': typeof LayoutAgentCreatingRoute
@@ -578,6 +594,7 @@ export interface FileRoutesByTo {
   '/sessions': typeof LayoutSessionsIndexRoute
   '/tasks': typeof LayoutTasksIndexRoute
   '/admin/marketplace/$marketplaceId': typeof LayoutAdminMarketplaceMarketplaceIdRoute
+  '/admin/user-group/$groupId': typeof LayoutAdminUserGroupGroupIdRoute
   '/agent/$agentId/conversations': typeof LayoutAgentAgentIdConversationsRoute
   '/catalog/agents/install': typeof LayoutCatalogAgentsInstallRouteWithChildren
   '/catalog/items/$uuid': typeof LayoutCatalogItemsUuidRoute
@@ -631,6 +648,7 @@ export interface FileRoutesById {
   '/_layout/admin/marketplaces': typeof LayoutAdminMarketplacesRoute
   '/_layout/admin/routing-tuning': typeof LayoutAdminRoutingTuningRoute
   '/_layout/admin/server-configuration': typeof LayoutAdminServerConfigurationRoute
+  '/_layout/admin/user-groups': typeof LayoutAdminUserGroupsRoute
   '/_layout/admin/users': typeof LayoutAdminUsersRoute
   '/_layout/agent/$agentId': typeof LayoutAgentAgentIdRouteWithChildren
   '/_layout/agent/creating': typeof LayoutAgentCreatingRoute
@@ -651,6 +669,7 @@ export interface FileRoutesById {
   '/_layout/sessions/': typeof LayoutSessionsIndexRoute
   '/_layout/tasks/': typeof LayoutTasksIndexRoute
   '/_layout/admin/marketplace/$marketplaceId': typeof LayoutAdminMarketplaceMarketplaceIdRoute
+  '/_layout/admin/user-group/$groupId': typeof LayoutAdminUserGroupGroupIdRoute
   '/_layout/agent/$agentId/conversations': typeof LayoutAgentAgentIdConversationsRoute
   '/_layout/catalog/agents/install': typeof LayoutCatalogAgentsInstallRouteWithChildren
   '/_layout/catalog/items/$uuid': typeof LayoutCatalogItemsUuidRoute
@@ -704,6 +723,7 @@ export interface FileRouteTypes {
     | '/admin/marketplaces'
     | '/admin/routing-tuning'
     | '/admin/server-configuration'
+    | '/admin/user-groups'
     | '/admin/users'
     | '/agent/$agentId'
     | '/agent/creating'
@@ -724,6 +744,7 @@ export interface FileRouteTypes {
     | '/sessions/'
     | '/tasks'
     | '/admin/marketplace/$marketplaceId'
+    | '/admin/user-group/$groupId'
     | '/agent/$agentId/conversations'
     | '/catalog/agents/install'
     | '/catalog/items/$uuid'
@@ -771,6 +792,7 @@ export interface FileRouteTypes {
     | '/admin/marketplaces'
     | '/admin/routing-tuning'
     | '/admin/server-configuration'
+    | '/admin/user-groups'
     | '/admin/users'
     | '/agent/$agentId'
     | '/agent/creating'
@@ -791,6 +813,7 @@ export interface FileRouteTypes {
     | '/sessions'
     | '/tasks'
     | '/admin/marketplace/$marketplaceId'
+    | '/admin/user-group/$groupId'
     | '/agent/$agentId/conversations'
     | '/catalog/agents/install'
     | '/catalog/items/$uuid'
@@ -843,6 +866,7 @@ export interface FileRouteTypes {
     | '/_layout/admin/marketplaces'
     | '/_layout/admin/routing-tuning'
     | '/_layout/admin/server-configuration'
+    | '/_layout/admin/user-groups'
     | '/_layout/admin/users'
     | '/_layout/agent/$agentId'
     | '/_layout/agent/creating'
@@ -863,6 +887,7 @@ export interface FileRouteTypes {
     | '/_layout/sessions/'
     | '/_layout/tasks/'
     | '/_layout/admin/marketplace/$marketplaceId'
+    | '/_layout/admin/user-group/$groupId'
     | '/_layout/agent/$agentId/conversations'
     | '/_layout/catalog/agents/install'
     | '/_layout/catalog/items/$uuid'
@@ -1265,6 +1290,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutAdminUsersRouteImport
       parentRoute: typeof LayoutRoute
     }
+    '/_layout/admin/user-groups': {
+      id: '/_layout/admin/user-groups'
+      path: '/admin/user-groups'
+      fullPath: '/admin/user-groups'
+      preLoaderRoute: typeof LayoutAdminUserGroupsRouteImport
+      parentRoute: typeof LayoutRoute
+    }
     '/_layout/admin/server-configuration': {
       id: '/_layout/admin/server-configuration'
       path: '/admin/server-configuration'
@@ -1369,6 +1401,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/agent/$agentId/conversations'
       preLoaderRoute: typeof LayoutAgentAgentIdConversationsRouteImport
       parentRoute: typeof LayoutAgentAgentIdRoute
+    }
+    '/_layout/admin/user-group/$groupId': {
+      id: '/_layout/admin/user-group/$groupId'
+      path: '/admin/user-group/$groupId'
+      fullPath: '/admin/user-group/$groupId'
+      preLoaderRoute: typeof LayoutAdminUserGroupGroupIdRouteImport
+      parentRoute: typeof LayoutRoute
     }
     '/_layout/admin/marketplace/$marketplaceId': {
       id: '/_layout/admin/marketplace/$marketplaceId'
@@ -1483,6 +1522,7 @@ interface LayoutRouteChildren {
   LayoutAdminMarketplacesRoute: typeof LayoutAdminMarketplacesRoute
   LayoutAdminRoutingTuningRoute: typeof LayoutAdminRoutingTuningRoute
   LayoutAdminServerConfigurationRoute: typeof LayoutAdminServerConfigurationRoute
+  LayoutAdminUserGroupsRoute: typeof LayoutAdminUserGroupsRoute
   LayoutAdminUsersRoute: typeof LayoutAdminUsersRoute
   LayoutAgentAgentIdRoute: typeof LayoutAgentAgentIdRouteWithChildren
   LayoutAgentCreatingRoute: typeof LayoutAgentCreatingRoute
@@ -1498,6 +1538,7 @@ interface LayoutRouteChildren {
   LayoutDashboardsIndexRoute: typeof LayoutDashboardsIndexRoute
   LayoutTasksIndexRoute: typeof LayoutTasksIndexRoute
   LayoutAdminMarketplaceMarketplaceIdRoute: typeof LayoutAdminMarketplaceMarketplaceIdRoute
+  LayoutAdminUserGroupGroupIdRoute: typeof LayoutAdminUserGroupGroupIdRoute
   LayoutEnvironmentEnvIdDatabaseRoute: typeof LayoutEnvironmentEnvIdDatabaseRoute
   LayoutEnvironmentEnvIdFileRoute: typeof LayoutEnvironmentEnvIdFileRoute
   LayoutAdminMarketplacePluginPluginIdRoute: typeof LayoutAdminMarketplacePluginPluginIdRoute
@@ -1521,6 +1562,7 @@ const LayoutRouteChildren: LayoutRouteChildren = {
   LayoutAdminMarketplacesRoute: LayoutAdminMarketplacesRoute,
   LayoutAdminRoutingTuningRoute: LayoutAdminRoutingTuningRoute,
   LayoutAdminServerConfigurationRoute: LayoutAdminServerConfigurationRoute,
+  LayoutAdminUserGroupsRoute: LayoutAdminUserGroupsRoute,
   LayoutAdminUsersRoute: LayoutAdminUsersRoute,
   LayoutAgentAgentIdRoute: LayoutAgentAgentIdRouteWithChildren,
   LayoutAgentCreatingRoute: LayoutAgentCreatingRoute,
@@ -1537,6 +1579,7 @@ const LayoutRouteChildren: LayoutRouteChildren = {
   LayoutTasksIndexRoute: LayoutTasksIndexRoute,
   LayoutAdminMarketplaceMarketplaceIdRoute:
     LayoutAdminMarketplaceMarketplaceIdRoute,
+  LayoutAdminUserGroupGroupIdRoute: LayoutAdminUserGroupGroupIdRoute,
   LayoutEnvironmentEnvIdDatabaseRoute: LayoutEnvironmentEnvIdDatabaseRoute,
   LayoutEnvironmentEnvIdFileRoute: LayoutEnvironmentEnvIdFileRoute,
   LayoutAdminMarketplacePluginPluginIdRoute:

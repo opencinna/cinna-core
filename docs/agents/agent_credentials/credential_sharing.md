@@ -291,7 +291,25 @@ Publisher sets allow_template_sharing=true + marks private fields
 - [User Workspaces](../../application/user_workspaces/user_workspaces.md) - Credentials exist within workspace context
 - [Desktop Credential Delivery](../../application/desktop_credentials/desktop_credentials.md) - A recipient's Desktop can only copy a shared credential once the owner has separately turned on local-use consent (`allow_local_use`); the switch is shown only for locally-compatible credential types
 
+## Sharing with a Group
+
+An owner can share a credential with a [user group](../../application/user_groups/user_groups.md) instead of (or besides) individual people.
+
+1. In the credential's sharing section the owner picks a group (the picker's groups mode, backed by `GET /user-groups/search`). The share row is a `credential_group_share`, a separate table from `credential_shares`.
+2. Every current and future member can link the credential to their agents, read-only, exactly like a direct recipient. Recipient lists mark such users "via group"; the owner's list shows group rows with the member count.
+3. The credential must still allow sharing (`allow_sharing`); sharing off removes group shares as it removes direct ones.
+
+Rules:
+
+- **Access is lost only when no share path remains.** On revoking a group share, removing a member or deleting a group, links are deleted and environments re-synced only for users with no remaining path (owner, direct share, any other group share). This also fixes revoking a direct share while a group still covers the user.
+- **Group shares write no revocation records.** `credential_share_revocation`, the provisioner, provision-local, the D15 claim rule and `CredentialShare.source` stay per-person and never see group shares; a group share is always the owner's explicit, direct-like share.
+- **Desktop:** a group share counts as a direct share for local copy; it still needs `allow_local_use`, and a copied value is not recalled.
+- **Superuser** can revoke any single group share from the group page.
+- Owned credentials report `group_share_count` next to `share_count`.
+
 ## Changelog
+
+- Credentials can be shared with user groups (`credential_group_share`); unlink narrows to users without any remaining path.
 
 - Owner removal of a share is recorded in `credential_share_revocation`; a skill-installer share persists across skill versions; share and deletion-impact payloads list agent and local-skill usages; delete is Tier 2 for active local skill installs.
 - `/credentials` list moved from a card grid to a searchable, paged table with a counted segmented section control; editing happens on the credential page (`/credential/$id`).

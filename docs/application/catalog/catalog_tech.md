@@ -20,7 +20,7 @@
 | `GET /api/v1/catalog/items` | `kind`, `runs_on`, `scope=all` (superuser, else 403) -> `CatalogItemsPublic` |
 | `GET /api/v1/catalog/items/{item_uuid}` | `CatalogItemDetail`; needs `use` |
 | `PATCH` / `DELETE /api/v1/catalog/items/{item_uuid}` | maintainer or superuser; delete 409 while others use it |
-| `GET` / `PUT /api/v1/catalog/items/{item_uuid}/grants` | full replace |
+| `GET` / `PUT /api/v1/catalog/items/{item_uuid}/grants` | full replace; principals are `user`, `role` or `group` (`CatalogPrincipalGroup {group_id}`; group level `use`/`edit` only, `member_count` = active members); backed by nullable `group_id` on `bundle_access_grant` / `skill_package_access_grant` (migration `7896e6f51c03`); see [User Groups](../user_groups/user_groups_tech.md) |
 | `POST /api/v1/catalog/items/{item_uuid}/local-installs` | `LocalInstallIn {device_id, revision_number, host_manifest_id?}` -> `CatalogItem`; 404 without use (skill pinned by a usable desktop agent's latest version passes), 409 `cloud_only`, 422 for missing/extra host id or unknown version |
 | `DELETE /api/v1/catalog/items/{item_uuid}/local-installs/{device_id}` | optional `host_manifest_id` query; 204, idempotent, own rows only |
 

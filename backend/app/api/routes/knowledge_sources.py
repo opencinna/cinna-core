@@ -23,6 +23,8 @@ from app.models.knowledge.knowledge import (
     CheckAccessResponse,
     KnowledgeArticleDetail,
     KnowledgeArticlePublic,
+    KnowledgeSourceGroupShareCreate,
+    KnowledgeSourceSharedGroupPublic,
     KnowledgeSourceSharedUserPublic,
     KnowledgeSourceShareCreate,
     RefreshKnowledgeResponse,
@@ -368,6 +370,75 @@ def remove_knowledge_source_shared_user(
     try:
         knowledge_source_service.remove_shared_user(
             session=session, source_id=source_id, user_id=user_id
+        )
+    except KnowledgeSourceNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"ok": True}
+
+
+@router.get(
+    "/{source_id}/shared-groups",
+    response_model=list[KnowledgeSourceSharedGroupPublic],
+)
+def list_knowledge_source_shared_groups(
+    *,
+    session: SessionDep,
+    current_user: SuperUser,
+    source_id: uuid.UUID,
+) -> Any:
+    """
+    List user groups a knowledge source is shared with. Admin only.
+    """
+    try:
+        return knowledge_source_service.list_shared_groups(
+            session=session, source_id=source_id
+        )
+    except KnowledgeSourceNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post(
+    "/{source_id}/shared-groups",
+    response_model=KnowledgeSourceSharedGroupPublic,
+)
+def add_knowledge_source_shared_group(
+    *,
+    session: SessionDep,
+    current_user: SuperUser,
+    source_id: uuid.UUID,
+    share_in: KnowledgeSourceGroupShareCreate,
+) -> Any:
+    """
+    Share a knowledge source with a user group (idempotent). Admin only.
+
+    Members are resolved live; the share takes effect while the source's
+    access level is ``shared``.
+    """
+    try:
+        return knowledge_source_service.add_shared_group(
+            session=session,
+            source_id=source_id,
+            group_id=share_in.group_id,
+            granted_by_user_id=current_user.id,
+        )
+    except KnowledgeSourceNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.delete("/{source_id}/shared-groups/{group_id}")
+def remove_knowledge_source_shared_group(
+    *,
+    session: SessionDep,
+    current_user: SuperUser,
+    source_id: uuid.UUID,
+    group_id: uuid.UUID,
+) -> Any:
+    """
+    Remove a user group from a knowledge source's share list. Admin only.
+    """
+    try:
+        knowledge_source_service.remove_shared_group(
+            session=session, source_id=source_id, group_id=group_id
         )
     except KnowledgeSourceNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))

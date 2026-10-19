@@ -5,12 +5,17 @@ tab. They aggregate, read-only, two already-modeled systems:
 
 - Bundle catalog access (``BundleAccessGrant``, gated by
   ``AgentBundle.visibility == "users"``).
-- Producer Agent REST API per-user capability scopes
-  (``agent_api_access_grant``, gated by ``Agent.agent_api_identity_enabled``).
+- Producer Agent REST API capability scopes, gated by
+  ``Agent.agent_api_identity_enabled``: per person from
+  ``agent_api_access_grant`` (``BundlePermissionProducer.grants``) and per
+  user group from ``agent_api_access_group_grant``
+  (``BundlePermissionProducer.group_grants``), both filled on manageable
+  producers only.
 
-No new tables are created. Every write the card performs reuses an existing,
-already owner-gated endpoint; this file only describes the read-aggregation
-response of ``GET /agents/{agent_id}/bundle-permissions-overview``.
+Person, group and scope writes reuse existing, owner-gated endpoints. Group
+bundle grants are written through
+``POST/DELETE /agents/{agent_id}/bundle-permissions/group-grants`` (thin
+wrappers over the catalog access rules); the card grants groups ``use`` only.
 
 Security: the response carries **no secrets**. The ``agent_api`` credential
 ``token`` is never serialized here — it is decrypted only to read
@@ -45,6 +50,14 @@ class BundlePermissionGrant(SQLModel):
     scopes: list[str] = []
 
 
+class BundlePermissionGroupGrant(SQLModel):
+    """Scope state for one user group on one producer."""
+
+    group_id: uuid.UUID
+    grant_id: uuid.UUID
+    scopes: list[str] = []
+
+
 class BundlePermissionProducer(SQLModel):
     """One connected, identity-enabled producer the install consumes.
 
@@ -63,6 +76,8 @@ class BundlePermissionProducer(SQLModel):
     owner_email: str | None = None
     scope_catalog: list[BundlePermissionScopeCatalogEntry] = []
     grants: list[BundlePermissionGrant] = []
+    # User-group scope grants; filled only when ``can_manage``.
+    group_grants: list[BundlePermissionGroupGrant] = []
 
 
 class BundlePermissionUser(SQLModel):
@@ -78,6 +93,31 @@ class BundlePermissionUser(SQLModel):
     bundle_grant_id: uuid.UUID | None = None
 
 
+class BundlePermissionGroup(SQLModel):
+    """One user group in the card: a bundle grant, producer scopes, or both.
+
+    The card carries no level: being listed with a bundle grant means the
+    group's members can use and install the bundle.
+    """
+
+    # Set when the group holds a bundle grant (the revoke key); None when the
+    # group holds producer scopes only.
+    bundle_grant_id: uuid.UUID | None = None
+    group_id: uuid.UUID
+    name: str
+    # Active members only, as everywhere else.
+    member_count: int = 0
+
+
+class BundleGroupGrantCreate(SQLModel):
+    """Body of ``POST /agents/{agent_id}/bundle-permissions/group-grants``.
+
+    The card always grants ``use``; an extra ``access`` key is ignored.
+    """
+
+    group_id: uuid.UUID
+
+
 class BundlePermissionsOverview(SQLModel):
     """Response of ``GET /agents/{agent_id}/bundle-permissions-overview``."""
 
@@ -88,5 +128,8 @@ class BundlePermissionsOverview(SQLModel):
     bundle_grants: list[BundleAccessGrantPublic] = []
     producers: list[BundlePermissionProducer] = []
     users: list[BundlePermissionUser] = []
+    # Union of group bundle grants (only when ``bundle_access_applicable``)
+    # and groups holding scopes on a manageable producer; sorted by name.
+    groups: list[BundlePermissionGroup] = []
     # ``bundle_access_applicable or len(producers) > 0``.
     show_card: bool = False

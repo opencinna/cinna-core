@@ -17,6 +17,7 @@ import useCustomToast from "@/hooks/useCustomToast"
 import { getErrorMessage } from "@/utils"
 import {
   type CatalogItemRef,
+  catalogKindOf,
   catalogNoun,
   isCatalogVisibility,
 } from "@/utils/catalogItems"
@@ -30,9 +31,10 @@ interface CatalogPeopleDialogProps {
 }
 
 /**
- * S3a — who can find one catalog item, who can share changes to it and who
- * looks after it. Titled by the item; the body is a buffered form whose Save
- * replaces the whole grant list and, when it changed, the general access.
+ * S3a — who can find one catalog item, what each person, group or role may
+ * do with it, and who looks after it. Titled by the item; the body is a
+ * buffered form whose Save replaces the whole grant list and, when it changed,
+ * the general access. The `edit` level's words follow the item's kind.
  * Rebuilt from the team library's access dialog (d5bb0a16).
  */
 export function CatalogPeopleDialog({
@@ -100,7 +102,11 @@ export function CatalogPeopleDialog({
       }
       showErrorToast(getErrorMessage(err, "Could not save access"))
     },
-    onSettled: () => invalidateCatalogItem(queryClient, uuid),
+    onSettled: () => {
+      invalidateCatalogItem(queryClient, uuid)
+      // A bundle's group grants also render on its publisher's Bundle tab.
+      queryClient.invalidateQueries({ queryKey: ["bundlePermissionsOverview"] })
+    },
   })
 
   function close() {
@@ -149,6 +155,7 @@ export function CatalogPeopleDialog({
         // Re-seed the buffer when the dialog moves to another item.
         key={uuid}
         grants={grantsQuery.data}
+        kind={item ? catalogKindOf(item) : "cloud"}
         visibility={visibility}
         isSaving={saveMutation.isPending}
         refusal={refusal}

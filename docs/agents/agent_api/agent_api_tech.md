@@ -6,6 +6,8 @@
 
 - `backend/app/models/agent_api/agent_api_token.py` — `AgentApiToken` (table, with `credential_id` FK, `kind`, `subject_user_id`, `expires_at`), `AgentApiTokenKind` (`str` enum: `CONNECTION` / `EXTERNAL`), `AgentApiTokenBase`, `AgentApiTokenCreate`, `AgentApiTokenPublic`, `AgentApiTokenCreated`, `AgentApiConnectedAgent`, `AgentApiConnectionInfo`, `AgentApiProducerConnection`, `AgentApiProducerConnections`, `ConnectAgentApiRequest`, `ConnectAgentApiResponse` — plus the **issued key** models: `AgentApiKeyStatus` (the seven-value status enum), `AgentApiKeyUnavailableReason` (`Literal["key_revoked","key_expired","key_paused"]`), `AgentApiKeyCreate` (`label?`, `issued_to_user_id?`, `service_uri?`, `scopes?`, `read_only_override`, `expires_in_days?`), `AgentApiKeyUser`, `AgentApiKeyPublic` (issuer's view, adds `status`, `revoked_at`, `rotated_at`, `linked_agent_count`), `AgentApiKeyCreated` (`token` is `None` unless self-issued), `AgentApiAccessEntry` / `AgentApiAccessList` (producer's per-person access list), `AgentApiKeyProducer`, `AgentApiKeyHolderInfo` (recipient's view), `AgentApiKeyRotateResponse`, `AgentApiKeyRevealResponse` (single `token: str` field, returned by the dedicated reveal endpoint — see [Reveal endpoint](#reveal-endpoint-post-credentialsidagent-api-keyreveal-and-the-with-data-strip)) (no manual token-CRUD models for connections — `AgentApiTokenUpdate`/`AgentApiTokensPublic` were removed)
 - `backend/app/models/agents/agent.py` — `agent_api_enabled: bool`, `agent_api_identity_enabled: bool`, and `agent_api_external_access_enabled: bool` (default `false` — producer opt-in + live kill switch for external keys) fields on `Agent` (table), `AgentUpdate`, and `AgentPublic`
+- Frontend: `AgentApiAccessCard.tsx` Groups list (first 5 + Show all in `AllApiAccessSheet`), rows in `ApiAccessGroupRow.tsx`, `ApiAccessSwitchLine.tsx`, and `ApiAccessScopesDialog.tsx` taking a person-or-group target.
+- `backend/app/models/agent_api/agent_api_access_group_grant.py` — `AgentApiAccessGroupGrant` (table `agent_api_access_group_grant`, migration `be8f767e32ed`), `AgentApiAccessGroupGrantCreate` (`group_id`, `scopes`) / `Update` / `Public` / `AgentApiAccessGroupGrantsPublic`
 - `backend/app/models/agent_api/agent_api_access_grant.py` (new) — `AgentApiAccessGrant` (table), `AgentApiAccessGrantBase/Create/Update/Public`, `AgentApiAccessGrantsPublic`, `AgentApiGrantUser`, plus the scope-catalog models `AgentApiScope` / `AgentApiScopeCatalog`
 - `backend/app/models/environments/environment.py` — `agent_api_spec_parsed`, `agent_api_spec_fetched_at`, `agent_api_spec_error`, `agent_api_policy_cache` cache columns on `AgentEnvironment`
 - `backend/app/models/credentials/credential.py` — `AGENT_API` added to `CredentialType` enum
@@ -156,6 +158,21 @@ One row per `(producer_agent_id, user_id)` granting a platform user a set of sco
 
 Constraints: unique `(producer_agent_id, user_id)` (`uq_agent_api_access_grant_producer_user`) — one grant per (producer, user); btree indexes on `producer_agent_id` and `user_id`.
 
+### `agent_api_access_group_grant` table
+
+One row per `(producer_agent_id, group_id)` holding scope names for a user group. Added by migration `be8f767e32ed` (down revision `7896e6f51c03`). Separate from the person table so a read site unaware of groups fails closed.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | `UUID PK` | |
+| `producer_agent_id` | `UUID FK → agent` | `ON DELETE CASCADE`; indexed |
+| `group_id` | `UUID FK → user_group` | `ON DELETE CASCADE`; indexed |
+| `scopes` | `JSON` (list[str]) | Empty list allowed |
+| `created_by` | `UUID FK → user`, nullable | `SET NULL`, `DEFERRABLE INITIALLY DEFERRED` |
+| `created_at`, `updated_at` | `DATETIME` | |
+
+Unique `(producer_agent_id, group_id)` (`uq_agent_api_access_group_grant_producer_group`).
+
 ### `credential` table (enum modified)
 
 `CredentialType` PostgreSQL native enum extended with `'AGENT_API'`. The `credential_data` (encrypted) shape for this type: `{ base_url, token, spec_url, label, producer_agent_id }`.
@@ -224,6 +241,10 @@ Prefix: `/api/v1/agents/{agent_id}/agent-api`; requires authenticated owner (or 
 | `POST` | `/grants` | Create a grant for `(producer, body.user_id)`. 404 if the granted user does not exist; 409 if a grant for that user already exists. Returns `AgentApiAccessGrantPublic`. |
 | `PUT` | `/grants/{grant_id}` | Update a grant's `scopes` (identity is immutable). Takes effect on the next call. Returns `AgentApiAccessGrantPublic`. |
 | `DELETE` | `/grants/{grant_id}` | Remove a grant. Takes effect on the next call. Returns `Message`. |
+| `GET` | `/group-grants` | List group scope grants (`AgentApiAccessGroupGrantsPublic`; each with group `name` and active `member_count`). |
+| `POST` | `/group-grants` | Body `{group_id, scopes}`. 404 unknown group, 409 duplicate. |
+| `PUT` | `/group-grants/{grant_id}` | Update `scopes`; 404 if the grant belongs to another producer. |
+| `DELETE` | `/group-grants/{grant_id}` | Remove. Next-call effect. |
 | `POST` | `/keys` | Issue a key. Body `AgentApiKeyCreate` (`label?`, `issued_to_user_id?` default issuer, `service_uri?` default `<slug>-api`, `scopes?`, `read_only_override`, `expires_in_days?`). `400` unless both `agent_api_enabled` and `agent_api_external_access_enabled` are on; `404` unknown recipient. `scopes` (when given) upserts the `(producer, recipient)` grant. Returns `AgentApiKeyCreated`: public `base_url`/`spec_url` and `token` **only on a self-issue** (`null` otherwise). |
 | `GET` | `/access` | The producer's API access list grouped by person: grant (`grant_id`, `scopes`) plus every key (terminal keys included) with `status`, `linked_agent_count`, never a value or agent names, plus `external_access_enabled` and `identity_enabled`. Returns `AgentApiAccessList`. Replaces `GET /keys`. |
 | `POST` | `/keys/{key_id}/revoke` | **Soft** revoke, idempotent: sets `is_active=false`, `revoked_at`, `revoked_reason="revoked_by_issuer"`, closes the rotation grace, touches the credential and re-syncs the recipient's envs. The credential and the `(producer, recipient)` grant are left alone. Returns `AgentApiKeyPublic`. Replaces `DELETE /keys/{key_id}` (removed, no shim). |
@@ -556,7 +577,11 @@ Identity attribution is honored regardless of the flag (backward compatible); on
 
 - `list_grants` / `create_grant` / `update_grant` / `delete_grant` — owner-gated. `create_grant` 404s for a phantom user and 409s for a duplicate (the DB unique constraint backs it). `create`/`update`/`delete` each write a `SecurityEvent` (`AGENT_API_GRANT_CREATED/_UPDATED/_DELETED`, severity `medium`, details `{grant_id, granted_user_id, scopes}`) — best-effort, never raises.
 - `get_scope_catalog` — reads the canonical `policy["scopes"]` (already-normalized at parse time) via `AgentApiService.get_effective_policy`; projects to `{name, description}` (the `requires` patterns are platform-internal and not surfaced). Graceful empty catalog.
-- `resolve_scopes_for_caller(session, producer_agent_id, owner_user_id) -> list[str]` — the LIVE per-call lookup the proxy uses. No grant ⇒ `[]`. Never raises (a lookup failure degrades to no scopes).
+- `effective_scopes(session, producer_agent_id, user_id) -> list[str]` — personal grant scopes, then the scopes of every group the user belongs to while `User.is_active` (ordered by `lower(group.name)`), de-duplicated with order kept. Raises on DB error. An explicit empty personal grant plus a scoped group yields the group's scopes (accepted). No materialised rows, no cleanup on membership change.
+- `resolve_scopes_for_caller(session, producer_agent_id, owner_user_id) -> list[str]` — the LIVE per-call lookup the proxy uses; wraps `effective_scopes`. No grant ⇒ `[]`. Never raises (a lookup failure degrades to no scopes).
+- `list_group_grants` / `create_group_grant` / `update_group_grant` / `delete_group_grant` / `group_to_public` — owner-gated via `_require_owner` (404, no leak); audit `AGENT_API_GRANT_CREATED/_UPDATED/_DELETED` with `details.granted_group_id` instead of `granted_user_id`.
+
+**Read sites of grants/scopes.** `resolve_scopes_for_caller` (proxy, via `agent_api_public.py`; feeds edge enforcement) and `AgentApiKeyService.get_holder_info` use `effective_scopes` (union). `AgentApiKeyService.list_access` appends `groups` (sorted by name). `BundlePermissionsService.build_overview` adds `group_grants` per manageable producer. Person-grant writers (`create_grant`, `upsert_grant`, update/delete, `to_public`, account-CLI `set_agent_api_scopes`) are unchanged and never touch group rows.
 - `to_public` — projects a grant + resolved user for the API.
 - `_sanitize_scopes` — scope names are transported space-separated, so each name is trimmed, names with inner whitespace or empties are dropped, and the list is de-duplicated preserving order. Applied at the create/update write boundary.
 

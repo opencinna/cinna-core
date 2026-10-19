@@ -136,6 +136,17 @@ The bare model ids inserted by the picker match the `discovered_models` cache an
 4. All environments pre-selected by default for batch rebuild
 5. User can selectively rebuild or skip
 
+
+### Sharing an AI Credential with a Group
+
+Until user groups, AI credentials had no owner-facing share surface (`AICredentialShare` rows came only from bundle installs). The owner now gets a **group-only** sharing section on each non-managed credential: pick a [user group](../user_groups/user_groups.md), and every member can choose the key in their environments' AI configuration.
+
+1. Members see keys shared with them in **environment configuration** (fed by `GET /ai-credentials/shared-with-me`); recipient lists carry a "via group" marker. Members use the key, never see or edit it.
+2. Owner revokes the group share, a superuser removes the member or deletes the group (or revokes the row on the group page).
+3. For each user who then has no remaining path (owner, direct `AICredentialShare`, another group share): their environments that pin the credential get the conversation / building pin cleared, and **running** environments are restarted so `.env` is regenerated without the key. The impact preview on the group page shows how many restarts that means.
+
+Person-to-person AI credential sharing is not part of this; admin-managed credentials cannot be group-shared.
+
 ## Business Rules
 
 - **One default per type** - Setting a new default automatically unsets the previous one for the same type
@@ -151,6 +162,7 @@ The bare model ids inserted by the picker match the `discovered_models` cache an
 - **Base URL + Model required** - Only for `openai_compatible` type; base URL is optional for `google`
 - **Keys never exposed** - API responses show `has_api_key: true` instead of the actual key
 - **Share access control** - Shared credentials can only be used, not modified, by recipients
+- **Group sharing is the only owner share path** - owner shares go to a user group (`ai_credential_group_share`); losing access clears the environment pin and restarts running environments (see above)
 - **A row that exists is usable** - There is no placeholder credential, no empty-key row, and no "preparing" state on `AICredential` itself; every row that exists is safe for the discovery cron, the desktop account-config bundle, and the environment credential bag to read unfiltered. Per-user key minting keeps its pre-key state on a separate membership row instead (see [Admin-Provisioned AI Credentials](admin_ai_credential_provisioning.md))
 - **No child of an admin-managed credential can be shared, in either provisioning mode** - `share_credential` refuses with `AICredentialNotShareableError` when `is_shareable(credential)` is false (the plain `is_admin_managed` column, so an orphaned child whose parent was force-deleted is refused too). A bundle wired to such a credential degrades to "user provides" instead of failing or redistributing the admin's key past the member list the admin curated
 - **Admin-managed credentials are read-only to the owner** - A credential provisioned by a superuser carries `is_admin_managed: true` in its public projection. The owner may use it and set it as their default, but cannot edit, delete, or re-key it (the backend returns `403`). In **Settings → AI Credentials** these rows render a **"Managed" badge** (shield icon, tooltip "Managed by your administrator…") and **hide the Edit/Delete buttons** (the set-default star stays, rendered after the type badge). See [Admin-Provisioned AI Credentials](admin_ai_credential_provisioning.md)
@@ -195,3 +207,7 @@ Clone created → Uses owner's shared or recipient's own credentials
 ---
 
 *Last updated: 2026-09-16 — the Anthropic note now recommends API keys over Claude Code OAuth tokens*
+
+## Changelog
+
+- AI credentials can be shared with user groups; `GET /ai-credentials/shared-with-me`; losing access clears pins and restarts running environments.

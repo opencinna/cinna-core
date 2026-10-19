@@ -21,6 +21,8 @@ Scenarios:
      folder are gone; a bystander's folders are untouched.
   2. ``DELETE /users/{id}`` by a superuser: the same, for the target user.
   3. A refused delete (a superuser deleting themself, 403) removes nothing.
+  4. Deleting a superuser who created a group and is its member (self-added)
+     succeeds; the group survives with created_by=None.
 
 Notes:
   The app-data folder is seeded by hand: it is ``APP_DATA_STORAGE_DIR/<user_id>/
@@ -49,6 +51,7 @@ from tests.utils.marketplace_skills import (
     snapshots_root,
 )
 from tests.utils.user import create_random_user_with_headers, promote_to_developer
+from tests.utils.user_group import add_members, get_group, list_members
 
 API = settings.API_V1_STR
 
@@ -209,3 +212,31 @@ def test_superuser_delete_removes_the_targets_marketplace_skill_snapshots(
 
     assert not (snapshots_root() / mine["id"]).exists()
     assert (snapshots_root() / bystander["id"]).is_dir()
+
+
+def test_deleting_a_group_creator_who_is_also_a_member_keeps_the_group(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    1. A second superuser creates a group and adds themself plus a bystander.
+    2. Deleting that superuser succeeds (SET NULL + CASCADE reach the group in
+       one statement; the FK is DEFERRABLE).
+    3. The group survives with created_by=None, minus the deleted member.
+    """
+    owner, owner_headers = create_second_superuser(client, superuser_token_headers)
+    bystander, _ = create_random_user_with_headers(client)
+    r = client.post(f"{API}/admin/user-groups/", headers=owner_headers, json={"name": f"g-{owner['id'][:8]}"})
+    assert r.status_code == 200, r.text
+    gid = r.json()["id"]
+    assert r.json()["created_by"] is not None
+    add_members(client, owner_headers, gid, [owner["id"], bystander["id"]])
+
+    r = client.delete(f"{API}/users/{owner['id']}", headers=superuser_token_headers)
+    assert r.status_code == 200, r.text
+
+    group = get_group(client, superuser_token_headers, gid)
+    assert group["created_by"] is None
+    assert group["member_count"] == 1
+    members = list_members(client, superuser_token_headers, gid)
+    assert [m["user_id"] for m in members["data"]] == [bystander["id"]]

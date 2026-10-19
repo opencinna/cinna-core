@@ -9,8 +9,14 @@ of the feature needs:
   "Access & Scopes" UI reads this to offer a typed picker. Graceful: an empty
   catalog when the producer has not declared any scopes.
 - ``resolve_scopes_for_caller`` — the LIVE per-call lookup the proxy uses:
-  ``grant(producer, owner) -> scopes`` (plan D5). No grant ⇒ empty list ⇒ no
+  ``effective_scopes(producer, owner)`` (plan D5). No grant ⇒ empty list ⇒ no
   scopes header injected.
+
+Effective scopes are the caller's personal grant scopes followed by the scopes
+of every user group the caller actively belongs to (groups ordered by
+``lower(name)``), de-duplicated in order. An explicit empty personal grant does
+not mask a scoped group: the group scopes still apply. Group grants live in
+``agent_api_access_group_grant`` and have their own owner-gated CRUD here.
 
 Ownership is checked via ``AgentApiService.resolve_agent_only`` (the same helper
 the producer-preview routes use), which raises ``AgentApiNotFoundError`` (404,
@@ -23,16 +29,23 @@ import logging
 import uuid
 from datetime import UTC, datetime
 
-from sqlmodel import Session, select
+from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
+from sqlmodel import Session, col, select
 
 from app.models import (
     AgentApiAccessGrant,
     AgentApiAccessGrantCreate,
     AgentApiAccessGrantUpdate,
+    AgentApiAccessGroupGrant,
+    AgentApiAccessGroupGrantCreate,
+    AgentApiAccessGroupGrantUpdate,
     AgentApiScope,
     AgentApiScopeCatalog,
     SecurityEventCreate,
     User,
+    UserGroup,
+    UserGroupMember,
 )
 from app.models.events.security_event import (
     AGENT_API_GRANT_CREATED,
@@ -44,6 +57,7 @@ from app.services.agent_api.agent_api_service import (
     AgentApiService,
 )
 from app.services.events.security_event_service import SecurityEventService
+from app.services.users.user_group_access import UserGroupAccess
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +149,15 @@ class AgentApiGrantService:
             created_by=owner_user_id,
         )
         session.add(grant)
-        session.commit()
+        try:
+            session.commit()
+        except IntegrityError as exc:
+            # A concurrent create won the unique constraint.
+            session.rollback()
+            raise AgentApiGrantError(
+                "A grant for this user already exists; edit it instead",
+                status_code=409,
+            ) from exc
         session.refresh(grant)
 
         await AgentApiGrantService._audit(
@@ -291,6 +313,177 @@ class AgentApiGrantService:
         return grant
 
     # ------------------------------------------------------------------ #
+    # Group grant CRUD (scopes for a user group)                          #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def list_group_grants(
+        session: Session,
+        producer_agent_id: uuid.UUID,
+        user_id: uuid.UUID,
+        is_superuser: bool = False,
+    ) -> list[AgentApiAccessGroupGrant]:
+        """List the producer's group grants (owner-gated), by group name."""
+        AgentApiGrantService._require_owner(
+            session, producer_agent_id, user_id, is_superuser
+        )
+        return list(
+            session.exec(
+                select(AgentApiAccessGroupGrant)
+                .join(UserGroup, col(UserGroup.id) == col(AgentApiAccessGroupGrant.group_id))
+                .where(AgentApiAccessGroupGrant.producer_agent_id == producer_agent_id)
+                .order_by(func.lower(UserGroup.name), col(AgentApiAccessGroupGrant.id))
+            ).all()
+        )
+
+    @staticmethod
+    async def create_group_grant(
+        session: Session,
+        producer_agent_id: uuid.UUID,
+        owner_user_id: uuid.UUID,
+        data: AgentApiAccessGroupGrantCreate,
+        is_superuser: bool = False,
+    ) -> AgentApiAccessGroupGrant:
+        """Create a grant for ``(producer, data.group_id)`` (owner-gated)."""
+        AgentApiGrantService._require_owner(
+            session, producer_agent_id, owner_user_id, is_superuser
+        )
+        if session.get(UserGroup, data.group_id) is None:
+            raise AgentApiGrantError("User group not found", status_code=404)
+
+        existing = session.exec(
+            select(AgentApiAccessGroupGrant).where(
+                AgentApiAccessGroupGrant.producer_agent_id == producer_agent_id,
+                AgentApiAccessGroupGrant.group_id == data.group_id,
+            )
+        ).first()
+        if existing is not None:
+            raise AgentApiGrantError(
+                "A grant for this group already exists; edit it instead",
+                status_code=409,
+            )
+
+        grant = AgentApiAccessGroupGrant(
+            producer_agent_id=producer_agent_id,
+            group_id=data.group_id,
+            scopes=_sanitize_scopes(data.scopes),
+            created_by=owner_user_id,
+        )
+        session.add(grant)
+        try:
+            session.commit()
+        except IntegrityError as exc:
+            # A concurrent create won the unique constraint.
+            session.rollback()
+            raise AgentApiGrantError(
+                "A grant for this group already exists; edit it instead",
+                status_code=409,
+            ) from exc
+        session.refresh(grant)
+
+        await AgentApiGrantService._audit_group(
+            session,
+            actor_id=owner_user_id,
+            event_type=AGENT_API_GRANT_CREATED,
+            agent_id=producer_agent_id,
+            granted_group_id=grant.group_id,
+            scopes=list(grant.scopes or []),
+            grant_id=grant.id,
+        )
+        return grant
+
+    @staticmethod
+    async def update_group_grant(
+        session: Session,
+        producer_agent_id: uuid.UUID,
+        grant_id: uuid.UUID,
+        owner_user_id: uuid.UUID,
+        data: AgentApiAccessGroupGrantUpdate,
+        is_superuser: bool = False,
+    ) -> AgentApiAccessGroupGrant:
+        """Update a group grant's scopes (owner-gated)."""
+        AgentApiGrantService._require_owner(
+            session, producer_agent_id, owner_user_id, is_superuser
+        )
+        grant = AgentApiGrantService._load_owned_group_grant(
+            session, producer_agent_id, grant_id
+        )
+        if data.scopes is not None:
+            grant.scopes = _sanitize_scopes(data.scopes)
+        grant.updated_at = datetime.now(UTC)
+        session.add(grant)
+        session.commit()
+        session.refresh(grant)
+
+        await AgentApiGrantService._audit_group(
+            session,
+            actor_id=owner_user_id,
+            event_type=AGENT_API_GRANT_UPDATED,
+            agent_id=producer_agent_id,
+            granted_group_id=grant.group_id,
+            scopes=list(grant.scopes or []),
+            grant_id=grant.id,
+        )
+        return grant
+
+    @staticmethod
+    async def delete_group_grant(
+        session: Session,
+        producer_agent_id: uuid.UUID,
+        grant_id: uuid.UUID,
+        owner_user_id: uuid.UUID,
+        is_superuser: bool = False,
+    ) -> None:
+        """Delete a group grant (owner-gated). Takes effect on the next call."""
+        AgentApiGrantService._require_owner(
+            session, producer_agent_id, owner_user_id, is_superuser
+        )
+        grant = AgentApiGrantService._load_owned_group_grant(
+            session, producer_agent_id, grant_id
+        )
+        await AgentApiGrantService.remove_group_grant(
+            session, grant, actor_id=owner_user_id
+        )
+
+    @staticmethod
+    async def remove_group_grant(
+        session: Session,
+        grant: AgentApiAccessGroupGrant,
+        actor_id: uuid.UUID,
+    ) -> None:
+        """Delete a loaded group grant and audit it. No ownership check: the
+        caller has already authorised the actor (owner CRUD, or the superuser
+        User Groups revoke)."""
+        group_id = grant.group_id
+        grant_id = grant.id
+        producer_agent_id = grant.producer_agent_id
+        scopes = list(grant.scopes or [])
+        session.delete(grant)
+        session.commit()
+
+        await AgentApiGrantService._audit_group(
+            session,
+            actor_id=actor_id,
+            event_type=AGENT_API_GRANT_DELETED,
+            agent_id=producer_agent_id,
+            granted_group_id=group_id,
+            scopes=scopes,
+            grant_id=grant_id,
+        )
+
+    @staticmethod
+    def _load_owned_group_grant(
+        session: Session,
+        producer_agent_id: uuid.UUID,
+        grant_id: uuid.UUID,
+    ) -> AgentApiAccessGroupGrant:
+        """Load a group grant, asserting it belongs to the producer (404 else)."""
+        grant = session.get(AgentApiAccessGroupGrant, grant_id)
+        if grant is None or grant.producer_agent_id != producer_agent_id:
+            raise AgentApiGrantError("Grant not found", status_code=404)
+        return grant
+
+    # ------------------------------------------------------------------ #
     # Scope catalog (from the cached policy)                              #
     # ------------------------------------------------------------------ #
 
@@ -328,27 +521,69 @@ class AgentApiGrantService:
     # ------------------------------------------------------------------ #
 
     @staticmethod
+    def effective_scopes(
+        session: Session,
+        producer_agent_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> list[str]:
+        """The caller's effective scopes on a producer, resolved live.
+
+        Personal grant scopes first, then the scopes of every group the user
+        belongs to while active, groups ordered by ``lower(name)``; de-duplicated
+        with order kept. Raises on a DB error (callers decide the fallback).
+        """
+        personal = session.exec(
+            select(AgentApiAccessGrant.scopes).where(
+                AgentApiAccessGrant.producer_agent_id == producer_agent_id,
+                AgentApiAccessGrant.user_id == user_id,
+            )
+        ).first()
+        group_scopes = session.exec(
+            select(AgentApiAccessGroupGrant.scopes)
+            .join(UserGroup, col(UserGroup.id) == col(AgentApiAccessGroupGrant.group_id))
+            .join(
+                UserGroupMember,
+                col(UserGroupMember.group_id) == col(AgentApiAccessGroupGrant.group_id),
+            )
+            .join(User, col(User.id) == col(UserGroupMember.user_id))
+            .where(
+                AgentApiAccessGroupGrant.producer_agent_id == producer_agent_id,
+                UserGroupMember.user_id == user_id,
+                User.is_active == True,  # noqa: E712
+            )
+            .order_by(func.lower(UserGroup.name), col(UserGroup.id))
+        ).all()
+
+        merged: list[str] = []
+        seen: set[str] = set()
+        for scopes in [personal or [], *group_scopes]:
+            for scope in scopes or []:
+                name = str(scope)
+                if name not in seen:
+                    seen.add(name)
+                    merged.append(name)
+        return merged
+
+    @staticmethod
     def resolve_scopes_for_caller(
         session: Session,
         producer_agent_id: uuid.UUID,
         owner_user_id: uuid.UUID,
     ) -> list[str]:
-        """Resolve ``grant(producer, owner) -> scopes`` LIVE for the proxy.
+        """Resolve the caller's effective scopes LIVE for the proxy.
 
-        Returns the grant's scope list, or an empty list when there is no grant
-        (the producer then decides what an unscoped caller may do). Never raises;
-        a lookup failure degrades to no scopes.
+        Returns ``effective_scopes`` (personal ∪ active-group scopes), or an
+        empty list when the caller holds neither (the producer then decides
+        what an unscoped caller may do). Never raises; a lookup failure
+        degrades to no scopes.
         """
         # Broad-except swallow is safe here: this read runs at the proxy AFTER the
         # last commit on this session (update_last_activity) and before only the
         # adapter proxy call — no later commit depends on this session.
         try:
-            grant = session.exec(
-                select(AgentApiAccessGrant).where(
-                    AgentApiAccessGrant.producer_agent_id == producer_agent_id,
-                    AgentApiAccessGrant.user_id == owner_user_id,
-                )
-            ).first()
+            return AgentApiGrantService.effective_scopes(
+                session, producer_agent_id, owner_user_id
+            )
         except Exception:
             logger.exception(
                 "agent_api grant lookup failed for producer %s user %s; "
@@ -357,9 +592,6 @@ class AgentApiGrantService:
                 owner_user_id,
             )
             return []
-        if grant is None:
-            return []
-        return [str(s) for s in (grant.scopes or [])]
 
     # ------------------------------------------------------------------ #
     # Public projection                                                  #
@@ -379,6 +611,31 @@ class AgentApiGrantService:
                 if user is not None
                 else None
             ),
+            "created_by": grant.created_by,
+            "created_at": grant.created_at,
+            "updated_at": grant.updated_at,
+        }
+
+    @staticmethod
+    def group_to_public(
+        session: Session,
+        grant: AgentApiAccessGroupGrant,
+        member_counts: dict[uuid.UUID, int] | None = None,
+    ) -> dict:
+        """Project a group grant to its public dict (group name + active
+        member count). Pass ``member_counts`` to avoid a query per row."""
+        group = session.get(UserGroup, grant.group_id)
+        if member_counts is None:
+            member_counts = UserGroupAccess.member_counts(session, [grant.group_id])
+        return {
+            "id": grant.id,
+            "producer_agent_id": grant.producer_agent_id,
+            "group_id": grant.group_id,
+            "group": (
+                {"id": group.id, "name": group.name} if group is not None else None
+            ),
+            "member_count": member_counts.get(grant.group_id, 0),
+            "scopes": list(grant.scopes or []),
             "created_by": grant.created_by,
             "created_at": grant.created_at,
             "updated_at": grant.updated_at,
@@ -435,6 +692,40 @@ class AgentApiGrantService:
         except Exception:
             logger.exception(
                 "Failed to write SecurityEvent %s for agent_api grant %s",
+                event_type,
+                grant_id,
+            )
+
+
+    @staticmethod
+    async def _audit_group(
+        session: Session,
+        actor_id: uuid.UUID,
+        event_type: str,
+        agent_id: uuid.UUID,
+        granted_group_id: uuid.UUID,
+        scopes: list[str],
+        grant_id: uuid.UUID,
+    ) -> None:
+        """Write a SecurityEvent for a group grant change. Best-effort."""
+        try:
+            await SecurityEventService.create_event(
+                session=session,
+                user_id=actor_id,
+                data=SecurityEventCreate(
+                    agent_id=agent_id,
+                    event_type=event_type,
+                    severity="medium",
+                    details={
+                        "grant_id": str(grant_id),
+                        "granted_group_id": str(granted_group_id),
+                        "scopes": scopes,
+                    },
+                ),
+            )
+        except Exception:
+            logger.exception(
+                "Failed to write SecurityEvent %s for agent_api group grant %s",
                 event_type,
                 grant_id,
             )

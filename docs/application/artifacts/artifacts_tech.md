@@ -10,6 +10,7 @@ Models in `backend/app/models/artifacts/`, services in `backend/app/services/art
 |-------|-----------|
 | `artifact` (`artifact.py`) | `id`, `owner_id`, `user_workspace_id`, `title` (200), `description` (2000), `kind` (`site`/`files`), `entry_path`, `visibility` (`private`/`instance`), `current_revision_id` (plain indexed UUID, **no FK**, avoids a circular cascade), `source_kind` (`desktop`/`core_agent`/`cli`/`upload`), `source_label`, `source_key`, source agent/session refs, timestamps |
 | `artifact_revision` | `artifact_id` (cascade), `number` (unique per artifact), `size_bytes`, `file_count`, `files` JSON `[{path,size,sha256,mime}]`, `excluded` JSON, `created_by`, `note`, `created_at` |
+| `artifact_group_grant` | `artifact_id`, `group_id` (CASCADE), `level` (`view`), `granted_by`; unique `(artifact_id, group_id)`; separate from `artifact_grant` so unaware call sites fail closed (migration `7896e6f51c03`; see [User Groups](../user_groups/user_groups_tech.md)). `PUT /artifacts/{id}/grants` takes `principal: CatalogPrincipalUser \| CatalogPrincipalGroup`; group rows return `member_count`. `ArtifactService` ORs `member_group_ids_subquery` into `shared_with_me` and access caps |
 | `artifact_grant` | `artifact_id`, `user_id`, `granted_by`; unique `(artifact_id, user_id)`; level `view` only |
 | `artifact_link` | `artifact_id` (cascade), `token_hash` (SHA-256, unique), `token_prefix` (8 chars), `label`, `expires_at`, `code_encrypted` (Fernet), `failed_attempts`, `pinned_revision_id` (FK, no cascade), `created_by`, `revoked_at` |
 

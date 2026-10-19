@@ -15,6 +15,7 @@ import {
   envToEnvConfig,
   type EnvConfigValue,
 } from "./EnvironmentConfigForm"
+import { useSharedAICredentials } from "./useSharedAICredentials"
 import { cn } from "@/lib/utils"
 import {
   Play,
@@ -142,6 +143,8 @@ export function EnvironmentCard({
     enabled: !readOnly,
   })
   const credentials = aiCredentialsData?.data ?? []
+  // A key shared with the user resolves the SDK id the same way an owned one does.
+  const sharedAiCredentials = useSharedAICredentials(!readOnly)
 
   const deleteMutation = useMutation({
     mutationFn: () => EnvironmentsService.deleteEnvironment({ id: environment.id }),
@@ -221,7 +224,26 @@ export function EnvironmentCard({
             buildingCredentialId: credentialId,
             modelOverrideBuilding: modelOverride,
           }
-    const fields = composeEnvModeConfigFields(next, credentials)
+    const composed = composeEnvModeConfigFields(next, [
+      ...credentials,
+      ...sharedAiCredentials,
+    ])
+    // The mode not being edited keeps its stored SDK id: recomputing it from
+    // the credential lists would fall back to the engine default when its key
+    // is a shared one that was revoked or has not loaded.
+    const fields =
+      editingMode === "conversation"
+        ? {
+            ...composed,
+            agent_sdk_building:
+              environment.agent_sdk_building || composed.agent_sdk_building,
+          }
+        : {
+            ...composed,
+            agent_sdk_conversation:
+              environment.agent_sdk_conversation ||
+              composed.agent_sdk_conversation,
+          }
     if (
       confirm(
         "Apply this configuration and rebuild the environment now?\n\n" +

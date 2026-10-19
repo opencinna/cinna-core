@@ -39,7 +39,7 @@ Not to be confused with the `artifacts` field of an input task, which is just a 
 3. Download: the whole revision as a zip, or any single file with `?dl=1`.
 
 ### 3. Share
-- **Grants:** the owner replaces the full grant list (users only, "view" level).
+- **Grants:** the owner replaces the full grant list of people or [user groups](../user_groups/user_groups.md) ("view" level; a role principal is rejected). Group members are resolved live: removing someone from the group, or revoking the group grant, makes the next request 404.
 - **Visibility:** the owner flips `private` / `instance`.
 - **Public link:** the owner creates a link; the token (and the code, if any) is shown **once**, at creation. Anyone with the URL (and code) opens the artifact without an account. The owner can revoke it at any time.
 
@@ -106,6 +106,8 @@ Not to be confused with the `artifacts` field of an input task, which is just a 
 - [Nginx Setup](../../infrastructure/nginx_setup.md) and [Data Volumes](../../infrastructure/data_volumes.md): `/a/` routing, upload body limit, storage mount.
 
 ## Changelog
+
+- Grants accept user groups; list counts and `shared_with_me` include group grants.
 
 - Initial backend release (models, ingest, content serving, API, links, CLI account routes).
 - Contract 1.13.0: `artifacts/` folder role as the place agents build what they publish; excluded from bundles/library pushes, carried on env switch, survives in-place rebuild; env prompt carries an "Artifacts location" line (running envs need a rebuild to pick it up).

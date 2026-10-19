@@ -18,7 +18,15 @@ from app.models import (
     CredentialPublic,
     Message,
 )
-from app.services.credentials.credential_share_service import CredentialShareService
+from app.models.credentials.credential_group_share import (
+    CredentialGroupShareCreate,
+    CredentialGroupSharePublic,
+    CredentialGroupSharesPublic,
+)
+from app.services.credentials.credential_share_service import (
+    CredentialGroupShareError,
+    CredentialShareService,
+)
 
 router = APIRouter(prefix="/credentials", tags=["credentials"])
 
@@ -38,7 +46,10 @@ def _credential_to_public(session, credential: Credential) -> CredentialPublic:
         template_private_fields=list(credential.template_private_fields or []),
         owner_id=credential.owner_id,
         user_workspace_id=credential.user_workspace_id,
-        share_count=share_count
+        share_count=share_count,
+        group_share_count=CredentialShareService.get_group_share_count_for_credential(
+            session, credential.id
+        ),
     )
 
 
@@ -151,3 +162,74 @@ async def update_credential_sharing(
     except ValueError as e:
         status_code = 404 if "not found" in str(e).lower() else 400
         raise HTTPException(status_code=status_code, detail=str(e))
+
+
+# ── Group shares (user groups) ───────────────────────────────────────────────
+
+
+@router.post(
+    "/{credential_id}/group-shares", response_model=CredentialGroupSharePublic
+)
+def share_credential_with_group(
+    credential_id: UUID,
+    body: CredentialGroupShareCreate,
+    session: SessionDep,
+    current_user: CurrentUser,
+) -> Any:
+    """Share a credential you own with a user group.
+
+    Every current and future member can use it while they belong to the group.
+    """
+    try:
+        return CredentialShareService.share_with_group(
+            session=session,
+            credential_id=credential_id,
+            owner_id=current_user.id,
+            group_id=body.group_id,
+        )
+    except CredentialGroupShareError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
+
+
+@router.get(
+    "/{credential_id}/group-shares", response_model=CredentialGroupSharesPublic
+)
+def list_credential_group_shares(
+    credential_id: UUID,
+    session: SessionDep,
+    current_user: CurrentUser,
+) -> Any:
+    """The user groups a credential you own is shared with."""
+    try:
+        shares = CredentialShareService.list_group_shares(
+            session=session,
+            credential_id=credential_id,
+            owner_id=current_user.id,
+        )
+    except CredentialGroupShareError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
+    return CredentialGroupSharesPublic(data=shares, count=len(shares))
+
+
+@router.delete("/{credential_id}/group-shares/{group_id}", response_model=Message)
+async def revoke_credential_group_share(
+    credential_id: UUID,
+    group_id: UUID,
+    session: SessionDep,
+    current_user: CurrentUser,
+) -> Message:
+    """Stop sharing a credential with a user group.
+
+    Members with no other path to it lose its agent links, and their running
+    environments are re-synced without it.
+    """
+    try:
+        await CredentialShareService.revoke_group_share(
+            session=session,
+            credential_id=credential_id,
+            owner_id=current_user.id,
+            group_id=group_id,
+        )
+    except CredentialGroupShareError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
+    return Message(message="Group share revoked successfully")

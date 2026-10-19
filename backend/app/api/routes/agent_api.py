@@ -27,6 +27,10 @@ from app.models import (
     AgentApiAccessGrantPublic,
     AgentApiAccessGrantsPublic,
     AgentApiAccessGrantUpdate,
+    AgentApiAccessGroupGrantCreate,
+    AgentApiAccessGroupGrantPublic,
+    AgentApiAccessGroupGrantsPublic,
+    AgentApiAccessGroupGrantUpdate,
     AgentApiAccessList,
     AgentApiKeyCreate,
     AgentApiKeyCreated,
@@ -49,6 +53,7 @@ from app.services.agent_api.agent_api_token_service import (
     AgentApiTokenService,
 )
 from app.services.environments.environment_service import EnvironmentService
+from app.services.users.user_group_access import UserGroupAccess
 
 logger = logging.getLogger(__name__)
 
@@ -424,6 +429,85 @@ async def delete_agent_api_grant(
             is_superuser=current_user.is_superuser,
         )
         return Message(message="Grant removed")
+    except AgentApiError as e:
+        _handle_agent_api_error(e)
+
+
+# ── Group grants (scopes for a user group, owner-gated like /grants) ────────
+# A caller's effective scopes are their personal grant plus every group they
+# actively belong to, resolved live on each call.
+
+
+@router.get("/group-grants", response_model=AgentApiAccessGroupGrantsPublic)
+def list_agent_api_group_grants(
+    agent_id: uuid.UUID,
+    session: SessionDep,
+    current_user: CurrentUser,
+):
+    """List user-group scope grants for this producer agent (owner-gated)."""
+    try:
+        grants = AgentApiGrantService.list_group_grants(
+            session, agent_id, current_user.id,
+            is_superuser=current_user.is_superuser,
+        )
+        counts = UserGroupAccess.member_counts(session, {g.group_id for g in grants})
+        data = [AgentApiGrantService.group_to_public(session, g, counts) for g in grants]
+        return AgentApiAccessGroupGrantsPublic(data=data, count=len(data))
+    except AgentApiError as e:
+        _handle_agent_api_error(e)
+
+
+@router.post("/group-grants", response_model=AgentApiAccessGroupGrantPublic)
+async def create_agent_api_group_grant(
+    agent_id: uuid.UUID,
+    body: AgentApiAccessGroupGrantCreate,
+    session: SessionDep,
+    current_user: CurrentUser,
+):
+    """Grant a user group scopes on this producer agent's API (owner-gated)."""
+    try:
+        grant = await AgentApiGrantService.create_group_grant(
+            session, agent_id, current_user.id, body,
+            is_superuser=current_user.is_superuser,
+        )
+        return AgentApiGrantService.group_to_public(session, grant)
+    except AgentApiError as e:
+        _handle_agent_api_error(e)
+
+
+@router.put("/group-grants/{grant_id}", response_model=AgentApiAccessGroupGrantPublic)
+async def update_agent_api_group_grant(
+    agent_id: uuid.UUID,
+    grant_id: uuid.UUID,
+    body: AgentApiAccessGroupGrantUpdate,
+    session: SessionDep,
+    current_user: CurrentUser,
+):
+    """Update a group grant's scopes (owner-gated). Takes effect on the next call."""
+    try:
+        grant = await AgentApiGrantService.update_group_grant(
+            session, agent_id, grant_id, current_user.id, body,
+            is_superuser=current_user.is_superuser,
+        )
+        return AgentApiGrantService.group_to_public(session, grant)
+    except AgentApiError as e:
+        _handle_agent_api_error(e)
+
+
+@router.delete("/group-grants/{grant_id}")
+async def delete_agent_api_group_grant(
+    agent_id: uuid.UUID,
+    grant_id: uuid.UUID,
+    session: SessionDep,
+    current_user: CurrentUser,
+) -> Message:
+    """Remove a group's grant (owner-gated). Takes effect on the next call."""
+    try:
+        await AgentApiGrantService.delete_group_grant(
+            session, agent_id, grant_id, current_user.id,
+            is_superuser=current_user.is_superuser,
+        )
+        return Message(message="Group grant removed")
     except AgentApiError as e:
         _handle_agent_api_error(e)
 

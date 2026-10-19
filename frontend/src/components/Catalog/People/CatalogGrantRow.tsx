@@ -1,6 +1,6 @@
-import { User, Users, X } from "lucide-react"
+import { X } from "lucide-react"
 
-import { ListRow } from "@/components/Common/ListRow"
+import { ListRow, RowInfo } from "@/components/Common/ListRow"
 import { Button } from "@/components/ui/button"
 import {
   Select,
@@ -16,15 +16,18 @@ import {
 } from "@/components/ui/tooltip"
 import {
   type BufferedGrant,
-  CATALOG_ACCESS_OPTIONS,
   type CatalogAccess,
+  catalogAccessOptions,
   principalKind,
 } from "@/utils/catalogAccess"
-
-const KIND_ICON = { role: Users, user: User } as const
+import type { CatalogKind } from "@/utils/catalogItems"
+import { pluralize } from "@/utils/pluralize"
+import { PRINCIPAL_KIND_ICON } from "@/utils/principalKinds"
 
 interface CatalogGrantRowProps {
   grant: BufferedGrant
+  /** The item's kind, which decides what the `edit` level is called. */
+  kind: CatalogKind
   disabled: boolean
   onAccessChange: (key: string, access: CatalogAccess) => void
   onRemove: (key: string) => void
@@ -36,21 +39,32 @@ interface CatalogGrantRowProps {
  * access.
  *
  * Maintainer is offered on person rows only: the server lists maintainers from
- * person grants, so a role at Maintainer would hold the access without
- * appearing as anyone's maintainer. A role row that already carries it
- * (created through the API) still shows its value.
+ * person grants, so a role or group at Maintainer would hold the access
+ * without appearing as anyone's maintainer (D6; the server refuses it for a
+ * group). A role row that already carries it (created through the API) still
+ * shows its value. A group's member count is its detail flag, not a meta
+ * line, so the list keeps one row height across kinds.
+ *
+ * The `edit` level's words follow the item's kind (`catalogAccessOptions`);
+ * a Cinna-hosted bundle offers it only to a row that already holds it.
  */
 export function CatalogGrantRow({
   grant,
+  kind: itemKind,
   disabled,
   onAccessChange,
   onRemove,
 }: CatalogGrantRowProps) {
   const kind = principalKind(grant.principal)
-  const Icon = KIND_ICON[kind]
-  const options = CATALOG_ACCESS_OPTIONS.filter(
+  const Icon = PRINCIPAL_KIND_ICON[kind]
+  // The saved level, not the buffered one: a legacy `edit` row changed to
+  // Can use must still be able to go back before Save.
+  const options = catalogAccessOptions(itemKind, grant.savedAccess).filter(
     (o) =>
-      o.value !== "maintain" || kind === "user" || grant.access === "maintain",
+      o.value !== "maintain" ||
+      kind === "user" ||
+      grant.savedAccess === "maintain" ||
+      grant.access === "maintain",
   )
 
   return (
@@ -61,6 +75,15 @@ export function CatalogGrantRow({
         </span>
       }
       title={grant.title}
+      flags={
+        kind === "group" && grant.memberCount != null ? (
+          <RowInfo
+            facts={[
+              `Group · ${pluralize(grant.memberCount, "member", "members")}`,
+            ]}
+          />
+        ) : undefined
+      }
     >
       <Select
         value={grant.access}
@@ -69,7 +92,7 @@ export function CatalogGrantRow({
       >
         <SelectTrigger
           size="sm"
-          className="h-8 w-[11.5rem]"
+          className="h-8 w-[13rem]"
           aria-label={`Access for ${grant.title}`}
         >
           <SelectValue />

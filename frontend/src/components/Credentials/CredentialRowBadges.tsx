@@ -11,6 +11,8 @@ import { getCredentialTypeMeta } from "@/components/Credentials/credentialTypes"
 import { Badge } from "@/components/ui/badge"
 import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover"
 import { Skeleton } from "@/components/ui/skeleton"
+import { pluralize } from "@/utils/pluralize"
+import { peopleAndGroups } from "@/utils/sharedWith"
 
 /** Names shown in a hover before the rest collapse into "and N more". */
 const HOVER_LIMIT = 5
@@ -166,43 +168,92 @@ function MoreLine({ total }: { total: number }) {
   )
 }
 
-/** Who an owned credential is shared with. Owner-only endpoint. */
-function SharesDetail({ credentialId }: { credentialId: string }) {
-  const { data, isError, isFetching, error, refetch } = useQuery({
+/**
+ * Who an owned credential is shared with: people, then user groups. Both
+ * owner-only endpoints; each is fetched only when its count says it exists.
+ */
+function SharesDetail({
+  credentialId,
+  hasPeople,
+  hasGroups,
+}: {
+  credentialId: string
+  hasPeople: boolean
+  hasGroups: boolean
+}) {
+  const people = useQuery({
     queryKey: ["credential-shares", credentialId],
     // Opening a card again within half a minute does not refetch.
     staleTime: 30_000,
     queryFn: () => CredentialsService.getCredentialShares({ credentialId }),
+    enabled: hasPeople,
   })
+  const groups = useQuery({
+    queryKey: ["credential-group-shares", credentialId],
+    staleTime: 30_000,
+    queryFn: () =>
+      CredentialsService.listCredentialGroupShares({ credentialId }),
+    enabled: hasGroups,
+  })
+  const parts = [hasPeople && people, hasGroups && groups].filter(
+    (q) => q !== false,
+  )
 
   // Retry keeps `isError` until it succeeds; show the wait, not the error.
-  if (data === undefined && isFetching) return <DetailLoading />
-  if (isError && data === undefined) {
+  if (parts.some((q) => q.data === undefined && q.isFetching)) {
+    return <DetailLoading />
+  }
+  const failed = parts.find((q) => q.isError && q.data === undefined)
+  if (failed) {
     return (
       <QueryErrorAlert
-        error={error}
+        error={failed.error}
         fallback="Couldn't load who it's shared with"
-        onRetry={() => refetch()}
+        onRetry={() => {
+          for (const q of parts) q.refetch()
+        }}
         compact
       />
     )
   }
-  if (!data) return <DetailLoading />
+  if (parts.some((q) => !q.data)) return <DetailLoading />
+
+  // People first, groups after them (S17).
+  const rows = [
+    ...(people.data?.data ?? []).map((share) => ({
+      key: share.id,
+      label: share.shared_with_email,
+      detail: formatRelativeTimestamp(share.shared_at) || "",
+      group: false,
+    })),
+    ...(groups.data?.data ?? []).map((g) => ({
+      key: `group:${g.group_id}`,
+      label: g.group_name,
+      detail: pluralize(g.member_count ?? 0, "member", "members"),
+      group: true,
+    })),
+  ]
 
   return (
     <>
       <DetailTitle>Shared with</DetailTitle>
       <ul className="space-y-1">
-        {data.data.slice(0, HOVER_LIMIT).map((share) => (
-          <li key={share.id} className="flex min-w-0 items-baseline gap-2">
-            <span className="min-w-0 truncate">{share.shared_with_email}</span>
+        {rows.slice(0, HOVER_LIMIT).map((row) => (
+          <li key={row.key} className="flex min-w-0 items-baseline gap-2">
+            {row.group && (
+              <Users
+                className="h-3 w-3 shrink-0 self-center text-muted-foreground"
+                aria-label="Group"
+              />
+            )}
+            <span className="min-w-0 truncate">{row.label}</span>
             <span className="shrink-0 text-xs text-muted-foreground">
-              {formatRelativeTimestamp(share.shared_at) || ""}
+              {row.detail}
             </span>
           </li>
         ))}
       </ul>
-      <MoreLine total={data.data.length} />
+      <MoreLine total={rows.length} />
     </>
   )
 }
@@ -262,6 +313,8 @@ export function CredentialRowBadges({
 }) {
   const typeLabel = getCredentialTypeMeta(credential.type).label
   const shareCount = credential.share_count ?? 0
+  const groupShareCount = credential.group_share_count ?? 0
+  const viaGroups = credential.via_groups ?? []
   const agentCount = credential.agent_usage_count
   const owner = credential.owner_email
   const sharedWhen = credential.shared_at
@@ -283,22 +336,37 @@ export function CredentialRowBadges({
               <DetailBadge
                 label={`Shared with you by ${owner}`}
                 detail={
-                  <p className="break-words">
-                    Shared with you by {owner}
-                    {sharedWhen ? ` · ${sharedWhen}` : ""}
-                  </p>
+                  <>
+                    <p className="break-words">
+                      Shared with you by {owner}
+                      {sharedWhen ? ` · ${sharedWhen}` : ""}
+                    </p>
+                    {viaGroups.length > 0 && (
+                      <p className="mt-1 break-words text-muted-foreground">
+                        Through the{" "}
+                        {viaGroups.length === 1 ? "group" : "groups"}{" "}
+                        {viaGroups.join(", ")}
+                      </p>
+                    )}
+                  </>
                 }
               >
                 <UserCheck className="h-3 w-3" aria-hidden="true" />
               </DetailBadge>
             )
-          : shareCount > 0 && (
+          : shareCount + groupShareCount > 0 && (
               <DetailBadge
-                label={`Shared with ${plural(shareCount, "person", "people")}`}
-                detail={<SharesDetail credentialId={credential.id} />}
+                label={`Shared with ${peopleAndGroups(shareCount, groupShareCount)}`}
+                detail={
+                  <SharesDetail
+                    credentialId={credential.id}
+                    hasPeople={shareCount > 0}
+                    hasGroups={groupShareCount > 0}
+                  />
+                }
               >
                 <Users className="h-3 w-3" aria-hidden="true" />
-                {shareCount}
+                {shareCount + groupShareCount}
               </DetailBadge>
             )}
       </CountSlot>

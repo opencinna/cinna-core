@@ -187,6 +187,7 @@ function CredentialsList() {
       used_in_bundle: c.used_in_bundle ?? false,
       is_shared: false,
       share_count: c.share_count ?? 0,
+      group_share_count: c.group_share_count ?? 0,
       status: c.status,
       agent_api_key_status: c.agent_api_key_status,
     }))
@@ -202,6 +203,7 @@ function CredentialsList() {
         is_shared: true,
         owner_email: c.owner_email,
         shared_at: c.shared_at,
+        via_groups: (c.via_groups ?? []).map((g) => g.name),
       }),
     )
     return [...ownedRows, ...sharedRows].sort((a, b) =>

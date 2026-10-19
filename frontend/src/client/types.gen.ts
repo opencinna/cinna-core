@@ -79,6 +79,7 @@ export type AccessTokenScope = 'limited' | 'general';
 export type AccountAgentApiAccess = {
     data: Array<AgentApiAccessEntry>;
     count: number;
+    groups?: Array<AgentApiAccessGroupEntry>;
     external_access_enabled: boolean;
     identity_enabled: boolean;
     scope_catalog?: Array<AgentApiScope>;
@@ -1043,11 +1044,56 @@ export type AgentApiAccessGrantUpdate = {
 };
 
 /**
- * The producer's API access surface: grants and issued keys per person.
+ * One user group holding API scopes on a producer (scopes only, no keys).
+ */
+export type AgentApiAccessGroupEntry = {
+    grant_id: string;
+    group_id: string;
+    name: string;
+    member_count?: number;
+    scopes?: Array<(string)>;
+};
+
+/**
+ * Body of ``POST /agents/{id}/agent-api/group-grants``.
+ */
+export type AgentApiAccessGroupGrantCreate = {
+    group_id: string;
+    scopes?: Array<(string)>;
+};
+
+export type AgentApiAccessGroupGrantPublic = {
+    id: string;
+    producer_agent_id: string;
+    group_id: string;
+    group?: (UserGroupRef | null);
+    member_count?: number;
+    scopes: Array<(string)>;
+    created_by?: (string | null);
+    created_at: string;
+    updated_at: string;
+};
+
+export type AgentApiAccessGroupGrantsPublic = {
+    data: Array<AgentApiAccessGroupGrantPublic>;
+    count: number;
+};
+
+/**
+ * Body of ``PUT .../group-grants/{grant_id}`` (scopes only).
+ */
+export type AgentApiAccessGroupGrantUpdate = {
+    scopes?: (Array<(string)> | null);
+};
+
+/**
+ * The producer's API access surface: grants and issued keys per person,
+ * plus the user groups holding scopes (sorted by name).
  */
 export type AgentApiAccessList = {
     data: Array<AgentApiAccessEntry>;
     count: number;
+    groups?: Array<AgentApiAccessGroupEntry>;
     external_access_enabled: boolean;
     identity_enabled: boolean;
 };
@@ -2348,6 +2394,42 @@ export type AICredentialCreate = {
 export type AICredentialDeletionImpact = {
     tier: number;
     bundle_usages?: Array<AICredentialBundleUsage>;
+    group_share_count?: number;
+};
+
+/**
+ * Environments that lose this AI credential if the group share goes (D10).
+ *
+ * ``total`` environments of members with no other path pin the credential;
+ * ``running`` of them are restarted so their ``.env`` drops the key.
+ */
+export type AICredentialEnvironmentsAtRisk = {
+    total?: number;
+    running?: number;
+};
+
+/**
+ * Request body for ``POST /ai-credentials/{id}/group-shares``.
+ */
+export type AICredentialGroupShareCreate = {
+    group_id: string;
+};
+
+/**
+ * One group share of an AI credential, as its owner sees it.
+ */
+export type AICredentialGroupSharePublic = {
+    group_id: string;
+    group_name: string;
+    member_count?: number;
+    shared_by_user_id: string;
+    shared_at: string;
+    environments_at_risk?: AICredentialEnvironmentsAtRisk;
+};
+
+export type AICredentialGroupSharesPublic = {
+    data: Array<AICredentialGroupSharePublic>;
+    count: number;
 };
 
 /**
@@ -2369,6 +2451,7 @@ export type AICredentialPublic = {
     models_discovery_error?: (string | null);
     default_model?: (string | null);
     available_models?: (Array<(string)> | null);
+    group_share_count?: number;
     created_at: string;
     updated_at: string;
 };
@@ -2534,6 +2617,7 @@ export type AIKnowledgeGitRepoPublic = {
     updated_at: string;
     article_count?: number;
     shared_user_count?: number;
+    shared_group_count?: number;
 };
 
 /**
@@ -2884,15 +2968,16 @@ export type ArtifactFromEnvironmentRequest = {
  * One entry of ``PUT /artifacts/{id}/grants`` (full replace).
  */
 export type ArtifactGrantIn = {
-    principal: CatalogPrincipalUser;
+    principal: (CatalogPrincipalUser | CatalogPrincipalGroup);
     access?: "view";
 };
 
 export type ArtifactGrantPublic = {
-    principal: CatalogPrincipalUser;
+    principal: (CatalogPrincipalUser | CatalogPrincipalGroup);
     access?: "view";
     display_name: string;
     email?: (string | null);
+    member_count?: (number | null);
     granted_by?: (CatalogPerson | null);
     created_at: string;
 };
@@ -3263,6 +3348,15 @@ export type BundleCredentialDrift = {
 };
 
 /**
+ * Body of ``POST /agents/{agent_id}/bundle-permissions/group-grants``.
+ *
+ * The card always grants ``use``; an extra ``access`` key is ignored.
+ */
+export type BundleGroupGrantCreate = {
+    group_id: string;
+};
+
+/**
  * Per-user scope state on one producer.
  *
  * Minimal — display info lives in the top-level ``users`` union to avoid
@@ -3270,6 +3364,28 @@ export type BundleCredentialDrift = {
  */
 export type BundlePermissionGrant = {
     user_id: string;
+    grant_id: string;
+    scopes?: Array<(string)>;
+};
+
+/**
+ * One user group in the card: a bundle grant, producer scopes, or both.
+ *
+ * The card carries no level: being listed with a bundle grant means the
+ * group's members can use and install the bundle.
+ */
+export type BundlePermissionGroup = {
+    bundle_grant_id?: (string | null);
+    group_id: string;
+    name: string;
+    member_count?: number;
+};
+
+/**
+ * Scope state for one user group on one producer.
+ */
+export type BundlePermissionGroupGrant = {
+    group_id: string;
     grant_id: string;
     scopes?: Array<(string)>;
 };
@@ -3292,6 +3408,7 @@ export type BundlePermissionProducer = {
     owner_email?: (string | null);
     scope_catalog?: Array<BundlePermissionScopeCatalogEntry>;
     grants?: Array<BundlePermissionGrant>;
+    group_grants?: Array<BundlePermissionGroupGrant>;
 };
 
 /**
@@ -3312,6 +3429,7 @@ export type BundlePermissionsOverview = {
     bundle_grants?: Array<BundleAccessGrantPublic>;
     producers?: Array<BundlePermissionProducer>;
     users?: Array<BundlePermissionUser>;
+    groups?: Array<BundlePermissionGroup>;
     show_card?: boolean;
 };
 
@@ -3396,9 +3514,10 @@ export type CatalogEntryPublic = {
 };
 
 export type CatalogGrant = {
-    principal: (CatalogPrincipalUser | CatalogPrincipalRole);
+    principal: (CatalogPrincipalUser | CatalogPrincipalRole | CatalogPrincipalGroup);
     access: 'use' | 'edit' | 'maintain';
     display_name: string;
+    member_count?: (number | null);
     granted_by?: (CatalogPerson | null);
     created_at: string;
 };
@@ -3409,7 +3528,7 @@ export type access = 'use' | 'edit' | 'maintain';
  * One entry of ``PUT /catalog/items/{uuid}/grants`` (full replace).
  */
 export type CatalogGrantIn = {
-    principal: (CatalogPrincipalUser | CatalogPrincipalRole);
+    principal: (CatalogPrincipalUser | CatalogPrincipalRole | CatalogPrincipalGroup);
     access: 'use' | 'edit' | 'maintain';
 };
 
@@ -3558,6 +3677,10 @@ export type CatalogMaintainer = {
 export type CatalogPerson = {
     user_id: string;
     display_name: string;
+};
+
+export type CatalogPrincipalGroup = {
+    group_id: string;
 };
 
 export type CatalogPrincipalRole = {
@@ -4076,6 +4199,8 @@ export type CredentialDeletionImpact = {
     tier: number;
     affected_own_agents?: Array<CredentialAffectedAgent>;
     direct_share_count?: number;
+    group_share_count?: number;
+    group_member_count?: number;
     bundle_usages?: Array<CredentialBundleUsage>;
     bundle_pbp_usages?: Array<CredentialBundleUsage>;
     active_install_count?: number;
@@ -4084,6 +4209,34 @@ export type CredentialDeletionImpact = {
     local_install_share_count?: number;
     active_local_skill_install_count?: number;
     local_install_skill_usages?: Array<CredentialSkillUsage>;
+};
+
+/**
+ * Request body for ``POST /credentials/{id}/group-shares``.
+ */
+export type CredentialGroupShareCreate = {
+    group_id: string;
+};
+
+/**
+ * One group share of a credential, as its owner sees it.
+ *
+ * ``links_at_risk`` counts the agent links revoking this share would drop:
+ * links held by members who have no other path to the credential (owner,
+ * direct share or another group share).
+ */
+export type CredentialGroupSharePublic = {
+    group_id: string;
+    group_name: string;
+    member_count?: number;
+    shared_by_user_id: string;
+    shared_at: string;
+    links_at_risk?: number;
+};
+
+export type CredentialGroupSharesPublic = {
+    data: Array<CredentialGroupSharePublic>;
+    count: number;
 };
 
 export type CredentialPublic = {
@@ -4102,6 +4255,7 @@ export type CredentialPublic = {
     owner_id: string;
     user_workspace_id: (string | null);
     share_count?: number;
+    group_share_count?: number;
     is_shared?: boolean;
     owner_email?: (string | null);
     template_private_fields?: Array<(string)>;
@@ -4244,6 +4398,7 @@ export type CredentialWithData = {
     owner_id: string;
     user_workspace_id: (string | null);
     share_count?: number;
+    group_share_count?: number;
     is_shared?: boolean;
     owner_email?: (string | null);
     template_private_fields?: Array<(string)>;
@@ -5727,10 +5882,27 @@ export type KnowledgeSearchBody = {
 export type KnowledgeSourceAccessLevel = 'private' | 'public' | 'shared';
 
 /**
+ * Request body for adding a user group to a knowledge source's share list.
+ */
+export type KnowledgeSourceGroupShareCreate = {
+    group_id: string;
+};
+
+/**
  * Request body for adding a user to a knowledge source's share list.
  */
 export type KnowledgeSourceShareCreate = {
     user_id: string;
+};
+
+/**
+ * A user group on a knowledge source's share list.
+ */
+export type KnowledgeSourceSharedGroupPublic = {
+    group_id: string;
+    name: string;
+    member_count?: number;
+    created_at: string;
 };
 
 /**
@@ -7614,6 +7786,30 @@ export type SetupStatusResponse = {
 export type status2 = 'ready' | 'needs_setup' | 'publisher_broken';
 
 /**
+ * Response model for AI credentials shared with the current user.
+ */
+export type SharedAICredentialPublic = {
+    id: string;
+    name: string;
+    type: string;
+    owner_id: string;
+    owner_email: string;
+    shared_at: string;
+    base_url?: (string | null);
+    model?: (string | null);
+    default_model?: (string | null);
+    via_groups?: Array<UserGroupRef>;
+};
+
+/**
+ * Response model for list of AI credentials shared with current user.
+ */
+export type SharedAICredentialsPublic = {
+    data: Array<SharedAICredentialPublic>;
+    count: number;
+};
+
+/**
  * Response model for credentials shared with the current user.
  */
 export type SharedCredentialPublic = {
@@ -7629,6 +7825,7 @@ export type SharedCredentialPublic = {
     source?: (string | null);
     agent_usage_count?: number;
     used_in_bundle?: boolean;
+    via_groups?: Array<UserGroupRef>;
 };
 
 /**
@@ -8660,6 +8857,122 @@ export type UserDetailsUpdate = {
     details_raw: string;
 };
 
+/**
+ * Body of ``POST /admin/user-groups``. ``name`` is trimmed before storage.
+ */
+export type UserGroupCreate = {
+    name: string;
+    description?: (string | null);
+};
+
+/**
+ * What deleting a group, removing members or revoking one share would cost.
+ *
+ * Read-only preview. Users and counts are those left with **no other path**
+ * (owner, direct share, another group) once this group's shares stop
+ * applying to them.
+ */
+export type UserGroupImpact = {
+    member_count?: number;
+    shares_by_type?: {
+        [key: string]: (number);
+    };
+    users_losing_credential_access?: number;
+    credential_links_removed?: number;
+    ai_environments_cleared?: number;
+    ai_environments_restarted?: number;
+};
+
+export type UserGroupMemberPublic = {
+    user_id: string;
+    email: string;
+    full_name?: (string | null);
+    is_active: boolean;
+    added_at: string;
+};
+
+/**
+ * Body of ``POST /admin/user-groups/{id}/members``.
+ */
+export type UserGroupMembersAdd = {
+    user_ids: Array<(string)>;
+};
+
+export type UserGroupMembersPublic = {
+    data: Array<UserGroupMemberPublic>;
+    count: number;
+};
+
+export type UserGroupPublic = {
+    id: string;
+    name: string;
+    description?: (string | null);
+    member_count?: number;
+    share_count?: number;
+    created_at: string;
+    updated_at: string;
+    created_by?: (CatalogPerson | null);
+};
+
+/**
+ * A group as other families' share lists name it.
+ */
+export type UserGroupRef = {
+    id: string;
+    name: string;
+};
+
+/**
+ * One share-picker hit: name and size only, never the members.
+ */
+export type UserGroupSearchResult = {
+    id: string;
+    name: string;
+    member_count?: number;
+};
+
+/**
+ * One resource shared with a group, as the group page lists it.
+ *
+ * ``level`` is the family's own word: the catalog grant level, ``read`` for
+ * credentials, ``use`` for AI credentials, the artifact grant level,
+ * ``query`` for knowledge sources, and the comma-joined scope names (or
+ * ``"no scopes"``) for producer API scopes (``resource_id`` = producer agent).
+ */
+export type UserGroupSharePublic = {
+    resource_type: 'agent_bundle' | 'desktop_agent' | 'skill_package' | 'credential' | 'ai_credential' | 'artifact' | 'knowledge_source' | 'agent_api_scopes';
+    resource_id: string;
+    resource_name: string;
+    level: string;
+    owner?: (CatalogPerson | null);
+    granted_by?: (CatalogPerson | null);
+    granted_at: string;
+};
+
+export type resource_type = 'agent_bundle' | 'desktop_agent' | 'skill_package' | 'credential' | 'ai_credential' | 'artifact' | 'knowledge_source' | 'agent_api_scopes';
+
+export type UserGroupSharesPublic = {
+    data: Array<UserGroupSharePublic>;
+    count: number;
+};
+
+export type UserGroupsPublic = {
+    data: Array<UserGroupPublic>;
+    count: number;
+};
+
+export type UserGroupsSearchPublic = {
+    data: Array<UserGroupSearchResult>;
+};
+
+/**
+ * Body of ``PATCH /admin/user-groups/{id}``; omitted fields are unchanged.
+ */
+export type UserGroupUpdate = {
+    name?: (string | null);
+    description?: (string | null);
+};
+
 export type UserInfoResponse = {
     sub: string;
     email: string;
@@ -9411,6 +9724,97 @@ export type AdminRoutingDraftRoutingRecommendationData = {
 
 export type AdminRoutingDraftRoutingRecommendationResponse = (RoutingRecommendationPublic);
 
+export type AdminUserGroupsListUserGroupsData = {
+    limit?: number;
+    q?: (string | null);
+    skip?: number;
+};
+
+export type AdminUserGroupsListUserGroupsResponse = (UserGroupsPublic);
+
+export type AdminUserGroupsCreateUserGroupData = {
+    requestBody: UserGroupCreate;
+};
+
+export type AdminUserGroupsCreateUserGroupResponse = (UserGroupPublic);
+
+export type AdminUserGroupsGetUserGroupData = {
+    groupId: string;
+};
+
+export type AdminUserGroupsGetUserGroupResponse = (UserGroupPublic);
+
+export type AdminUserGroupsUpdateUserGroupData = {
+    groupId: string;
+    requestBody: UserGroupUpdate;
+};
+
+export type AdminUserGroupsUpdateUserGroupResponse = (UserGroupPublic);
+
+export type AdminUserGroupsDeleteUserGroupData = {
+    groupId: string;
+};
+
+export type AdminUserGroupsDeleteUserGroupResponse = (Message);
+
+export type AdminUserGroupsListUserGroupMembersData = {
+    groupId: string;
+    limit?: number;
+    q?: (string | null);
+    skip?: number;
+};
+
+export type AdminUserGroupsListUserGroupMembersResponse = (UserGroupMembersPublic);
+
+export type AdminUserGroupsAddUserGroupMembersData = {
+    groupId: string;
+    requestBody: UserGroupMembersAdd;
+};
+
+export type AdminUserGroupsAddUserGroupMembersResponse = (UserGroupMembersPublic);
+
+export type AdminUserGroupsRemoveUserGroupMemberData = {
+    groupId: string;
+    userId: string;
+};
+
+export type AdminUserGroupsRemoveUserGroupMemberResponse = (Message);
+
+export type AdminUserGroupsGetUserGroupMemberRemovalImpactData = {
+    groupId: string;
+    userId: string;
+};
+
+export type AdminUserGroupsGetUserGroupMemberRemovalImpactResponse = (UserGroupImpact);
+
+export type AdminUserGroupsGetUserGroupDeleteImpactData = {
+    groupId: string;
+};
+
+export type AdminUserGroupsGetUserGroupDeleteImpactResponse = (UserGroupImpact);
+
+export type AdminUserGroupsListUserGroupSharesData = {
+    groupId: string;
+};
+
+export type AdminUserGroupsListUserGroupSharesResponse = (UserGroupSharesPublic);
+
+export type AdminUserGroupsGetUserGroupShareRevokeImpactData = {
+    groupId: string;
+    resourceId: string;
+    resourceType: 'agent_bundle' | 'desktop_agent' | 'skill_package' | 'credential' | 'ai_credential' | 'artifact' | 'knowledge_source' | 'agent_api_scopes';
+};
+
+export type AdminUserGroupsGetUserGroupShareRevokeImpactResponse = (UserGroupImpact);
+
+export type AdminUserGroupsRevokeUserGroupShareData = {
+    groupId: string;
+    resourceId: string;
+    resourceType: 'agent_bundle' | 'desktop_agent' | 'skill_package' | 'credential' | 'ai_credential' | 'artifact' | 'knowledge_source' | 'agent_api_scopes';
+};
+
+export type AdminUserGroupsRevokeUserGroupShareResponse = (Message);
+
 export type AgentApiGetAgentApiStatusData = {
     agentId: string;
 };
@@ -9482,6 +9886,34 @@ export type AgentApiDeleteAgentApiGrantData = {
 };
 
 export type AgentApiDeleteAgentApiGrantResponse = (Message);
+
+export type AgentApiListAgentApiGroupGrantsData = {
+    agentId: string;
+};
+
+export type AgentApiListAgentApiGroupGrantsResponse = (AgentApiAccessGroupGrantsPublic);
+
+export type AgentApiCreateAgentApiGroupGrantData = {
+    agentId: string;
+    requestBody: AgentApiAccessGroupGrantCreate;
+};
+
+export type AgentApiCreateAgentApiGroupGrantResponse = (AgentApiAccessGroupGrantPublic);
+
+export type AgentApiUpdateAgentApiGroupGrantData = {
+    agentId: string;
+    grantId: string;
+    requestBody: AgentApiAccessGroupGrantUpdate;
+};
+
+export type AgentApiUpdateAgentApiGroupGrantResponse = (AgentApiAccessGroupGrantPublic);
+
+export type AgentApiDeleteAgentApiGroupGrantData = {
+    agentId: string;
+    grantId: string;
+};
+
+export type AgentApiDeleteAgentApiGroupGrantResponse = (Message);
 
 export type AgentApiCreateAgentApiKeyData = {
     agentId: string;
@@ -10229,6 +10661,8 @@ export type AiCredentialsCreateAiCredentialResponse = (AICredentialPublic);
 
 export type AiCredentialsListMyKeyProvisioningsResponse = (Array<UserKeyProvisioningPublic>);
 
+export type AiCredentialsListAiCredentialsSharedWithMeResponse = (SharedAICredentialsPublic);
+
 export type AiCredentialsResolveDefaultCredentialData = {
     sdkEngine: string;
 };
@@ -10278,6 +10712,26 @@ export type AiCredentialsGetAffectedEnvironmentsData = {
 };
 
 export type AiCredentialsGetAffectedEnvironmentsResponse = (AffectedEnvironmentsPublic);
+
+export type AiCredentialsShareAiCredentialWithGroupData = {
+    credentialId: string;
+    requestBody: AICredentialGroupShareCreate;
+};
+
+export type AiCredentialsShareAiCredentialWithGroupResponse = (AICredentialGroupSharePublic);
+
+export type AiCredentialsListAiCredentialGroupSharesData = {
+    credentialId: string;
+};
+
+export type AiCredentialsListAiCredentialGroupSharesResponse = (AICredentialGroupSharesPublic);
+
+export type AiCredentialsRevokeAiCredentialGroupShareData = {
+    credentialId: string;
+    groupId: string;
+};
+
+export type AiCredentialsRevokeAiCredentialGroupShareResponse = (Message);
 
 export type AppAuthListAppClientsResponse = (Array<DesktopOAuthClientPublic>);
 
@@ -11141,6 +11595,26 @@ export type CredentialsUpdateCredentialSharingData = {
 
 export type CredentialsUpdateCredentialSharingResponse = (CredentialPublic);
 
+export type CredentialsShareCredentialWithGroupData = {
+    credentialId: string;
+    requestBody: CredentialGroupShareCreate;
+};
+
+export type CredentialsShareCredentialWithGroupResponse = (CredentialGroupSharePublic);
+
+export type CredentialsListCredentialGroupSharesData = {
+    credentialId: string;
+};
+
+export type CredentialsListCredentialGroupSharesResponse = (CredentialGroupSharesPublic);
+
+export type CredentialsRevokeCredentialGroupShareData = {
+    credentialId: string;
+    groupId: string;
+};
+
+export type CredentialsRevokeCredentialGroupShareResponse = (Message);
+
 export type CredentialsReadCredentialsData = {
     limit?: number;
     skip?: number;
@@ -11966,6 +12440,20 @@ export type InstallsGetBundlePermissionsOverviewData = {
 
 export type InstallsGetBundlePermissionsOverviewResponse = (BundlePermissionsOverview);
 
+export type InstallsAddBundleGroupGrantData = {
+    agentId: string;
+    requestBody: BundleGroupGrantCreate;
+};
+
+export type InstallsAddBundleGroupGrantResponse = (BundlePermissionGroup);
+
+export type InstallsRevokeBundleGroupGrantData = {
+    agentId: string;
+    grantId: string;
+};
+
+export type InstallsRevokeBundleGroupGrantResponse = (void);
+
 export type InstallsUpdateSetupCredentialData = {
     agentId: string;
     credentialId: string;
@@ -12089,6 +12577,26 @@ export type KnowledgeSourcesRemoveKnowledgeSourceSharedUserData = {
 };
 
 export type KnowledgeSourcesRemoveKnowledgeSourceSharedUserResponse = (unknown);
+
+export type KnowledgeSourcesListKnowledgeSourceSharedGroupsData = {
+    sourceId: string;
+};
+
+export type KnowledgeSourcesListKnowledgeSourceSharedGroupsResponse = (Array<KnowledgeSourceSharedGroupPublic>);
+
+export type KnowledgeSourcesAddKnowledgeSourceSharedGroupData = {
+    requestBody: KnowledgeSourceGroupShareCreate;
+    sourceId: string;
+};
+
+export type KnowledgeSourcesAddKnowledgeSourceSharedGroupResponse = (KnowledgeSourceSharedGroupPublic);
+
+export type KnowledgeSourcesRemoveKnowledgeSourceSharedGroupData = {
+    groupId: string;
+    sourceId: string;
+};
+
+export type KnowledgeSourcesRemoveKnowledgeSourceSharedGroupResponse = (unknown);
 
 export type LlmPluginsCreateMarketplaceData = {
     requestBody: LLMPluginMarketplaceCreate;
@@ -13218,6 +13726,13 @@ export type UserChannelsResetMyChannelData = {
 };
 
 export type UserChannelsResetMyChannelResponse = (UserChannelPublic);
+
+export type UserGroupsSearchUserGroupsData = {
+    limit?: number;
+    q?: (string | null);
+};
+
+export type UserGroupsSearchUserGroupsResponse = (UserGroupsSearchPublic);
 
 export type UsersReadUsersData = {
     limit?: number;

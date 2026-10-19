@@ -176,6 +176,8 @@ class AICredentialPublic(AICredentialBase):
     # credentials.
     default_model: str | None = None
     available_models: list[str] | None = None
+    # Number of user groups this key is shared with (owner rows only).
+    group_share_count: int = 0
     created_at: datetime
     updated_at: datetime
 
@@ -295,3 +297,5 @@ class AICredentialDeletionImpact(SQLModel):
 
     tier: int
     bundle_usages: list[AICredentialBundleUsage] = []
+    # Informational only: group shares never change the tier.
+    group_share_count: int = 0

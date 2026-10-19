@@ -7,7 +7,9 @@ import type {
   AIKnowledgeGitRepoPublic as KnowledgeSourceRead,
 } from "@/client"
 import { KnowledgeSourcesService } from "@/client"
+import { QueryErrorAlert } from "@/components/Common/QueryErrorAlert"
 import {
+  type GroupSelectedItem,
   UserAllowlistPicker,
   type UserAllowlistSelectedItem,
 } from "@/components/Common/UserAllowlistPicker"
@@ -19,6 +21,7 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
+import { Skeleton } from "@/components/ui/skeleton"
 import useCustomToast from "@/hooks/useCustomToast"
 import { handleError } from "@/utils"
 
@@ -41,10 +44,17 @@ export function KnowledgeSourceAccessCard({
   // Under the source's own key so every `["knowledge-source", sourceId]`
   // invalidation refreshes the share list too.
   const sharedUsersKey = ["knowledge-source", sourceId, "shared-users"]
+  const sharedGroupsKey = ["knowledge-source", sourceId, "shared-groups"]
 
   const invalidateSource = () => {
     queryClient.invalidateQueries({ queryKey: ["knowledge-source", sourceId] })
     queryClient.invalidateQueries({ queryKey: ["knowledge-sources"] })
+  }
+
+  // The admin group pages count and list what is shared with the group.
+  const invalidateGroup = (groupId: string) => {
+    queryClient.invalidateQueries({ queryKey: ["user-groups"] })
+    queryClient.invalidateQueries({ queryKey: ["user-group", groupId] })
   }
 
   const accessLevelMutation = useMutation({
@@ -69,11 +79,54 @@ export function KnowledgeSourceAccessCard({
     data: sharedUsers,
     isLoading: isLoadingSharedUsers,
     isError: isSharedUsersError,
+    error: sharedUsersError,
+    refetch: refetchSharedUsers,
   } = useQuery({
     queryKey: sharedUsersKey,
     queryFn: () =>
       KnowledgeSourcesService.listKnowledgeSourceSharedUsers({ sourceId }),
     enabled: isShared,
+  })
+
+  const {
+    data: sharedGroups,
+    isLoading: isLoadingSharedGroups,
+    isError: isSharedGroupsError,
+    error: sharedGroupsError,
+    refetch: refetchSharedGroups,
+  } = useQuery({
+    queryKey: sharedGroupsKey,
+    queryFn: () =>
+      KnowledgeSourcesService.listKnowledgeSourceSharedGroups({ sourceId }),
+    enabled: isShared,
+  })
+
+  const addGroupMutation = useMutation({
+    mutationFn: (groupId: string) =>
+      KnowledgeSourcesService.addKnowledgeSourceSharedGroup({
+        sourceId,
+        requestBody: { group_id: groupId },
+      }),
+    onSuccess: (share) => {
+      showSuccessToast(`Shared with ${share.name}`)
+      invalidateSource()
+      invalidateGroup(share.group_id)
+    },
+    onError: (error) => handleError.bind(showErrorToast)(error as ApiError),
+  })
+
+  const removeGroupMutation = useMutation({
+    mutationFn: (group: { id: string; name: string }) =>
+      KnowledgeSourcesService.removeKnowledgeSourceSharedGroup({
+        sourceId,
+        groupId: group.id,
+      }),
+    onSuccess: (_, group) => {
+      showSuccessToast(`${group.name} removed from the share list`)
+      invalidateSource()
+      invalidateGroup(group.id)
+    },
+    onError: (error) => handleError.bind(showErrorToast)(error as ApiError),
   })
 
   const addUserMutation = useMutation({
@@ -110,6 +163,13 @@ export function KnowledgeSourceAccessCard({
     }),
   )
 
+  const selectedGroups: GroupSelectedItem[] = (sharedGroups ?? []).map((g) => ({
+    id: g.group_id,
+    groupId: g.group_id,
+    name: g.name,
+    memberCount: g.member_count,
+  }))
+
   return (
     <Card>
       <CardHeader>
@@ -135,12 +195,24 @@ export function KnowledgeSourceAccessCard({
         {isShared && (
           <div className="space-y-2 border-t pt-4">
             <Label className="text-sm font-medium">Shared with</Label>
-            {isSharedUsersError ? (
-              <p className="text-sm text-destructive" role="alert">
-                Couldn't load the share list.
-              </p>
-            ) : isLoadingSharedUsers ? (
-              <p className="text-sm text-muted-foreground">Loading users...</p>
+            {isSharedUsersError || isSharedGroupsError ? (
+              <QueryErrorAlert
+                error={sharedUsersError ?? sharedGroupsError}
+                fallback="Couldn't load the share list"
+                onRetry={() => {
+                  refetchSharedUsers()
+                  refetchSharedGroups()
+                }}
+                compact
+              />
+            ) : isLoadingSharedUsers || isLoadingSharedGroups ? (
+              <div className="space-y-2">
+                <div className="flex flex-wrap gap-1.5">
+                  <Skeleton className="h-6 w-24 rounded-full" />
+                  <Skeleton className="h-6 w-32 rounded-full" />
+                </div>
+                <Skeleton className="h-9 w-full" />
+              </div>
             ) : (
               <UserAllowlistPicker
                 label={null}
@@ -149,8 +221,19 @@ export function KnowledgeSourceAccessCard({
                 onRemove={(item) => removeUserMutation.mutate(item.userId)}
                 isAdding={addUserMutation.isPending}
                 isRemoving={removeUserMutation.isPending}
-                searchPlaceholder="Search users to share with..."
-                emptyHint="No users yet. Until you add someone, only admins can query this source."
+                groups={{
+                  selected: selectedGroups,
+                  onAdd: (group) => addGroupMutation.mutate(group.id),
+                  onRemove: (item) =>
+                    removeGroupMutation.mutate({
+                      id: item.groupId,
+                      name: item.name,
+                    }),
+                  isAdding: addGroupMutation.isPending,
+                  isRemoving: removeGroupMutation.isPending,
+                }}
+                searchPlaceholder="Search people or groups to share with..."
+                emptyHint="No people or groups yet. Until you add some, only admins can query this source."
               />
             )}
           </div>

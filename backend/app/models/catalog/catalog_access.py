@@ -2,8 +2,9 @@
 
 An item carries ``visibility`` (``private`` / ``users`` / ``public``) and
 ``is_listed``; its grant table (``bundle_access_grant`` /
-``skill_package_access_grant``) names principals — one person (``user``) or
-every holder of a role (``role``) — with a level:
+``skill_package_access_grant``) names principals — one person (``user``),
+every holder of a role (``role``) or every member of a user group (``group``,
+membership resolved live) — with a level:
 
 - ``use`` — see and install (counts only under ``visibility='users'`` while listed)
 - ``edit`` — publish new revisions
@@ -53,8 +54,9 @@ class CatalogPrincipalKind:
 
     USER = "user"
     ROLE = "role"
+    GROUP = "group"
 
-    ALL = (USER, ROLE)
+    ALL = (USER, ROLE, GROUP)
 
 
 # ── API schemas ─────────────────────────────────────────────────────
@@ -74,7 +76,13 @@ class CatalogPrincipalRole(SQLModel):
     role: str
 
 
-CatalogPrincipal = CatalogPrincipalUser | CatalogPrincipalRole
+class CatalogPrincipalGroup(SQLModel):
+    model_config = ConfigDict(extra="forbid")
+
+    group_id: uuid.UUID
+
+
+CatalogPrincipal = CatalogPrincipalUser | CatalogPrincipalRole | CatalogPrincipalGroup
 
 
 class CatalogGrantIn(SQLModel):
@@ -96,7 +104,9 @@ class CatalogMaintainer(CatalogPerson):
 class CatalogGrant(SQLModel):
     principal: CatalogPrincipal
     access: CatalogAccessLevel
-    # Person's full name or email, or the role value.
+    # Person's full name or email, the role value, or the group name.
     display_name: str
+    # Groups only: how many people belong to the group right now.
+    member_count: int | None = None
     granted_by: CatalogPerson | None = None
     created_at: datetime

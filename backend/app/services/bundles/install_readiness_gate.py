@@ -49,11 +49,10 @@ from app.models.agents.agent import Agent
 from app.models.bundles.agent_bundle import AgentBundle
 from app.models.bundles.catalog import GateMissingReason
 from app.models.credentials.ai_credential import AICredential
-from app.models.credentials.ai_credential_share import AICredentialShare
 from app.models.credentials.credential import Credential
-from app.models.credentials.credential_share import CredentialShare
 from app.models.credentials.link_models import AgentCredentialLink
 from app.services.credentials.ai_credentials_service import ai_credentials_service
+from app.services.credentials.credential_share_service import CredentialShareService
 
 logger = logging.getLogger(__name__)
 
@@ -208,13 +207,10 @@ class InstallReadinessGate:
                 ))
                 continue
 
-            share = session.exec(
-                select(CredentialShare).where(
-                    CredentialShare.credential_id == cred.id,
-                    CredentialShare.shared_with_user_id == install.owner_id,
-                )
-            ).first()
-            if share is None:
+            # Direct or user-group share.
+            if not CredentialShareService.has_share(
+                session, cred.id, install.owner_id
+            ):
                 items.append(GateMissingItem(
                     spec_name=spec_name,
                     spec_type=spec_type,
@@ -298,12 +294,9 @@ class InstallReadinessGate:
                 continue
             if cred.owner_id == install.owner_id:
                 continue
-            if not cred.allow_sharing or session.exec(
-                select(CredentialShare).where(
-                    CredentialShare.credential_id == cred.id,
-                    CredentialShare.shared_with_user_id == install.owner_id,
-                )
-            ).first() is None:
+            if not cred.allow_sharing or not CredentialShareService.has_share(
+                session, cred.id, install.owner_id
+            ):
                 items.append(GateMissingItem(
                     spec_name=spec_name,
                     spec_type=spec_type,
@@ -382,13 +375,10 @@ class InstallReadinessGate:
             if ai_cred.owner_id == install.owner_id:
                 continue
 
-            share = session.exec(
-                select(AICredentialShare).where(
-                    AICredentialShare.ai_credential_id == ai_cred.id,
-                    AICredentialShare.shared_with_user_id == install.owner_id,
-                )
-            ).first()
-            if share is not None:
+            # Direct or user-group share.
+            if ai_credentials_service.has_share(
+                session, ai_cred.id, install.owner_id
+            ):
                 # **An existing share is checked before the policy, and the
                 # order is the point.** ``is_shareable`` answers "may a share be
                 # *created* now". It does not answer "does one exist". Three

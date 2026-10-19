@@ -7,7 +7,7 @@ import copy
 import logging
 import re
 from urllib.parse import urlsplit, urlunsplit
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 from sqlalchemy import func as func_sql
 from app.core.config import settings
 from app.core.security import encrypt_field, decrypt_field
@@ -2150,6 +2150,15 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             revoked_recipient_ids = [share.shared_with_user_id for share in shares]
             for share in shares:
                 session.delete(share)
+            from app.services.credentials.credential_share_service import (
+                CredentialShareService,
+            )
+
+            revoked_recipient_ids.extend(
+                CredentialShareService.delete_group_shares_for_credential(
+                    session, credential_id
+                )
+            )
             logger.info(
                 "Disabled sharing for credential %s through its generic update; "
                 "deleted %s share(s)",
@@ -2346,6 +2355,17 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         direct_share_count = CredentialShareService.get_share_count_for_credential(
             session=session, credential_id=credential_id
         )
+        # Group shares (user groups) reach members just like direct shares.
+        group_share_count = CredentialShareService.get_group_share_count_for_credential(
+            session, credential_id
+        )
+        group_member_count = (
+            CredentialShareService.get_group_member_count_for_credential(
+                session, credential_id
+            )
+            if group_share_count
+            else 0
+        )
 
         # All bundle usages (any provisioning mode) for this credential. The
         # full list is returned informationally; the PBP subset drives the
@@ -2456,7 +2476,7 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             or active_local_skill_install_count > 0
         ):
             tier = 2
-        elif direct_share_count > 0:
+        elif direct_share_count > 0 or group_share_count > 0:
             tier = 1
         else:
             tier = 0
@@ -2465,6 +2485,8 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             tier=tier,
             affected_own_agents=affected_own_agents,
             direct_share_count=direct_share_count,
+            group_share_count=group_share_count,
+            group_member_count=group_member_count,
             bundle_usages=all_usages,
             bundle_pbp_usages=bundle_pbp_usages,
             active_install_count=active_install_count,
@@ -2709,14 +2731,17 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         if owned_uri_match is not None:
             return owned_uri_match
 
+        from app.services.credentials.credential_share_service import (
+            CredentialShareService,
+        )
+
+        # Direct or group share (user groups): the subquery unions both.
         shared_uri_stmt = (
             select(Credential)
-            .join(
-                CredentialShare,
-                CredentialShare.credential_id == Credential.id,
-            )
             .where(
-                CredentialShare.shared_with_user_id == user_id,
+                col(Credential.id).in_(
+                    CredentialShareService.shared_credential_ids_subquery(user_id)
+                ),
                 Credential.type == credential_type,
                 Credential.service_uri == service_uri,
             )
@@ -2853,15 +2878,17 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             if owned_match is not None:
                 return owned_match
 
-        # Shared credentials (fallback tier).
+        # Shared credentials (fallback tier): direct or group share.
+        from app.services.credentials.credential_share_service import (
+            CredentialShareService,
+        )
+
         shared_stmt = (
             select(Credential)
-            .join(
-                CredentialShare,
-                CredentialShare.credential_id == Credential.id,
-            )
             .where(
-                CredentialShare.shared_with_user_id == user_id,
+                col(Credential.id).in_(
+                    CredentialShareService.shared_credential_ids_subquery(user_id)
+                ),
                 Credential.type == type_enum,
                 func_sql.lower(Credential.name) == name.lower(),
             )
@@ -3034,6 +3061,19 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             The agent ids that were unlinked (already synced).
         """
         recipient_ids = {uid for uid in recipient_user_ids if uid is not None}
+        if not recipient_ids:
+            return []
+        # Loss of access is computed, not assumed (user groups D8): a recipient
+        # who still owns the credential, holds a direct share or belongs to a
+        # group it is shared with keeps their links. Callers commit first, so
+        # this sees the post-revocation state.
+        from app.services.credentials.credential_share_service import (
+            CredentialShareService,
+        )
+
+        recipient_ids = CredentialShareService.users_without_access(
+            session, credential_id, recipient_ids
+        )
         if not recipient_ids:
             return []
 

@@ -38,8 +38,13 @@ class SkillPackageAccessGrant(SQLModel, table=True):
             "(principal_kind = 'user') = (user_id IS NOT NULL)",
             name="ck_skill_grant_user_fk",
         ),
+        CheckConstraint(
+            "(principal_kind = 'group') = (group_id IS NOT NULL)",
+            name="ck_skill_grant_group_fk",
+        ),
         Index("ix_skill_grant_package", "package_id"),
         Index("ix_skill_grant_user", "user_id"),
+        Index("ix_skill_grant_group", "group_id"),
     )
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
@@ -49,11 +54,16 @@ class SkillPackageAccessGrant(SQLModel, table=True):
     principal_kind: str = Field(
         default="user", max_length=16, sa_column_kwargs={"server_default": "user"}
     )
-    # User uuid as text, or the role value.
+    # User uuid as text, the role value, or the group uuid as text.
     principal_id: str = Field(max_length=64, nullable=False)
     # Set only for ``principal_kind='user'`` so deleting the user drops the grant.
     user_id: uuid.UUID | None = Field(
         default=None, foreign_key="user.id", nullable=True, ondelete="CASCADE"
+    )
+    # Set only for ``principal_kind='group'`` (``principal_id`` is then the
+    # group uuid as text) so deleting the group drops the grant.
+    group_id: uuid.UUID | None = Field(
+        default=None, foreign_key="user_group.id", nullable=True, ondelete="CASCADE"
     )
     access: str = Field(
         default="use", max_length=16, sa_column_kwargs={"server_default": "use"}

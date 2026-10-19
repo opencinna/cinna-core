@@ -299,6 +299,8 @@ class CredentialPublic(CredentialBase):
     owner_id: uuid.UUID
     user_workspace_id: uuid.UUID | None
     share_count: int = 0  # Number of users this credential is shared with
+    # Number of user groups this credential is shared with (owner rows only).
+    group_share_count: int = 0
     is_shared: bool = False  # True if this credential is shared with the user (not owned)
     owner_email: str | None = None  # Email of the owner (only set for shared credentials)
     template_private_fields: list[str] = []
@@ -414,6 +416,10 @@ class CredentialDeletionImpact(SQLModel):
     tier: int
     affected_own_agents: list[CredentialAffectedAgent] = []
     direct_share_count: int = 0
+    # Group shares (``credential_group_share``) and the distinct active members
+    # they reach. Group shares alone are enough for Tier 1.
+    group_share_count: int = 0
+    group_member_count: int = 0
     bundle_usages: list[CredentialBundleUsage] = []
     bundle_pbp_usages: list[CredentialBundleUsage] = []
     active_install_count: int = 0

@@ -8,7 +8,7 @@ import {
   Plus,
   Search,
   Unlink,
-  Users,
+  UserCheck,
 } from "lucide-react"
 import { useState, useMemo } from "react"
 
@@ -52,6 +52,11 @@ import {
 } from "@/components/ui/table"
 import { LoadingButton } from "@/components/ui/loading-button"
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import {
   CREDENTIAL_TYPE_GROUPS,
   getCredentialTypeMeta,
 } from "@/components/Credentials/credentialTypes"
@@ -59,6 +64,7 @@ import useCustomToast from "@/hooks/useCustomToast"
 import useWorkspace from "@/hooks/useWorkspace"
 import { cn } from "@/lib/utils"
 import { handleError } from "@/utils"
+import { viaGroupsLabel } from "@/utils/sharedWith"
 
 interface AgentCredentialsTabProps {
   agentId: string
@@ -100,16 +106,28 @@ export function AgentCredentialsTab({ agentId }: AgentCredentialsTabProps) {
     enabled: isAddDialogOpen,
   })
 
-  // Fetch credentials shared with the user
+  const agentCredentials = agentCredentialsData?.data || []
+  const hasLinkedShared = agentCredentials.some((c) => c.is_shared)
+
+  // Fetch credentials shared with the user: the add dialog's choices, and
+  // the user groups a linked shared credential reaches this user through.
   const { data: sharedCredentialsData } = useQuery({
     queryKey: ["credentials-shared-with-me"],
     queryFn: () => CredentialsService.getCredentialsSharedWithMe(),
-    enabled: isAddDialogOpen,
+    enabled: isAddDialogOpen || hasLinkedShared,
   })
 
-  const agentCredentials = agentCredentialsData?.data || []
   const ownedCredentials = ownedCredentialsData?.data || []
   const sharedCredentials = sharedCredentialsData?.data || []
+  // "via Engineering" / "via Engineering +1" for a linked shared row (D12).
+  const viaGroupsById = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const cred of sharedCredentials) {
+      const via = viaGroupsLabel(cred.via_groups)
+      if (via) map.set(cred.id, via)
+    }
+    return map
+  }, [sharedCredentials])
 
   const incompleteCredentials = useMemo(
     () =>
@@ -340,13 +358,17 @@ export function AgentCredentialsTab({ agentId }: AgentCredentialsTabProps) {
                         className="pl-9"
                       />
                     </div>
-                    <div className="max-h-[50vh] overflow-y-auto">
+                    <div className="max-h-[50vh] overflow-y-auto pr-2">
                       {groupedCredentials.length === 0 ? (
                         <p className="py-6 text-center text-sm text-muted-foreground">
                           No credentials match "{credentialQuery}"
                         </p>
                       ) : (
-                        <div className="space-y-4">
+                        <div
+                          className="space-y-4"
+                          role="radiogroup"
+                          aria-label="Credential to add"
+                        >
                           {groupedCredentials.map((group) => (
                             <div key={group.key}>
                               <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -360,18 +382,14 @@ export function AgentCredentialsTab({ agentId }: AgentCredentialsTabProps) {
                                   const Icon = meta.icon
                                   const isSelected =
                                     credential.id === selectedCredentialId
-                                  return (
+                                  const pill = (
                                     <button
                                       key={credential.id}
                                       type="button"
+                                      role="radio"
+                                      aria-checked={isSelected}
                                       onClick={() =>
                                         setSelectedCredentialId(credential.id)
-                                      }
-                                      title={
-                                        credential.isSharedWithMe &&
-                                        credential.ownerEmail
-                                          ? `Shared by ${credential.ownerEmail}`
-                                          : undefined
                                       }
                                       className={cn(
                                         "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-medium transition-colors",
@@ -384,13 +402,32 @@ export function AgentCredentialsTab({ agentId }: AgentCredentialsTabProps) {
                                       <span>{credential.name}</span>
                                       {credential.isSharedWithMe && (
                                         <span className="ml-1 inline-flex items-center gap-1 text-xs opacity-70">
-                                          <Users className="h-3 w-3 shrink-0" />
+                                          <UserCheck className="h-3 w-3 shrink-0" />
                                           <span className="max-w-[12ch] truncate">
                                             from {credential.ownerEmail}
                                           </span>
                                         </span>
                                       )}
                                     </button>
+                                  )
+                                  if (
+                                    !credential.isSharedWithMe ||
+                                    !credential.ownerEmail
+                                  ) {
+                                    return pill
+                                  }
+                                  return (
+                                    <Tooltip key={credential.id}>
+                                      <TooltipTrigger asChild>
+                                        {pill}
+                                      </TooltipTrigger>
+                                      <TooltipContent
+                                        side="top"
+                                        className="max-w-xs break-words text-xs"
+                                      >
+                                        Shared by {credential.ownerEmail}
+                                      </TooltipContent>
+                                    </Tooltip>
                                   )
                                 })}
                               </div>
@@ -505,8 +542,8 @@ export function AgentCredentialsTab({ agentId }: AgentCredentialsTabProps) {
                         }
                       />
                       {credential.is_shared && (
-                        <Badge variant="outline" className="text-xs bg-blue-50 text-blue-700 border-blue-200">
-                          <Users className="h-3 w-3 mr-1" />
+                        <Badge variant="secondary" className="text-xs">
+                          <UserCheck className="h-3 w-3 mr-1" />
                           Shared
                         </Badge>
                       )}
@@ -514,6 +551,8 @@ export function AgentCredentialsTab({ agentId }: AgentCredentialsTabProps) {
                     {credential.is_shared && credential.owner_email && (
                       <span className="text-xs text-muted-foreground">
                         from {credential.owner_email}
+                        {viaGroupsById.has(credential.id) &&
+                          ` · ${viaGroupsById.get(credential.id)}`}
                       </span>
                     )}
                   </TableCell>

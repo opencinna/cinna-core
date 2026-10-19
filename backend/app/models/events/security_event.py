@@ -249,6 +249,7 @@ ROUTING_SIMULATE_RUN = "ROUTING_SIMULATE_RUN"
 # the acting person; details carry ``kind`` (``agent``/``skill``), ``uuid`` and
 # the new grants as ``{principal: 'user:<id>'|'role:<value>', access}``.
 CATALOG_GRANTS_CHANGED = "CATALOG_GRANTS_CHANGED"
+
 # ``POST /catalog/desktop-agents`` created a desktop agent (details: ``uuid``,
 # ``bundle_id``, ``repo_id``, ``slug``, grants).
 CATALOG_DESKTOP_AGENT_CREATED = "CATALOG_DESKTOP_AGENT_CREATED"
@@ -259,6 +260,19 @@ CATALOG_DESKTOP_PUSH_ACCEPTED = "CATALOG_DESKTOP_PUSH_ACCEPTED"
 # ``DELETE /catalog/items/{uuid}`` removed an item (details: ``kind``,
 # ``uuid``, ``id``).
 CATALOG_ITEM_DELETED = "CATALOG_ITEM_DELETED"
+
+# ── User group event-type constants ──────────────────────────────────
+# Superuser acts on ``/admin/user-groups``. ``user_id`` is the acting admin;
+# details carry ``group_id`` and ``name`` plus, for membership changes, the
+# affected ``user_ids`` / ``user_id``. Never resource contents.
+USER_GROUP_CREATED = "USER_GROUP_CREATED"
+USER_GROUP_UPDATED = "USER_GROUP_UPDATED"
+USER_GROUP_DELETED = "USER_GROUP_DELETED"
+USER_GROUP_MEMBERS_ADDED = "USER_GROUP_MEMBERS_ADDED"
+USER_GROUP_MEMBER_REMOVED = "USER_GROUP_MEMBER_REMOVED"
+# A superuser revoked one share from a group on the group page (details:
+# ``group_id``, ``name``, ``resource_type``, ``resource_id``).
+USER_GROUP_SHARE_REVOKED = "USER_GROUP_SHARE_REVOKED"
 
 
 class SecurityEvent(SQLModel, table=True):

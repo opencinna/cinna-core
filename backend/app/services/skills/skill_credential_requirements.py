@@ -1022,16 +1022,24 @@ def _inactive_issued_key_ids(
 def _shared_with(
     session: Session, *, credential_ids: list[uuid.UUID], user_id: uuid.UUID
 ) -> set[uuid.UUID]:
-    """Ids among ``credential_ids`` shared with ``user_id``. No query when empty."""
+    """Ids among ``credential_ids`` shared with ``user_id``, directly or through a
+    user group. No query when empty."""
     if not credential_ids:
         return set()
-    return set(
+    from app.services.credentials.credential_share_service import (
+        CredentialShareService,
+    )
+
+    direct = set(
         session.exec(
             select(CredentialShare.credential_id).where(
                 col(CredentialShare.credential_id).in_(credential_ids),
                 CredentialShare.shared_with_user_id == user_id,
             )
         ).all()
+    )
+    return direct | CredentialShareService.group_shared_ids(
+        session, user_id=user_id, credential_ids=credential_ids
     )
 
 

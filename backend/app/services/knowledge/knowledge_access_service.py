@@ -9,7 +9,8 @@ CLI search) goes through :func:`get_accessible_source_ids`, which is built on
 Rule: the source is enabled AND connected AND
     (access_level == public
      OR the user is a superuser
-     OR (access_level == shared AND the user is on the source's share list)),
+     OR (access_level == shared AND (the user is on the source's share list
+                                     OR a group the user belongs to is))),
 and the user is active.
 
 For agent-driven queries "the user" is the agent owner.
@@ -23,11 +24,13 @@ from sqlmodel import Session, select
 
 from app.models.knowledge.knowledge import (
     AIKnowledgeGitRepo,
+    AIKnowledgeGitRepoGroupShare,
     AIKnowledgeGitRepoUserShare,
     KnowledgeSourceAccessLevel,
     SourceStatus,
 )
 from app.models.users.user import User
+from app.services.users.user_group_access import UserGroupAccess
 
 logger = logging.getLogger(__name__)
 
@@ -42,10 +45,19 @@ def accessible_sources_filter(user: User) -> ColumnElement[bool]:
     if user.is_superuser:
         level_clause: ColumnElement[bool] = true()
     else:
-        shared_with_user = AIKnowledgeGitRepo.id.in_(
-            select(AIKnowledgeGitRepoUserShare.git_repo_id).where(
-                AIKnowledgeGitRepoUserShare.user_id == user.id
-            )
+        shared_with_user = or_(
+            AIKnowledgeGitRepo.id.in_(
+                select(AIKnowledgeGitRepoUserShare.git_repo_id).where(
+                    AIKnowledgeGitRepoUserShare.user_id == user.id
+                )
+            ),
+            AIKnowledgeGitRepo.id.in_(
+                select(AIKnowledgeGitRepoGroupShare.git_repo_id).where(
+                    AIKnowledgeGitRepoGroupShare.group_id.in_(
+                        UserGroupAccess.member_group_ids_subquery(user.id)
+                    )
+                )
+            ),
         )
         level_clause = or_(
             AIKnowledgeGitRepo.access_level == KnowledgeSourceAccessLevel.public,

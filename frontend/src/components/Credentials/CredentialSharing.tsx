@@ -1,12 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { AlertTriangle, Share2 } from "lucide-react"
 import { type ReactNode, useEffect, useState } from "react"
-import type { CredentialPublic, CredentialSharePublic } from "@/client"
+import type {
+  CredentialGroupSharePublic,
+  CredentialPublic,
+  CredentialSharePublic,
+} from "@/client"
 import { CredentialsService } from "@/client"
 import { ListRowGroup } from "@/components/Common/ListRow"
 import { PreviewList } from "@/components/Common/PreviewList"
 import { QueryErrorAlert } from "@/components/Common/QueryErrorAlert"
 import {
+  type GroupSelectedItem,
   UserAllowlistPicker,
   type UserAllowlistSelectedItem,
 } from "@/components/Common/UserAllowlistPicker"
@@ -34,17 +39,20 @@ import useCustomToast from "@/hooks/useCustomToast"
 import useRole from "@/hooks/useRole"
 import { handleError } from "@/utils"
 import { isLocallyDeliverableCredentialType } from "@/utils/credentialLocalUse"
+import { peopleAndGroups, sharedWithSentence } from "@/utils/sharedWith"
 import {
   bundleImpactSentence,
   skillImpactSentence,
 } from "@/utils/skillCredentials"
-import { CredentialUsagesSheet } from "./CredentialUsagesSheet"
 import { BundleUsageRow, SkillUsageRow } from "./CredentialUsageRows"
+import { CredentialUsagesSheet } from "./CredentialUsagesSheet"
 import { localSkillImpactSentence } from "./localSkillImpact"
 import {
   shareHasUsages,
   UnshareCredentialDialog,
 } from "./UnshareCredentialDialog"
+import { UnshareCredentialGroupDialog } from "./UnshareCredentialGroupDialog"
+import { useCredentialGroupShares } from "./useCredentialGroupShares"
 
 interface CredentialSharingProps {
   credential: CredentialPublic
@@ -70,6 +78,8 @@ export function CredentialSharing({
   // the owner's confirm.
   const [pendingUnshare, setPendingUnshare] =
     useState<CredentialSharePublic | null>(null)
+  const [pendingGroupUnshare, setPendingGroupUnshare] =
+    useState<CredentialGroupSharePublic | null>(null)
   const [allowSharing, setAllowSharing] = useState(
     credential.allow_sharing ?? false,
   )
@@ -79,12 +89,13 @@ export function CredentialSharing({
     setAllowSharing(credential.allow_sharing ?? false)
   }, [credential.allow_sharing])
 
-  const { data: sharesData } = useQuery({
+  const { data: sharesData, isLoading: isSharesLoading } = useQuery({
     queryKey: ["credential-shares", credential.id],
     queryFn: () =>
       CredentialsService.getCredentialShares({ credentialId: credential.id }),
     enabled: allowSharing,
   })
+  const groupSharing = useCredentialGroupShares(credential.id, allowSharing)
 
   // Bundles whose publisher install has this credential linked. Shown
   // on the sharing card so the owner can see at a glance where their
@@ -201,6 +212,14 @@ export function CredentialSharing({
 
   const shares = sharesData?.data ?? []
   const shareCount = credential.share_count ?? 0
+  const groupShares = groupSharing.groupShares
+  // The list is the truth once loaded; before that the row's count.
+  // A failed or pending list keeps the row's count, so turning sharing off
+  // still confirms when groups hold it.
+  const groupShareCount =
+    groupSharing.data === undefined
+      ? (credential.group_share_count ?? 0)
+      : groupShares.length
   const isDisabling = toggleSharingMutation.isPending
 
   // Map existing shares into the shared picker's selected-pill model.
@@ -208,6 +227,12 @@ export function CredentialSharing({
     id: s.id, // share id — revoke endpoint key
     userId: s.shared_with_user_id,
     fallbackLabel: s.shared_with_email,
+  }))
+  const selectedGroups: GroupSelectedItem[] = groupShares.map((g) => ({
+    id: g.group_id,
+    groupId: g.group_id,
+    name: g.group_name,
+    memberCount: g.member_count,
   }))
 
   const sharedBundleUsages = (bundleUsages?.data ?? []).filter(
@@ -276,7 +301,7 @@ export function CredentialSharing({
   }
 
   const handleToggleSharing = (checked: boolean) => {
-    if (!checked && shareCount > 0) {
+    if (!checked && shareCount + groupShareCount > 0) {
       // Show confirmation dialog before disabling
       setIsDisableDialogOpen(true)
     } else {
@@ -286,27 +311,25 @@ export function CredentialSharing({
 
   return (
     <Card>
-      <CardHeader>
-        <div className="flex items-start justify-between">
-          <div className="space-y-1.5">
-            <CardTitle className="flex items-center gap-2">
-              <Share2 className="h-5 w-5" />
-              Sharing
-            </CardTitle>
-            <CardDescription>
-              {allowSharing
-                ? "Share this credential with other users to allow them to use it in their agents."
-                : "Enable to share this credential with other users."}
-            </CardDescription>
-          </div>
+      <CardHeader className="pb-3">
+        {/* The switch is the header action, so it sits on the title row and
+            the description runs full width below (§2 Card header). */}
+        <CardTitle className="flex items-center gap-2 min-w-0">
+          <Share2 className="h-5 w-5" />
+          Sharing
           <Switch
             checked={allowSharing}
             onCheckedChange={handleToggleSharing}
             disabled={toggleSharingMutation.isPending}
             aria-label="Allow credential sharing"
-            className="ml-4 mt-1"
+            className="ml-auto"
           />
-        </div>
+        </CardTitle>
+        <CardDescription>
+          {allowSharing
+            ? "Share this credential with people or groups so they can use it in their agents."
+            : "Enable to share this credential with people or groups."}
+        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         {hint}
@@ -336,24 +359,62 @@ export function CredentialSharing({
         {allowSharing && (
           <div className="space-y-3">
             <h4 className="text-sm font-medium">
-              Shared with {shareCount} user{shareCount !== 1 ? "s" : ""}
+              {sharedWithSentence(shareCount, groupShareCount)}
             </h4>
-            <UserAllowlistPicker
-              label={null}
-              selected={selectedShares}
-              onAdd={(u) => shareMutation.mutate(u.email)}
-              onRemove={(item) => {
-                // Warn only when this person loses something; otherwise the
-                // pill's remove stays one click.
-                const share = shares.find((s) => s.id === item.id)
-                if (share && shareHasUsages(share)) setPendingUnshare(share)
-                else revokeMutation.mutate(item.id)
-              }}
-              isAdding={shareMutation.isPending}
-              isRemoving={revokeMutation.isPending}
-              searchPlaceholder="Search users by name or email..."
-              emptyHint="This credential is not shared with anyone yet."
-            />
+            {/* Every block that reads the share lists waits for them, so the
+                pills never contradict the heading's count while loading. */}
+            {isSharesLoading || groupSharing.isLoading ? (
+              <div className="space-y-2">
+                <div className="flex flex-wrap gap-1.5">
+                  <Skeleton className="h-6 w-24 rounded-full" />
+                  <Skeleton className="h-6 w-32 rounded-full" />
+                </div>
+                <Skeleton className="h-9 w-full" />
+              </div>
+            ) : (
+              <UserAllowlistPicker
+                label={null}
+                selected={selectedShares}
+                onAdd={(u) => shareMutation.mutate(u.email)}
+                onRemove={(item) => {
+                  // Warn only when this person loses something; otherwise the
+                  // pill's remove stays one click.
+                  const share = shares.find((s) => s.id === item.id)
+                  if (share && shareHasUsages(share)) setPendingUnshare(share)
+                  else revokeMutation.mutate(item.id)
+                }}
+                isAdding={shareMutation.isPending}
+                isRemoving={revokeMutation.isPending}
+                groups={{
+                  selected: selectedGroups,
+                  onAdd: (g) => groupSharing.share.mutate(g),
+                  onRemove: (item) => {
+                    // Confirm only when members' agents lose a link.
+                    const share = groupShares.find(
+                      (g) => g.group_id === item.groupId,
+                    )
+                    if (share && (share.links_at_risk ?? 0) > 0)
+                      setPendingGroupUnshare(share)
+                    else
+                      groupSharing.revoke.mutate({
+                        id: item.groupId,
+                        name: item.name,
+                      })
+                  },
+                  isAdding: groupSharing.share.isPending,
+                  isRemoving: groupSharing.revoke.isPending,
+                }}
+                searchPlaceholder="Search people or groups..."
+              />
+            )}
+            {groupSharing.isError && (
+              <QueryErrorAlert
+                error={groupSharing.error}
+                fallback="Couldn't load the groups it is shared with"
+                onRetry={() => groupSharing.refetch()}
+                compact
+              />
+            )}
             <p className="text-xs text-muted-foreground">
               Recipients can use this credential in their agents but won't see
               the actual credential values.
@@ -445,6 +506,19 @@ export function CredentialSharing({
           onClose={() => setPendingUnshare(null)}
         />
 
+        <UnshareCredentialGroupDialog
+          credentialName={credential.name}
+          share={pendingGroupUnshare}
+          isPending={groupSharing.revoke.isPending}
+          onConfirm={(share) =>
+            groupSharing.revoke.mutate(
+              { id: share.group_id, name: share.group_name },
+              { onSuccess: () => setPendingGroupUnshare(null) },
+            )
+          }
+          onClose={() => setPendingGroupUnshare(null)}
+        />
+
         {/* Disable-sharing confirm. A `Dialog` rather than an `AlertDialog`
             because it carries fetched impact data (§2 Confirmation). */}
         <Dialog
@@ -460,15 +534,15 @@ export function CredentialSharing({
                 Disable sharing for {credential.name}?
               </DialogTitle>
               <DialogDescription>
-                This will revoke access for all users this credential is
-                currently shared with.
+                This will revoke access for everyone this credential is
+                currently shared with, people and groups.
               </DialogDescription>
             </DialogHeader>
             <Alert variant="destructive">
               <AlertTriangle className="h-4 w-4" />
               <AlertTitle>Warning</AlertTitle>
               <AlertDescription>
-                {shareCount} user{shareCount !== 1 ? "s" : ""} will lose access
+                {peopleAndGroups(shareCount, groupShareCount)} will lose access
                 to this credential immediately.
               </AlertDescription>
             </Alert>

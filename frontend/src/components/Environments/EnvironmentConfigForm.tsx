@@ -10,7 +10,9 @@ import {
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
@@ -18,9 +20,16 @@ import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
 import { UsersService, AiCredentialsService } from "@/client"
-import type { AICredentialPublic, AgentEnvironmentPublic } from "@/client"
+import type {
+  AICredentialPublic,
+  AgentEnvironmentPublic,
+} from "@/client"
 import { Pencil, MessageCircle, Wrench, Save, Code2, Boxes } from "lucide-react"
 import { ListModelsButton } from "@/components/Common/ListModelsButton"
+import {
+  sharedCredentialOrigin,
+  useSharedAICredentials,
+} from "./useSharedAICredentials"
 
 // ============= Constants =============
 
@@ -100,7 +109,13 @@ export const USE_DEFAULT_SENTINEL = "__default__"
 
 // ============= Helpers =============
 
-export function composeSDKId(engine: string, credential: AICredentialPublic | null): string {
+/** What the SDK id needs from a credential, owned or shared with the user. */
+export interface EnvCredentialRef {
+  id: string
+  type: string
+}
+
+export function composeSDKId(engine: string, credential: EnvCredentialRef | null): string {
   if (credential) {
     return `${engine}/${credential.type}`
   }
@@ -130,7 +145,7 @@ export interface EnvModeConfigFields {
  */
 export function composeEnvModeConfigFields(
   config: EnvConfigValue,
-  credentials: AICredentialPublic[],
+  credentials: EnvCredentialRef[],
 ): EnvModeConfigFields {
   const convIsDefault = config.conversationCredentialId === USE_DEFAULT_SENTINEL
   const buildIsDefault = config.buildingCredentialId === USE_DEFAULT_SENTINEL
@@ -183,7 +198,7 @@ export function envToEnvConfig(env: AgentEnvironmentPublic): EnvConfigValue {
   }
 }
 
-export function getCompatibleCredentials(engine: string, credentials: AICredentialPublic[]): AICredentialPublic[] {
+export function getCompatibleCredentials<T extends { type: string }>(engine: string, credentials: T[]): T[] {
   const compatible = SDK_CREDENTIAL_COMPATIBILITY[engine] ?? []
   return credentials.filter((c) => compatible.includes(c.type))
 }
@@ -255,7 +270,15 @@ export function EnvModeEditDialog({
   }, [open, initialEngine, initialCredentialId, initialModelOverride])
 
   const compatible = getCompatibleCredentials(engine, credentials)
+  // Keys other people share with the user, offered after the user's own (S16).
+  const sharedCredentials = useSharedAICredentials(open)
+  const sharedCompatible = getCompatibleCredentials(engine, sharedCredentials)
   const selectedCredential = credentials.find((c) => c.id === credentialId) ?? null
+  // A key shared with the user: no per-key model list (owner-only), so its
+  // suggestions are the type's static list plus the key's default model.
+  const selectedShared = selectedCredential
+    ? null
+    : (sharedCredentials.find((c) => c.id === credentialId) ?? null)
   // Prefer the credential's discovered (per-key) models as suggestions, falling
   // back to / augmenting the static SUGGESTED_MODELS list.
   // Prefer the admin-curated available_models when present, else the per-key
@@ -271,7 +294,14 @@ export function EnvModeEditDialog({
           ...(SUGGESTED_MODELS[selectedCredential.type] ?? []),
         ]),
       )
-    : []
+    : selectedShared
+      ? Array.from(
+          new Set([
+            ...(selectedShared.default_model ? [selectedShared.default_model] : []),
+            ...(SUGGESTED_MODELS[selectedShared.type] ?? []),
+          ]),
+        )
+      : []
   // Inline warning: a non-empty typed override that isn't in this key's
   // discovered list (only meaningful once discovery has populated a list).
   const overrideNotDiscovered =
@@ -351,7 +381,20 @@ export function EnvModeEditDialog({
                     <span className="ml-1 text-xs text-muted-foreground">({cred.type})</span>
                   </SelectItem>
                 ))}
-                {compatible.length === 0 && (
+                {sharedCompatible.length > 0 && (
+                  <SelectGroup>
+                    <SelectLabel>Shared with you</SelectLabel>
+                    {sharedCompatible.map((cred) => (
+                      <SelectItem key={cred.id} value={cred.id}>
+                        <span className="truncate">{cred.name}</span>
+                        <span className="ml-1 truncate text-xs text-muted-foreground">
+                          {sharedCredentialOrigin(cred)}
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                )}
+                {compatible.length === 0 && sharedCompatible.length === 0 && (
                   <div className="py-2 px-2 text-xs text-muted-foreground">
                     No compatible credentials
                   </div>
@@ -457,6 +500,7 @@ export function EnvironmentConfigForm({ value, onChange, open, onTemplateChange 
   })
 
   const allCredentials = aiCredentials?.data ?? []
+  const sharedCredentials = useSharedAICredentials()
 
   // Resolve default credentials for summary display
   const { data: resolvedConvDefault } = useQuery({
@@ -505,7 +549,11 @@ export function EnvironmentConfigForm({ value, onChange, open, onTemplateChange 
       return resolvedDefault ? `Default (${resolvedDefault.name})` : "Default"
     }
     const cred = allCredentials.find((c) => c.id === credentialId)
-    return cred?.name ?? "Unknown"
+    if (cred) return cred.name
+    const shared = sharedCredentials.find((c) => c.id === credentialId)
+    return shared
+      ? `${shared.name} · ${sharedCredentialOrigin(shared)}`
+      : "Unknown"
   }
 
   const handleModeEditSave = (
