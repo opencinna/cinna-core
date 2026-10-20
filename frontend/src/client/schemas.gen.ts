@@ -13192,6 +13192,10 @@ export const ArtifactLinkCreatedSchema = {
             ],
             title: 'Code'
         },
+        url: {
+            type: 'string',
+            title: 'Url'
+        },
         failed_attempts: {
             type: 'integer',
             title: 'Failed Attempts',
@@ -13210,14 +13214,10 @@ export const ArtifactLinkCreatedSchema = {
         token: {
             type: 'string',
             title: 'Token'
-        },
-        url: {
-            type: 'string',
-            title: 'Url'
         }
     },
     type: 'object',
-    required: ['id', 'token_prefix', 'created_at', 'token', 'url'],
+    required: ['id', 'token_prefix', 'created_at', 'url', 'token'],
     title: 'ArtifactLinkCreated',
     description: 'Creation response: the only time the plaintext token is returned.'
 } as const;
@@ -13381,6 +13381,17 @@ export const ArtifactLinkPublicSchema = {
                 }
             ],
             title: 'Code'
+        },
+        url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Url'
         },
         failed_attempts: {
             type: 'integer',

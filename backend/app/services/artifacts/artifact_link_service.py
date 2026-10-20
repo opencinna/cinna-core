@@ -35,17 +35,17 @@ from app.models.users.user import User
 from app.services.artifacts import artifact_cap
 from app.services.artifacts.artifact_access import ArtifactAccess
 from app.services.artifacts.artifact_errors import ArtifactError, not_found
-from app.services.artifacts.artifact_service import ArtifactService, owner_display_name
+from app.services.artifacts.artifact_service import (
+    ArtifactService,
+    link_page_url,
+    owner_display_name,
+)
 
 TOKEN_PREFIX_LENGTH = 8
 
 
 def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
-
-
-def link_page_url(token: str) -> str:
-    return f"{settings.FRONTEND_HOST.rstrip('/')}/s/{token}"
 
 
 def _aware(dt: datetime) -> datetime:
@@ -102,6 +102,7 @@ class ArtifactLinkService:
             artifact_id=artifact.id,
             token_hash=hash_token(token),
             token_prefix=token[:TOKEN_PREFIX_LENGTH],
+            token_encrypted=encrypt_field(token),
             label=(data.label or "").strip() or None,
             expires_at=data.expires_at,
             code_encrypted=encrypt_field(code) if code else None,
@@ -118,7 +119,9 @@ class ArtifactLinkService:
             raise ArtifactError(409, "The pinned revision no longer exists") from exc
         db.refresh(link)
         public = ArtifactService.link_public(link, pinned_number, now)
-        return ArtifactLinkCreated(**public.model_dump(), token=token, url=link_page_url(token))
+        return ArtifactLinkCreated(
+            **public.model_dump(exclude={"url"}), token=token, url=link_page_url(token)
+        )
 
     @staticmethod
     def revoke(db: Session, user: User, artifact_id: uuid.UUID, link_id: uuid.UUID) -> None:

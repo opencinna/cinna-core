@@ -39,7 +39,7 @@ Not to be confused with the `artifacts` field of an input task, which is just a 
 3. Download: the whole revision as a zip, or any single file with `?dl=1`.
 
 ### 3. Share
-- **Grants:** the owner replaces the full grant list (users only, "view" level).
+- **Grants:** the owner replaces the full grant list of people or [user groups](../user_groups/user_groups.md) ("view" level; a role principal is rejected). Group members are resolved live: removing someone from the group, or revoking the group grant, makes the next request 404.
 - **Visibility:** the owner flips `private` / `instance`.
 - **Public link:** the owner creates a link; the token (and the code, if any) is shown **once**, at creation. Anyone with the URL (and code) opens the artifact without an account. The owner can revoke it at any time.
 
@@ -64,7 +64,7 @@ Not to be confused with the `artifacts` field of an input task, which is just a 
 - **List page:** Mine / Shared with me tabs, filtered by workspace. "Upload" opens a dialog for a zip or several files (source `upload`); the result panel lists what was excluded.
 - **Artifact page:** header, a full-height viewer, and a details panel (a side column on wide screens, a sheet below). Revisions show five at a time with "Show all" and "Published by <name>"; the current and pinned revisions cannot be deleted. The owner gets a link to the source session. Edit, Delete and Share dialogs.
 - **Viewers:** a site opens in a sandboxed iframe (never with the app's own origin). A files artifact shows a file tree with a viewer per kind: markdown (raw HTML off, relative links kept inside the artifact), CSV (virtualised, 10k rows), text and JSON (2 MB cap), code files syntax-highlighted by extension (Python, JS/TS, shell, YAML, TOML/INI, SQL, XML, CSS/SCSS, Go, Rust, Java, C/C++, Ruby; plain text and files over 200 KB stay plain; shown plain first, then coloured, so nothing shifts), images including SVG, PDF in-page; an HTML file offers "Open as site"; anything else downloads. A single-file artifact opens straight into its viewer.
-- **Share dialog:** People (Only me / Everyone on the instance, plus a user picker; roles are not offered) and Public links (label, expiry, optional code; the token is shown once at creation, since only its hash is stored; revoke).
+- **Share dialog:** People (Only me / Everyone on the instance, plus a user picker; roles are not offered) and Public links (label, expiry, optional code; the link URL is copied at once on creation; the owner can copy any live link's URL again from its row, because the token is stored encrypted next to its lookup hash; links created before that change have no URL to copy; the 4-digit code is a row badge; revoke).
 - **Public link page** (`/s/<token>`, no login): title, shared-by, "made by an agent" when applicable, description, Download; a code prompt ("Incorrect code. N attempts left."); plain messages for expired or revoked links.
 
 ## Business Rules
@@ -106,6 +106,8 @@ Not to be confused with the `artifacts` field of an input task, which is just a 
 - [Nginx Setup](../../infrastructure/nginx_setup.md) and [Data Volumes](../../infrastructure/data_volumes.md): `/a/` routing, upload body limit, storage mount.
 
 ## Changelog
+
+- Grants accept user groups; list counts and `shared_with_me` include group grants.
 
 - Initial backend release (models, ingest, content serving, API, links, CLI account routes).
 - Contract 1.13.0: `artifacts/` folder role as the place agents build what they publish; excluded from bundles/library pushes, carried on env switch, survives in-place rebuild; env prompt carries an "Artifacts location" line (running envs need a rebuild to pick it up).

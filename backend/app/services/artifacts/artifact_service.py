@@ -85,6 +85,11 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+def link_page_url(token: str) -> str:
+    """The public page URL of an artifact link token."""
+    return f"{settings.FRONTEND_HOST.rstrip('/')}/s/{token}"
+
+
 def _quota_error() -> ArtifactError:
     return ArtifactError(
         413,
@@ -703,6 +708,11 @@ class ArtifactService:
             pinned_revision_number=pinned_number,
             needs_code=link.code_encrypted is not None,
             code=decrypt_field(link.code_encrypted) if link.code_encrypted else None,
+            url=(
+                link_page_url(decrypt_field(link.token_encrypted))
+                if link.token_encrypted
+                else None
+            ),
             failed_attempts=link.failed_attempts,
             expired=expires_at is not None and expires_at <= now,
             blocked=link.code_encrypted is not None

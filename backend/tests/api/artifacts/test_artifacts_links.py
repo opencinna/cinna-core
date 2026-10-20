@@ -15,11 +15,14 @@ Scenarios:
      link at once, and removes the files.
 """
 import time
+import uuid
 from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
+from sqlmodel import Session
 
 from app.core.config import settings
+from app.models import ArtifactLink
 from tests.utils.artifacts import (
     build_zip,
     cap_of,
@@ -32,6 +35,7 @@ from tests.utils.artifacts import (
     publish,
     republish,
     revoke_link,
+    set_grants,
     view,
 )
 from tests.utils.user import create_random_user_with_headers
@@ -206,3 +210,58 @@ def test_deactivated_owner_takes_links_down(
     )
     assert r.status_code == 200, r.text
     assert client.get(url).status_code == 200
+
+
+def test_owner_detail_carries_link_url_viewers_and_info_never(client: TestClient) -> None:
+    """The owner re-reads each link's URL; nobody else (and not ``info``) does."""
+    _, owner = create_random_user_with_headers(client)
+    friend, friend_headers = create_random_user_with_headers(client)
+    a = publish(client, owner, archive=_site())
+    created = create_link(client, owner, a["id"], label="Board")
+    token = created["token"]
+
+    # owner: the detail url equals the creation url and opens the page
+    detail = get_artifact(client, owner, a["id"])
+    assert detail["links"][0]["url"] == created["url"]
+    assert detail["links"][0]["url"].endswith(f"/s/{token}")
+    assert link_info(client, token)["title"] == a["title"]
+    assert "url" not in link_info(client, token)
+
+    # a granted viewer sees no links, hence no urls
+    set_grants(client, owner, a["id"], [friend["id"]])
+    friend_detail = get_artifact(client, friend_headers, a["id"])
+    assert not friend_detail.get("links")
+    assert token not in str(friend_detail)
+
+    # an unrelated user cannot even read the artifact
+    _, stranger = create_random_user_with_headers(client)
+    get_artifact(client, stranger, a["id"], expect=404)
+
+    # a revoked link still returns its url to the owner
+    revoke_link(client, owner, a["id"], created["id"])
+    after = get_artifact(client, owner, a["id"])
+    revoked = [x for x in after["links"] if x["id"] == created["id"]]
+    assert revoked and revoked[0]["url"] == created["url"]
+
+
+def test_legacy_link_without_stored_token_has_null_url(client: TestClient, db: Session) -> None:
+    """A row created before ``token_encrypted`` existed reports ``url: null``.
+
+    The API always writes the column, so a legacy row cannot be made through
+    it; the narrowest sanctioned shortcut is clearing that one column.
+    """
+    _, owner = create_random_user_with_headers(client)
+    a = publish(client, owner, archive=_site())
+    created = create_link(client, owner, a["id"])
+    assert get_artifact(client, owner, a["id"])["links"][0]["url"] == created["url"]
+
+    link = db.get(ArtifactLink, uuid.UUID(created["id"]))
+    link.token_encrypted = None
+    db.add(link)
+    db.commit()
+
+    detail = get_artifact(client, owner, a["id"])
+    assert detail["links"][0]["url"] is None
+    assert detail["links"][0]["token_prefix"] == created["token"][:8]
+    # the link itself still works
+    assert link_info(client, created["token"])["title"] == a["title"]

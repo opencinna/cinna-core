@@ -1006,7 +1006,7 @@ Publishing and downloading artifacts needs multipart and binary transport, which
 | `GET /cli/account/artifacts/{id}/download` | zip of a revision |
 | `POST /cli/account/artifacts/{id}/links` | create a public link; the only way the CLI creates one |
 
-List, detail, edit, delete, grants, link revoke and `GET /artifacts/capabilities` go through the api-proxy. The api-proxy **refuses** `POST artifacts/{id}/links` (403 pointing at the dedicated route) and **redacts** link codes: `links[*].code` in `GET artifacts/{id}` is set to null (house rule C18, one-time secrets are not relayed through the generic hatch). The nginx body limit for these routes is in [nginx_setup.md](../../infrastructure/nginx_setup.md).
+List, detail, edit, delete, grants, link revoke and `GET /artifacts/capabilities` go through the api-proxy. The api-proxy **refuses** `POST artifacts/{id}/links` (403 pointing at the dedicated route) and **redacts** link codes and URLs: `links[*].code` and `links[*].url` in `GET artifacts/{id}` are set to null (house rule C18, link secrets are not relayed through the generic hatch). The nginx body limit for these routes is in [nginx_setup.md](../../infrastructure/nginx_setup.md).
 
 ### 7g. Exchanging the Account Token for a Desktop Session
 

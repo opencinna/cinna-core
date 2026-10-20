@@ -1,4 +1,4 @@
-import { Link2Off, Loader2, Pin } from "lucide-react"
+import { Copy, Link2Off, Loader2, Pin } from "lucide-react"
 
 import type { ArtifactLinkPublic } from "@/client"
 import {
@@ -15,6 +15,8 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard"
+import useCustomToast from "@/hooks/useCustomToast"
 
 export function linkDisplayName(link: ArtifactLinkPublic): string {
   return link.label || `Link ${link.token_prefix}…`
@@ -39,9 +41,9 @@ interface ArtifactLinkRowProps {
 }
 
 /**
- * One public link (the `GuestShareCard` row, adapted). No "Copy link": the
- * token is stored hashed, so the create result was the only place it showed.
- * Revoke is the row's only action, hover-revealed.
+ * One public link (the `GuestShareCard` row, adapted). Two actions: Copy link
+ * (only while the link works and core returned its `url` — links made before
+ * the token was kept readable have none) and Revoke, hover-revealed.
  */
 export function ArtifactLinkRow({
   link,
@@ -51,6 +53,16 @@ export function ArtifactLinkRow({
   const name = linkDisplayName(link)
   const created = formatRelativeTimestamp(link.created_at)
   const expires = link.expires_at && formatRelativeTimestamp(link.expires_at)
+  const [, copy] = useCopyToClipboard()
+  const { showSuccessToast, showErrorToast } = useCustomToast()
+  const works = !link.revoked_at && !link.expired && !link.blocked
+  const url = works ? link.url || null : null
+
+  const copyUrl = async () => {
+    if (!url) return
+    if (await copy(url)) showSuccessToast("Link copied")
+    else showErrorToast("Couldn't copy the link")
+  }
 
   return (
     <ListRow
@@ -101,23 +113,44 @@ export function ArtifactLinkRow({
           </TooltipContent>
         </Tooltip>
       ) : (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
-              aria-label={`Revoke ${name}`}
-              onClick={() => onRevoke(link)}
-            >
-              <Link2Off className="h-3.5 w-3.5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="top" className="text-xs">
-            Revoke link
-          </TooltipContent>
-        </Tooltip>
+        <>
+          {url && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  aria-label={`Copy the URL of ${name}`}
+                  onClick={() => void copyUrl()}
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top" className="text-xs">
+                Copy link
+              </TooltipContent>
+            </Tooltip>
+          )}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+                aria-label={`Revoke ${name}`}
+                onClick={() => onRevoke(link)}
+              >
+                <Link2Off className="h-3.5 w-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="text-xs">
+              Revoke link
+            </TooltipContent>
+          </Tooltip>
+        </>
       )}
     </ListRow>
   )

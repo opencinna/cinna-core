@@ -1,22 +1,21 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Plus } from "lucide-react"
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 
 import {
   type ArtifactLinkCreate,
-  type ArtifactLinkCreated,
   type ArtifactLinkPublic,
   ArtifactsService,
 } from "@/client"
 import { ListRowGroup } from "@/components/Common/ListRow"
 import { Button } from "@/components/ui/button"
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard"
 import useCustomToast from "@/hooks/useCustomToast"
 import { getErrorMessage } from "@/utils"
 import { ArtifactConfirmDialog } from "../ArtifactConfirmDialog"
 import { invalidateArtifact } from "../artifactQueries"
 import { ArtifactLinkRow, linkDisplayName } from "./ArtifactLinkRow"
 import { CreateLinkForm } from "./CreateLinkForm"
-import { LinkCreatedPanel } from "./LinkCreatedPanel"
 
 interface ArtifactLinksPaneProps {
   artifactId: string
@@ -27,14 +26,12 @@ interface ArtifactLinksPaneProps {
   onBusyChange: (busy: boolean) => void
 }
 
-type Mode =
-  | { kind: "list" }
-  | { kind: "create" }
-  | { kind: "created"; link: ArtifactLinkCreated }
+type Mode = "list" | "create"
 
 /**
- * The Public links segment: immediate writes. The list, the create form and
- * the one-time result take turns in one body (§2 Disclosure depth).
+ * The Public links segment: immediate writes. The list and the create form
+ * take turns in one body (§2 Disclosure depth). Creating a link copies its URL
+ * at once and returns to the list, where the new row keeps a copy button.
  */
 export function ArtifactLinksPane({
   artifactId,
@@ -44,7 +41,19 @@ export function ArtifactLinksPane({
 }: ArtifactLinksPaneProps) {
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
-  const [mode, setMode] = useState<Mode>({ kind: "list" })
+  const [, copy] = useCopyToClipboard()
+  const [mode, setMode] = useState<Mode>("list")
+  const listRef = useRef<HTMLDivElement>(null)
+  const [focusList, setFocusList] = useState(false)
+
+  // The form's Create button unmounted; land focus on the list, not on a
+  // control whose tooltip would open over nothing.
+  useEffect(() => {
+    if (mode === "list" && focusList) {
+      listRef.current?.focus()
+      setFocusList(false)
+    }
+  }, [mode, focusList])
   const [revokeTarget, setRevokeTarget] = useState<ArtifactLinkPublic | null>(
     null,
   )
@@ -53,11 +62,19 @@ export function ArtifactLinksPane({
     mutationFn: (body: ArtifactLinkCreate) =>
       ArtifactsService.createArtifactLink({ artifactId, requestBody: body }),
     onMutate: () => onBusyChange(true),
-    onSuccess: (link) => setMode({ kind: "created", link }),
-    onSettled: () => {
-      onBusyChange(false)
-      return invalidateArtifact(queryClient, artifactId)
+    onSuccess: async (link) => {
+      const copied = await copy(link.url)
+      const code = link.code ? ` Send the code ${link.code} separately.` : ""
+      if (copied) showSuccessToast(`Link created and copied.${code}`)
+      else showErrorToast(`Link created — copy it from the list.${code}`)
+      // Back to the list only once it holds the new row (the toast may send
+      // the reader there to copy it).
+      await invalidateArtifact(queryClient, artifactId)
+      setFocusList(true)
+      setMode("list")
     },
+    onError: () => invalidateArtifact(queryClient, artifactId),
+    onSettled: () => onBusyChange(false),
   })
 
   const revoke = useMutation({
@@ -72,7 +89,7 @@ export function ArtifactLinksPane({
     onSettled: () => invalidateArtifact(queryClient, artifactId),
   })
 
-  if (mode.kind === "create") {
+  if (mode === "create") {
     return (
       <CreateLinkForm
         currentRevision={currentRevision}
@@ -84,34 +101,22 @@ export function ArtifactLinksPane({
         }
         onBack={() => {
           create.reset()
-          setMode({ kind: "list" })
+          setMode("list")
         }}
         onCreate={(body) => create.mutate(body)}
       />
     )
   }
 
-  if (mode.kind === "created") {
-    return (
-      <LinkCreatedPanel
-        link={mode.link}
-        onDone={() => {
-          create.reset()
-          setMode({ kind: "list" })
-        }}
-      />
-    )
-  }
-
   const createButton = (
-    <Button type="button" size="sm" onClick={() => setMode({ kind: "create" })}>
+    <Button type="button" size="sm" onClick={() => setMode("create")}>
       <Plus className="h-4 w-4" />
       Create link
     </Button>
   )
 
   return (
-    <div className="space-y-3">
+    <div ref={listRef} tabIndex={-1} className="space-y-3 outline-none">
       <div className="flex items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">
           Anyone with a link can open this artifact without signing in.

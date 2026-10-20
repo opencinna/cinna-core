@@ -151,10 +151,11 @@ EXCLUDED_WRITE_PATTERNS: tuple[tuple[str, str], ...] = (
 )
 
 # Allowed routes whose response passes through with fields blanked, because
-# they carry a share code (C18): ``(method, path pattern, list key, field)`` —
+# they carry a share secret — the link code or the link URL itself (C18): ``(method, path pattern, list key, field)`` —
 # ``payload[list key][*][field]`` is set to None.
 REDACTED_RESPONSE_FIELDS: tuple[tuple[str, str, str, str], ...] = (
     ("GET", r"artifacts/[^/]+", "links", "code"),
+    ("GET", r"artifacts/[^/]+", "links", "url"),
 )
 
 # The dedicated CLI verb that replaces a denied route, by pattern.
@@ -252,7 +253,7 @@ def route_refusal(method: str, relative_path: str) -> ApiProxyDenied | None:
 
 
 def redact_response(method: str, relative_path: str, payload: object) -> bool:
-    """Blank the share-code fields of a mirrored JSON body in place.
+    """Blank the share-secret fields of a mirrored JSON body in place.
 
     Returns True when a rule matched (the caller re-serialises the body).
     Pure; ``relative_path`` as for :func:`route_refusal`.

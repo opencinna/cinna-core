@@ -1,8 +1,10 @@
 """ArtifactLink — a public link to an artifact.
 
-Only the SHA-256 of the token is stored (plus its first 8 characters for the
-list UI); the token itself is shown once, at creation. The optional 4-digit
-code is Fernet-encrypted so the owner can read it back, like guest shares.
+The SHA-256 of the token is the lookup key (plus its first 8 characters for the
+list UI). The token is also kept Fernet-encrypted (``token_encrypted``) so the
+owner can copy the link URL again at any time; links created before that column
+existed have it NULL and their URL is gone for good. The optional 4-digit code
+is Fernet-encrypted the same way, like guest shares.
 ``failed_attempts >= ARTIFACT_LINK_MAX_CODE_ATTEMPTS`` means blocked (derived,
 no column).
 
@@ -38,6 +40,9 @@ class ArtifactLink(SQLModel, table=True):
     )
     token_hash: str = Field(max_length=64, nullable=False, unique=True)
     token_prefix: str = Field(max_length=8, nullable=False)
+    token_encrypted: str | None = Field(
+        default=None, sa_column=Column(Text, nullable=True)
+    )
     label: str | None = Field(default=None, max_length=200)
     expires_at: datetime | None = Field(
         default=None, sa_type=DateTime(timezone=True), nullable=True
@@ -84,6 +89,9 @@ class ArtifactLinkPublic(SQLModel):
     needs_code: bool = False
     # Owner-only: the decrypted 4-digit code.
     code: str | None = None
+    # Owner-only: the link page URL, readable again at any time. None for links
+    # created before the token was stored encrypted.
+    url: str | None = None
     failed_attempts: int = 0
     expired: bool = False
     blocked: bool = False
@@ -93,7 +101,7 @@ class ArtifactLinkCreated(ArtifactLinkPublic):
     """Creation response: the only time the plaintext token is returned."""
 
     token: str
-    url: str
+    url: str  # always set at creation
 
 
 class ArtifactLinkInfo(SQLModel):

@@ -86,7 +86,9 @@ def test_account_token_publish_republish_download(
     proxied_links = r.json()["links"]
     assert [x["id"] for x in proxied_links] == [link["id"]]
     assert proxied_links[0]["code"] is None and proxied_links[0]["needs_code"] is True
+    assert proxied_links[0]["url"] is None
     direct = client.get(f"{API}/artifacts/{created['id']}", headers=superuser_token_headers).json()
+    assert direct["links"][0]["url"].endswith(f"/s/{link['token']}")
     assert direct["links"][0]["code"] == link["code"]
 
     # ── Phase 6: the account routes want the account token ──

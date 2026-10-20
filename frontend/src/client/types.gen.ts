@@ -3003,11 +3003,11 @@ export type ArtifactLinkCreated = {
     pinned_revision_number?: (number | null);
     needs_code?: boolean;
     code?: (string | null);
+    url: string;
     failed_attempts?: number;
     expired?: boolean;
     blocked?: boolean;
     token: string;
-    url: string;
 };
 
 /**
@@ -3038,6 +3038,7 @@ export type ArtifactLinkPublic = {
     pinned_revision_number?: (number | null);
     needs_code?: boolean;
     code?: (string | null);
+    url?: (string | null);
     failed_attempts?: number;
     expired?: boolean;
     blocked?: boolean;

@@ -715,6 +715,11 @@ class TestResponseRedaction:
         assert redact_response("GET", f"artifacts/{_A}", payload) is True
         assert [link["code"] for link in payload["links"]] == [None, None]
 
+    def test_artifact_detail_link_urls_are_blanked(self) -> None:
+        payload = {"links": [{"url": "https://x/s/tok", "code": "1"}, {"url": None}]}
+        assert redact_response("GET", f"artifacts/{_A}", payload) is True
+        assert [link["url"] for link in payload["links"]] == [None, None]
+
     @pytest.mark.parametrize(
         ("method", "rel"),
         [("GET", "artifacts"), ("GET", f"artifacts/{_A}/links"), ("PATCH", f"artifacts/{_A}"), ("GET", f"agents/{_A}")],
