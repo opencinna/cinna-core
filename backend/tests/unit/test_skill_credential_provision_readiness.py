@@ -54,6 +54,7 @@ def test_readiness_and_name_visibility(
     session.exec.return_value.all.side_effect = [
         [credential],
         [credential.id] if shared else [],
+        [],  # group shares
     ]
     items = [
         SlotProvision(
@@ -78,7 +79,7 @@ def test_readiness_and_name_visibility(
     assert all(item.needs_setup is expected for item in result)
     expected_name = credential.name if owned or shared else None
     assert all(item.credential_name == expected_name for item in result)
-    assert session.exec.call_count == (1 if owned else 2)
+    assert session.exec.call_count == (1 if owned else 3)
 
 
 @pytest.mark.parametrize(

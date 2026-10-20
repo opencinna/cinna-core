@@ -589,8 +589,9 @@ class SkillCredentialRequirements:
 
         ``credential_name`` is filled only for a credential the agent owner
         owns or already holds a share on, so a publisher credential is never
-        named to an installer before its share exists (C3). Two queries at
-        most, whatever the number of slots.
+        named to an installer before its share exists (C3). Three queries at
+        most (credentials, direct shares, group shares), whatever the number
+        of slots.
         """
         credential_ids = {
             item.credential_id for item in items if item.credential_id is not None

@@ -281,7 +281,17 @@ def test_no_route_grants_a_managed_credential_without_an_actor() -> None:
     write a grant of a company API key that the security feed attributes to
     nobody.
     """
-    calls = _calls_named("add_members")
+    # ``UserGroupService.add_members`` shares the name but grants group
+    # membership, not a managed credential; it always takes the acting admin.
+    calls = [
+        entry
+        for entry in _calls_named("add_members")
+        if not (
+            isinstance(entry[2].func, ast.Attribute)
+            and isinstance(entry[2].func.value, ast.Name)
+            and entry[2].func.value.id == "UserGroupService"
+        )
+    ]
     assert calls, "No call to add_members was found — the walk is inert."
 
     system_callers = {

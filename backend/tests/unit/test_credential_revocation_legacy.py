@@ -37,7 +37,8 @@ def test_disabling_again_revokes_legacy_shares(update_path, monkeypatch):
     )
     session = MagicMock()
     session.get.return_value = credential
-    session.exec.return_value.all.return_value = [stale_share]
+    # Direct shares, then group shares (none for a legacy credential).
+    session.exec.return_value.all.side_effect = [[stale_share], []]
     unlink = AsyncMock()
     monkeypatch.setattr(
         CredentialsService, "unlink_credential_from_revoked_recipients", unlink
