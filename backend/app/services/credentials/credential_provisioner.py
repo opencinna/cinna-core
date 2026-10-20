@@ -344,8 +344,12 @@ class CredentialProvisioner:
                 session, credential_id=credential.id, user_id=user.id
             ):
                 # The owner removed this person's share; only the owner
-                # sharing again lifts that, never an install.
-                slots.append(outcome("not_shareable"))
+                # sharing again lifts that, never an install. A group share
+                # still held is real access: use it, write no row.
+                if CredentialShareService.has_share(session, credential.id, user.id):
+                    slots.append(outcome("already_shared", credential.id))
+                else:
+                    slots.append(outcome("not_shareable"))
                 continue
             inserted = CredentialProvisioner._insert_share(
                 session,
@@ -973,14 +977,15 @@ class CredentialProvisioner:
                 )
             return None
         # The owner removed the installer's share: an install must not bring
-        # it back (only the owner sharing again does).
+        # it back (only the owner sharing again does). A group share still
+        # held is real access, so the install links through it.
         if (
             publisher_cred.owner_id != agent.owner_id
             and CredentialShareService.is_revoked(
                 session, credential_id=publisher_cred.id, user_id=agent.owner_id
             )
-            and not CredentialProvisioner._has_share(
-                session, credential_id=publisher_cred.id, user_id=agent.owner_id
+            and not CredentialShareService.has_share(
+                session, publisher_cred.id, agent.owner_id
             )
         ):
             if log:
@@ -1005,12 +1010,18 @@ class CredentialProvisioner:
         """Share a checked publisher credential with the installer and link it.
 
         No share when the installer is the publisher. First-writer-wins: an
-        existing share (e.g. ``source="direct"``) keeps its source. Returns
-        whether a share or link row was inserted.
+        existing share (e.g. ``source="direct"``) keeps its source. No share
+        either when the owner revoked the installer's direct share: the link
+        then rides on the group share that let the check pass, and is released
+        with it. Returns whether a share or link row was inserted.
         """
         changed = False
-        if publisher_cred.owner_id != agent.owner_id and not (
-            CredentialProvisioner._has_share(
+        if (
+            publisher_cred.owner_id != agent.owner_id
+            and not CredentialProvisioner._has_direct_share(
+                session, credential_id=publisher_cred.id, user_id=agent.owner_id
+            )
+            and not CredentialShareService.is_revoked(
                 session, credential_id=publisher_cred.id, user_id=agent.owner_id
             )
         ):
@@ -1135,7 +1146,7 @@ class CredentialProvisioner:
         ).first()
 
     @staticmethod
-    def _has_share(
+    def _has_direct_share(
         session: Session, *, credential_id: uuid.UUID, user_id: uuid.UUID
     ) -> bool:
         return (
@@ -1149,12 +1160,9 @@ class CredentialProvisioner:
     def _installer_can_see(
         session: Session, *, agent: Agent, credential: Credential
     ) -> bool:
-        """The agent owner owns the credential or holds a share on it."""
-        return (
-            credential.owner_id == agent.owner_id
-            or CredentialProvisioner._has_share(
-                session, credential_id=credential.id, user_id=agent.owner_id
-            )
+        """The agent owner owns the credential or holds a direct or group share."""
+        return credential.owner_id == agent.owner_id or CredentialShareService.has_share(
+            session, credential.id, agent.owner_id
         )
 
     @staticmethod
