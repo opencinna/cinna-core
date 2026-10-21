@@ -322,4 +322,4 @@ suspended ──(WS connect)──▶ running + sync_active=true
 
 The sync WebSocket (`WS /api/v1/cli/agents/{agent_id}/sync-stream`) and the SSE exec stream (`POST /api/v1/cli/agents/{agent_id}/exec`) both need a reverse-proxy location that enables WebSocket upgrade headers, disables buffering, and sets a long read/send timeout (so idle Mutagen tunnels and streaming exec output aren't severed). The `frontend/nginx.conf` ships a dedicated `location /api/v1/cli/` block; the production reverse proxy needs the same.
 
-See [Nginx Setup — `/api/v1/cli/`](../../infrastructure/nginx_setup.md#apiv1cli) for the exact directives and rationale.
+See [Nginx Setup — `/api/v1/cli/`](../../infrastructure/nginx_setup.md#cinna-cli-apiv1cli) for the exact directives and rationale.

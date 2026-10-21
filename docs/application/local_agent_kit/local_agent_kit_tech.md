@@ -124,7 +124,7 @@ app.include_router(local_agent_kit_router, prefix="/api/agent-start")   # alias
 Two mounts of **one router** (never two copies that could drift):
 
 - `/agent-start` — the pasteable URL. Sits at the origin root next to the SPA, so it
-  needs its own reverse-proxy block (see [Nginx Setup](../../infrastructure/nginx_setup.md)).
+  must be in the reverse proxy's backend paths (it is in the unified config, see [Nginx Setup](../../infrastructure/nginx_setup.md#production-setup)).
 - `/api/agent-start` — proxied by every deployment's universal `/api/` block already.
   Every kit-internal link (`KIT_BASE_URL` placeholder) points at this one, so an
   instance whose proxy was never updated for `/agent-start` still serves a fully
@@ -610,7 +610,7 @@ an nginx prefix match is on the raw string, so `location /agent-start` would als
 capture a future SPA route named `/startup` or `/starter-kit` and proxy it to a
 backend path that 404s. The regex matches `/agent-start`, `/agent-start/`, and
 `/agent-start/<anything>` only. See
-[Nginx Setup](../../infrastructure/nginx_setup.md#start) for the production
+[Nginx Setup](../../infrastructure/nginx_setup.md#local-agent-kit-agent-start) for the production
 reverse-proxy requirement and the `/api/agent-start` fallback rationale.
 
 ## `kit.py` (`docs/local_agent_kit/tools/kit.py`)

@@ -215,7 +215,7 @@ See [Two-Factor Authentication](../user_2fa/user_2fa.md) for full 2FA details.
 
 ## Infrastructure Requirements
 
-The `/.well-known/cinna-desktop` (desktop) and `/.well-known/cinna-app` (mobile) discovery endpoints must reach the backend through the reverse proxy. Without them, the native apps cannot validate the instance before login. See [Nginx Setup](../../infrastructure/nginx_setup.md) for the required location blocks and how they fit alongside the other origin-root well-known URIs.
+The `/.well-known/cinna-desktop` (desktop) and `/.well-known/cinna-app` (mobile) discovery endpoints must reach the backend through the reverse proxy. Without them, the native apps cannot validate the instance before login. Both are backend paths in the unified production config; see [Nginx Setup](../../infrastructure/nginx_setup.md#production-setup).
 
 ## Settings UI
 

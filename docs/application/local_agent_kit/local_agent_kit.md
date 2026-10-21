@@ -485,8 +485,8 @@ publishing the kit — see **Business Rules** below.
 - **[Cinna CLI Integration](../cinna_cli_integration/cinna_cli_integration.md)** —
   the go-cloud playbook's preconditions cover installing/upgrading `cinna-cli`
   itself (`CINNA_CLI_INSTALL_SPEC`, `MINIMUM_CLI_VERSION`).
-- **[Nginx Setup](../../infrastructure/nginx_setup.md)** — `/agent-start` needs its own
-  origin-root reverse-proxy block (like the `.well-known/*` routes); the
+- **[Nginx Setup](../../infrastructure/nginx_setup.md)** — `/agent-start` is an
+  origin-root backend path in the unified production proxy config (like the `.well-known/*` routes); the
   `/api/agent-start` alias is the fallback that already works through the universal
   `/api/` block on every deployment.
 - **The `platform-knowledge-env` snapshot** — `docs/local_agent_kit/` is the

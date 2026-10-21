@@ -281,7 +281,7 @@ Generated from the frontmatter of each feature's primary doc — edit the frontm
 
 | Feature | Description | Docs | Related |
 |---------|-------------|------|---------|
-| nginx_setup | Reference for the nginx location blocks the platform requires in production and in the frontend container, with links to the features that depend on them. | [reference](infrastructure/nginx_setup.md) \| [data volumes](infrastructure/data_volumes.md) | [account_cli_workspace](application/cinna_cli_integration/account_cli_workspace.md), [agent_bundles](agents/agent_bundles/agent_bundles.md), [agent_env_console](agents/agent_environments/agent_env_console.md), [agent_webhooks](agents/agent_webhooks/agent_webhooks.md), [app_mcp_server](application/app_mcp_server/app_mcp_server.md), [app_sync](application/app_sync/app_sync.md), +9 more |
+| nginx_setup | Reverse-proxy setup: one unified production config routes every backend path, plus the frontend container nginx and the rules for adding a backend path. | [reference](infrastructure/nginx_setup.md) \| [data volumes](infrastructure/data_volumes.md) | [account_cli_workspace](application/cinna_cli_integration/account_cli_workspace.md), [agent_bundles](agents/agent_bundles/agent_bundles.md), [agent_env_console](agents/agent_environments/agent_env_console.md), [agent_webhooks](agents/agent_webhooks/agent_webhooks.md), [app_mcp_server](application/app_mcp_server/app_mcp_server.md), [app_sync](application/app_sync/app_sync.md), +9 more |
 
 ### flows
 

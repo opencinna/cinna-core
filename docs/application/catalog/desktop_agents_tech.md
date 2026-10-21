@@ -64,6 +64,6 @@ receive-pack exits 0 even when the hook refuses, so acceptance is decided from t
 ## Deployment
 
 - `docker-compose.yml` mounts `${HOST_GIT_STORAGE_DIR:-./backend/data/git}:/app/data/git` on the backend; it must persist because the bare repos are the content (Postgres only caches `head_sha`). `backend/data/git/` is gitignored.
-- `frontend/nginx.conf` and the production proxy need the `/git/` block, see [Nginx Setup](../../infrastructure/nginx_setup.md).
+- `frontend/nginx.conf` and the unified production proxy config carry the `/git/` block, see [Nginx Setup](../../infrastructure/nginx_setup.md).
 - Volume, multi-replica and backup notes: [Data Volumes](../../infrastructure/data_volumes.md).
 - Clients scope `http.<origin>/.extraHeader` by the clone URL's origin, which is `backend_base_url` and can differ from the client's API origin.

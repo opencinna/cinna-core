@@ -156,7 +156,7 @@ rules above are what keeps keys and credentials out.
 - [Event Bus](../realtime_events/event_bus_system.md): `catalog.updated`, `catalog.granted`.
 - [User Roles](../user_roles/user_roles.md): role principals use `User.role` values.
 - [Plugin Marketplaces](../plugin_marketplaces/plugin_marketplaces.md): mirrors of marketplaces are planned.
-- Deployment: [Nginx Setup](../../infrastructure/nginx_setup.md) `/git/` block and
+- Deployment: [Nginx Setup](../../infrastructure/nginx_setup.md#git-smart-http-git) `/git/` block and
   [Data Volumes](../../infrastructure/data_volumes.md).
 
 ## Changelog

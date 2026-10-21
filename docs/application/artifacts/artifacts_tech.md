@@ -32,6 +32,21 @@ Models in `backend/app/models/artifacts/`, services in `backend/app/services/art
 
 `ARTIFACT_STORAGE_DIR`, `ARTIFACT_MAX_REVISION_BYTES` (50 MiB), `ARTIFACT_MAX_REVISION_FILES` (2000), `ARTIFACT_MAX_FILE_BYTES` (25 MiB), `ARTIFACT_UPLOAD_OVERHEAD_BYTES` (5 MiB multipart allowance), `ARTIFACT_USER_QUOTA_BYTES` (2 GiB), `ARTIFACT_MAX_COMPRESSION_RATIO` (100), `ARTIFACT_VIEW_CAP_TTL_SECONDS` (8 h), `ARTIFACT_LINK_MAX_CODE_ATTEMPTS` (3), `ARTIFACTS_CONTENT_ORIGIN` (optional; defaults to `backend_base_url`, property `artifacts_content_origin`). `frame-ancestors` is the origin of `FRONTEND_HOST`.
 
+## Deployment
+
+An instance serves artifacts correctly only when all of the following hold:
+
+| What | Setting / place | Why |
+|------|-----------------|-----|
+| SPA origin | `FRONTEND_HOST` = exact public origin of the SPA (scheme, host, port) | Becomes the served CSP's `frame-ancestors`; a mismatch makes the browser refuse to render the viewer iframe. Also the base of link pages (`/s/<token>`) and artifact page URLs returned to agents |
+| Content origin | `ARTIFACTS_CONTENT_ORIGIN`, else `BACKEND_BASE_URL`, else `FRONTEND_HOST` | Every content URL (`content_base`, `download_url`, the CSP source scope) is built on it. Leave unset on a single-host deploy; set it when `BACKEND_BASE_URL` points at a host that does not serve `/a/` (it is read from `.env` via `env_file`, no compose `environment:` entry needed) |
+| `/a/` routing | reverse proxy of the content-origin host | Without it the SPA shell is served into the sandboxed iframe. Covered by the backend block of the unified production config; header rules and symptoms: [Nginx Setup: Artifact content](../../infrastructure/nginx_setup.md#artifact-content-a) |
+| Upload size | reverse proxy body limit ≥ 55 MiB on `/api/` (the unified production config sets 100m) | nginx's 1 MB default otherwise 413s browser, Desktop and CLI publishes with an HTML page; the backend enforces the real cap with a JSON 413: [Nginx Setup](../../infrastructure/nginx_setup.md#production-setup) |
+| Storage | `HOST_ARTIFACT_STORAGE_DIR` → `/app/data/artifacts` (docker-compose backend volume) | The files are the artifact; must persist, and be shared across backend replicas: [Data Volumes](../../infrastructure/data_volumes.md) |
+| Agent publishing | environments rebuilt after the upgrade | The `?artifact=1` zip mode, the `cinna-artifacts` skill and the `artifacts/` folder role live in the env image; older environments do not have them |
+
+Check after deploy: `GET /.well-known/cinna-desktop` carries `"artifacts": 1`, and `curl -si <content origin>/a/v/invalid/x` returns `404` with `content-security-policy: sandbox ...` and `access-control-allow-origin: *`. A `200 text/html` is the SPA shell, meaning `/a/` is not routed.
+
 ## Services
 
 | Module | Role |
@@ -82,7 +97,7 @@ Account CLI (`backend/app/api/routes/cli.py`, account token): `POST /cli/account
 ## Proxy and CLI
 
 - `backend/app/services/cli/account_api_proxy_policy.py` denies `POST artifacts/{id}/links` through the generic api-proxy (the CLI must use the dedicated route so the one-time token/code is delivered interactively) and blanks `links[*].code` and `links[*].url` in the response of `GET artifacts/{id}` (house rule C18).
-- `frontend/nginx.conf`: `/a/` block and the 55 MiB body block; see [nginx_setup.md](../../infrastructure/nginx_setup.md).
+- Proxy: `/a/` is in the backend block of the unified production config and has its own block in `frontend/nginx.conf`, next to the 55 MiB artifact-upload body block; see [nginx_setup.md](../../infrastructure/nginx_setup.md).
 
 ## Discovery
 

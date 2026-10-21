@@ -1,7 +1,7 @@
 ---
 feature: nginx_setup
 domain: infrastructure
-one_liner: "Reference for the nginx location blocks the platform requires in production and in the frontend container, with links to the features that depend on them."
+one_liner: "Reverse-proxy setup: one unified production config routes every backend path, plus the frontend container nginx and the rules for adding a backend path."
 primary_label: reference
 docs:
   data volumes: data_volumes.md
@@ -12,173 +12,185 @@ docs:
 
 The Cinna platform relies on nginx in two places:
 
-- **Production reverse proxy** — terminates TLS and routes requests to the backend (`/api/`, `/mcp/`, `/ws/`, select `/.well-known/*` URIs) or to the frontend SPA (everything else).
-- **Frontend container nginx** (`frontend/nginx.conf`) — serves the static SPA build and proxies origin-root well-known URIs to the backend so specs-mandated discovery paths work when the frontend container is the entry point (local docker-compose).
+- **Production reverse proxy**: terminates TLS and routes each request either to the backend or to the frontend SPA. Its Cinna part is the unified config in [Production setup](#production-setup).
+- **Frontend container nginx** (`frontend/nginx.conf`): serves the static SPA build and proxies the backend paths, so the frontend container can be the entry point in local docker-compose.
 
-This doc lists the required `location` blocks and links each one to the feature that depends on it.
+A backend path missing from the proxy falls through to the SPA's `try_files` and answers `200 text/html` with the SPA shell. The failure then looks like a frontend bug (a blank viewer, a CORS error, a JSON parse error in a client) rather than a routing gap.
 
-## Required Location Blocks
+## Production setup
 
-### `/api/`
-
-**Feature:** all backend API traffic.
-**Upstream:** backend (`localhost:8000` in production, `backend:8000` inside docker-compose).
-**Proxy headers:** `Host`, `X-Real-IP`, `X-Forwarded-For`, `X-Forwarded-Proto`.
-
-Present only in the production reverse proxy. In local dev the SPA calls the backend directly via `VITE_API_URL` (see `docker-compose.yml`), so `frontend/nginx.conf` does not proxy `/api/`.
-
-### `/mcp/`
-
-**Feature:** MCP protocol endpoints — see [MCP Integration](../application/mcp_integration/agent_mcp_architecture.md) and [App MCP Server](../application/app_mcp_server/app_mcp_server_tech.md).
-**Special requirements:** MCP Streamable HTTP uses SSE. `proxy_buffering off`, `proxy_cache off`, and `proxy_read_timeout 300s` are required so events flow in real time and long-lived streams don't get cut.
-**Upstream:** backend.
-
-### `/ws/`
-
-**Feature:** Socket.IO real-time events — see [Realtime Events](../application/realtime_events/event_bus_system.md).
-**Special requirements:** WebSocket upgrade (`proxy_http_version 1.1`, `Upgrade`/`Connection` headers).
-**Upstream:** backend.
-
-### `/api/v1/cli/`
-
-**Feature:** Cinna CLI agent-scoped traffic — see [Cinna CLI Integration](../application/cinna_cli_integration/cinna_cli_integration.md).
-**Why a dedicated block:** two endpoints under this prefix need transport that the plain `/api/` block doesn't provide:
-
-- `WS /api/v1/cli/agents/{agent_id}/sync-stream` — long-lived Mutagen tunnel over WebSocket.
-- `POST /api/v1/cli/agents/{agent_id}/exec` — Server-Sent Events stream.
-
-**Special requirements:** WebSocket upgrade (`proxy_http_version 1.1`, `Upgrade`/`Connection` headers), `proxy_buffering off`, `proxy_cache off`, and a long `proxy_read_timeout`/`proxy_send_timeout` (3600s) so idle sync sessions and SSE streams aren't cut mid-flight. Must be declared before the generic `/api/` block (nginx matches longest-prefix, but ordering it first keeps intent clear).
-
-**Upstream:** backend.
-
-### `= /api/v1/skills/packages/publish`
-
-**Feature:** skill publish from a desktop (tar.gz upload) — see [Desktop Agents in the Catalog](../application/catalog/desktop_agents.md).
-**Why a dedicated block:** the generic `/api/` block keeps nginx's 1 MB body default, and a skill archive may be up to 16 MiB; without this block normal uploads get an nginx HTML 413 instead of the backend's JSON.
-**Special requirements:** exact match (`location =`), `client_max_body_size 17m` (the backend refuses bodies over 17 MiB with 413 `skill_too_large` itself), forwarded headers. Declare before `/api/`. **A production reverse proxy needs the same limit on this path.**
-**Upstream:** backend.
-
-### `/api/v1/env-console/`
-
-**Feature:** Agent Environment Console — live container-logs follow (`WS /api/v1/env-console/{id}/logs/stream`) and interactive web terminal (`WS /api/v1/env-console/{id}/terminal`). See [Agent Environment Console](../agents/agent_environments/agent_env_console.md).
-**Why a dedicated block:** these are **WebSocket-only** routes (registered with `@router.websocket(...)` — there is no HTTP `GET` at these paths; the REST logs *snapshot* lives at the separate `GET /api/v1/environments/{id}/logs`). The generic `/api/` block proxies plain HTTP without the WebSocket upgrade directives, so the handshake arrives at the backend as an ordinary `GET`, matches no HTTP route, and Starlette returns **404**. Local dev works because the SPA connects straight to the backend via `VITE_API_URL`, bypassing the proxy. The routes live under a dedicated `/env-console` prefix (mounted on a separate `console_ws_router`, not the REST `/environments` router) precisely so this can be a simple prefix block that doesn't disable buffering on the REST environment endpoints.
-
-**Special requirements:** WebSocket upgrade (`proxy_http_version 1.1`, `Upgrade`/`Connection` headers), `proxy_buffering off`, `proxy_cache off`, and a long `proxy_read_timeout`/`proxy_send_timeout` (3600s) so logs-follow and the terminal (env-core idle watchdog up to 900s) aren't cut mid-stream. Declare it before the generic `/api/` block.
+Paste the config below into the site's `server { ... }` block, replacing any per-path Cinna blocks from older setups, and set the backend address in both `proxy_pass` lines. TLS, `root`, `index` and server-level headers stay in the operator's server config.
 
 ```nginx
-location /api/v1/env-console/ {
-    proxy_pass http://backend;
+# ── Backend: every path the backend owns, one block ──────────────────────────
+#   api/            REST API (incl. /api/agent-start, /api/cli-setup, /api/v1/hooks)
+#   mcp/            MCP Streamable HTTP (SSE) + MCP OAuth
+#   ws/             Socket.IO realtime events (WebSocket)
+#   acp/            ACP connectors (WebSocket)
+#   a/              artifact content (sandboxed; backend sets CSP + CORS)
+#   agent-hooks/    agent webhooks (public)
+#   agent-start     Local Agent Kit pasteable URL (also /agent-start/<path>)
+#   .well-known/... OAuth metadata (RFC 9728 / RFC 8414), desktop/mobile discovery
+location ~ ^/(api/|mcp/|ws/|acp/|a/|agent-hooks/|agent-start(/|$)|\.well-known/(oauth-protected-resource|oauth-authorization-server|cinna-desktop|cinna-app)) {
+    proxy_pass http://localhost:8000;
     proxy_http_version 1.1;
+
+    # WebSocket when the client asks for an upgrade, plain HTTP otherwise.
     proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection "upgrade";
+    proxy_set_header Connection $http_connection;
+
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
+
+    # SSE (MCP, CLI exec), the CLI sync tunnel, the env console and artifact
+    # range requests must stream and must not be cut while idle.
     proxy_buffering off;
     proxy_cache off;
     proxy_read_timeout 3600s;
     proxy_send_timeout 3600s;
+
+    # Largest upload (file uploads, UPLOAD_MAX_FILE_SIZE_MB). Smaller per-route
+    # limits (skills 17 MiB, artifacts 55 MiB) are enforced by the backend.
+    client_max_body_size 100m;
+}
+
+# ── Desktop agents: git smart HTTP (clone / pull / push) ─────────────────────
+# Separate only because pushes exceed the general body limit.
+# Values match GIT_MAX_PUSH_BYTES and GIT_HTTP_TIMEOUT_SECONDS.
+location /git/ {
+    proxy_pass http://localhost:8000;
+    proxy_http_version 1.1;
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    proxy_buffering off;
+    proxy_request_buffering off;
+    proxy_cache off;
+    client_max_body_size 256m;
+    proxy_read_timeout 600s;
+    proxy_send_timeout 600s;
+}
+
+# ── Frontend SPA: everything else ────────────────────────────────────────────
+location / {
+    try_files $uri $uri/ /index.html;
 }
 ```
 
-**Auth note:** browsers cannot set an `Authorization` header on a WebSocket handshake, so these routes accept the platform JWT via the `?token=` query param (the dep also accepts `Authorization: Bearer` for non-browser callers). Ensure the proxy does **not** strip the query string.
+It holds three locations:
 
-**Upstream:** backend.
+| Location | Routes | Why it is separate |
+|----------|--------|--------------------|
+| `~ ^/(api/\|mcp/\|ws/\|acp/\|a/\|agent-hooks/\|agent-start(/\|$)\|\.well-known/(...))` | every backend path except git | one transport profile fits all of them (below) |
+| `/git/` | desktop agent git smart HTTP | pushes need a 256 MiB body and no request buffering |
+| `/` | the SPA, `try_files $uri $uri/ /index.html` | static files |
 
-### `~ ^/api/v1/(cli/account/)?artifacts(/|$)`
+**Backend block transport profile.** It is tuned to the most demanding route it carries, which is harmless for the rest:
 
-**Feature:** artifact publish/republish uploads, including the account-CLI routes - see [Artifacts](../application/artifacts/artifacts.md).
-**Why a dedicated block:** uploads are multipart up to 50 MiB plus form overhead; the generic `/api/` block keeps nginx's 1 MB default and would return an nginx HTML 413.
-**Special requirements:** `client_max_body_size 55m` (the backend enforces `ARTIFACT_MAX_REVISION_BYTES + ARTIFACT_UPLOAD_OVERHEAD_BYTES` itself via `ArtifactUploadLimitMiddleware`), forwarded headers. A regex location wins over the `/api/v1/cli/` prefix, so CLI uploads land here. **A production reverse proxy needs the same limit on this path.**
-**Upstream:** backend.
+- `proxy_http_version 1.1`, `Upgrade $http_upgrade`, `Connection $http_connection`: WebSocket handshakes (`/ws/`, `/acp/`, CLI sync tunnel, env console) are upgraded, and plain requests stay plain. Passing the client's own `Connection` header avoids a `map`, which would have to live in the `http` context (awkward on managed hosts such as Forge).
+- `proxy_buffering off`, `proxy_cache off`: SSE (MCP, CLI exec) and artifact range responses stream. Artifact content must not be cached at the proxy, because the view capability is re-checked on every request.
+- `proxy_read_timeout`/`proxy_send_timeout 3600s`: long-lived tunnels and terminals are not cut while idle. The trade-off is that a hung API request is held up to an hour instead of 60 s.
+- `client_max_body_size 100m`, the largest upload (`UPLOAD_MAX_FILE_SIZE_MB`). Smaller per-route caps are enforced by the backend with a JSON 413: skill publish 17 MiB, artifacts `ARTIFACT_MAX_REVISION_BYTES + ARTIFACT_UPLOAD_OVERHEAD_BYTES` (55 MiB).
+- Forwarded headers: `Host`, `X-Real-IP`, `X-Forwarded-For`, `X-Forwarded-Proto`.
+- No `add_header`. The backend sets CSP, CORS and framing headers itself (see [Artifact content](#artifact-content-a)).
 
-### `/a/`
+**Placement.** nginx picks a matching regex location over prefix ones, so the backend block always beats `location /`. Among regex locations the first match in file order wins, so the config must sit **above** any other regex location in the server block. Otherwise an earlier `location ~* \.(js|css)$` cache rule would capture `/a/v/<cap>/app.js`, for example. A `location ~ /\.(?!well-known)` dotfile deny rule placed below keeps working for non-backend paths.
 
-**Feature:** artifact content (`/a/v/<cap>/<path>`, `/a/z/<cap>`) - see [Artifacts](../application/artifacts/artifacts.md).
-**Why a dedicated block:** the backend serves these with its own CSP sandbox and CORS headers; without the block they fall through to the SPA `try_files`.
-**Special requirements:** `proxy_buffering off` so large files and ranges stream; forwarded headers; no body-size override. **A production reverse proxy must forward `/a/` to the backend** (and must not add or override CSP/CORS headers on it). The per-request capability check means the proxy must not cache `/a/` responses. Note that the capability token is part of the URL path, so it appears in nginx access logs; treat those logs as sensitive (caps are short-lived and re-checked per request). Rule: never add a cookie-authenticated API with `SameSite=None`; artifact content is credential-free by design.
-**Upstream:** backend.
+**Upgrades.** A Cinna release that adds an origin-root backend path changes the regex here. Re-apply it on upgrade.
 
-### `/.well-known/oauth-protected-resource`
+**Check after reload.** Every path must print `0` (the backend answered); `1` means the SPA shell answered:
 
-**Feature:** RFC 9728 Protected Resource Metadata for MCP OAuth — see [MCP Integration](../application/mcp_integration/agent_mcp_architecture.md) and [MCP Connector Setup](../application/mcp_integration/mcp_connector_setup.md).
-**Why at origin root:** RFC 9728 requires the metadata document at the domain root, not under an API prefix.
-**Upstream:** backend.
+```bash
+H=https://your-host
+for p in /api/v1/utils/health-check/ /a/v/x/x /git/x.git/info/refs \
+         /agent-start /agent-hooks/x /mcp/x /.well-known/cinna-desktop \
+         /.well-known/oauth-authorization-server; do
+  printf '%-42s ' "$p"; curl -s "$H$p" | grep -c 'id="root"'
+done
+```
 
-### `/.well-known/oauth-authorization-server`
+## Backend paths
 
-**Feature:** RFC 8414 Authorization Server Metadata for MCP OAuth — see [MCP Integration](../application/mcp_integration/agent_mcp_architecture.md).
-**Why at origin root:** RFC 8414 requires the metadata document at the domain root.
-**Upstream:** backend.
+Everything outside these paths belongs to the SPA. Task-trigger webhooks (`/api/v1/hooks/{id}`), the CLI setup bootstrap (`/api/cli-setup/...`), the OpenAPI schema and the kit alias `/api/agent-start` all sit under `api/`.
 
-### `/.well-known/cinna-desktop`
+| Path | Feature | Why at the origin root |
+|------|---------|------------------------|
+| `/api/` | all REST API traffic, incl. the CLI and env-console WebSockets/SSE | — |
+| `/mcp/` | MCP Streamable HTTP and MCP OAuth: [MCP Integration](../application/mcp_integration/agent_mcp_architecture.md), [App MCP Server](../application/app_mcp_server/app_mcp_server_tech.md) | URLs held by external MCP clients |
+| `/ws/` | Socket.IO realtime events: [Realtime Events](../application/realtime_events/event_bus_system.md) | Socket.IO mount |
+| `/acp/` | ACP connectors (WebSocket, `ACP_SERVER_BASE_URL`) | URLs held by ACP clients |
+| `/a/` | artifact content: [Artifacts](../application/artifacts/artifacts.md) | content origin, see below |
+| `/git/` | desktop agent git: [Desktop Agents in the Catalog](../application/catalog/desktop_agents.md) | clone URLs held by desktops, no `/api/` alias |
+| `/agent-hooks/` | agent webhooks: [Agent Webhooks](../agents/agent_webhooks/agent_webhooks.md) | short URLs held by external systems |
+| `/agent-start` | Local Agent Kit: [Local Agent Kit](../application/local_agent_kit/local_agent_kit.md) | the pasteable URL |
+| `/.well-known/oauth-protected-resource` | RFC 9728 metadata for MCP OAuth | RFC requires the root |
+| `/.well-known/oauth-authorization-server` | RFC 8414 metadata for MCP OAuth | RFC requires the root |
+| `/.well-known/cinna-desktop` | Cinna Desktop discovery: [Desktop App Authentication](../application/desktop_auth/desktop_auth.md) | fetched before login, no API prefix known yet |
+| `/.well-known/cinna-app` | Cinna Mobile discovery (`/app-auth` surface) | same as `cinna-desktop` |
 
-**Feature:** Cinna Desktop instance discovery — see [Desktop App Authentication](../application/desktop_auth/desktop_auth.md).
-**Why at origin root:** The Cinna Desktop app fetches `https://{instance}/.well-known/cinna-desktop` before the user logs in to verify the instance and learn its OAuth URLs. It has no knowledge of API prefixes yet.
-**Upstream:** backend.
+### Cinna CLI (`/api/v1/cli/`)
 
-### `/.well-known/cinna-app`
+`WS /api/v1/cli/agents/{agent_id}/sync-stream` (Mutagen tunnel) and `POST /api/v1/cli/agents/{agent_id}/exec` (SSE) need the WebSocket upgrade, unbuffered responses and the 3600 s timeouts. The unified backend block provides all three. Older setups need a dedicated `location /api/v1/cli/` block before `/api/`. See [Cinna CLI Integration](../application/cinna_cli_integration/cinna_cli_integration.md).
 
-**Feature:** Cinna Mobile instance discovery (parallel `/app-auth` surface) — see [Desktop App Authentication](../application/desktop_auth/desktop_auth.md).
-**Why at origin root:** Same rationale as `cinna-desktop` — the Cinna Mobile app fetches `https://{instance}/.well-known/cinna-app` before login to learn the `/app-auth` OAuth URLs, with no knowledge of API prefixes yet.
-**Upstream:** backend.
+### Agent Environment Console (`/api/v1/env-console/`)
 
-### `/agent-hooks/`
+`WS /api/v1/env-console/{id}/terminal` and `WS .../{id}/logs/stream` are WebSocket-only routes. Behind a block without upgrade headers the handshake arrives as a plain `GET` and Starlette returns 404. Browsers cannot set `Authorization` on a WebSocket handshake, so the JWT travels in `?token=`. The proxy must not strip the query string. The routes sit under their own `/env-console` prefix so that a per-path setup can unbuffer them without unbuffering the REST environment routes. See [Agent Environment Console](../agents/agent_environments/agent_env_console.md).
 
-**Feature:** Agent Webhooks public execution endpoint — see [Agent Webhooks](../agents/agent_webhooks/agent_webhooks.md).
-**Why not under `/api/`:** Mounted at the app root (no `/api/v1` prefix) to match the task-trigger `/hooks/` convention and produce short, shareable URLs (`{host}/agent-hooks/{webhook_id}`).
-**Upstream:** backend.
+### Artifact content (`/a/`)
 
-Note: `/hooks/` (task triggers) carries the same requirement. Both paths must appear in the production reverse proxy config. In local docker-compose mode requests reach the backend directly via `VITE_API_URL`, so no `frontend/nginx.conf` block is needed.
+Paths `/a/v/<cap>/<path>` and `/a/z/<cap>`, all methods. The backend's `ArtifactContentMiddleware` answers the `OPTIONS` preflight itself, and an unknown `/a/...` path gets its 404 with sandbox headers. The pattern keeps the trailing slash, so the SPA pages `/artifacts` and `/artifact/<id>` are not captured.
 
-### `/agent-start`
+- **Which host.** The host of `artifacts_content_origin`: `ARTIFACTS_CONTENT_ORIGIN`, else `BACKEND_BASE_URL`, else `FRONTEND_HOST`. With a split API host the API host's proxy must route `/a/`. See [Artifacts tech: Deployment](../application/artifacts/artifacts_tech.md#deployment).
+- **Headers.** Do not add or override CSP, CORS or `X-Frame-Options`. The backend sets the sandbox CSP, `frame-ancestors <FRONTEND_HOST origin>` and `Access-Control-Allow-Origin: *`. nginx inheritance rule: a location without its own `add_header` inherits all of the `server` block's. A server-wide `X-Frame-Options SAMEORIGIN` is harmless while content shares the SPA's host, and blocks the viewer iframe once the content origin is another host. In that case move such headers into `location /`.
+- **Logs.** The capability is part of the URL path, so it appears in access logs. Treat them as sensitive (caps are short-lived and re-checked per request).
+- **Rule.** Never add a cookie-authenticated API with `SameSite=None`. Artifact content is credential-free by design.
+- **Symptom when not routed.** The viewer is blank, and the console shows `Cross-Origin Request Blocked ... /assets/index-<hash>.js (Reason: CORS header 'Access-Control-Allow-Origin' missing)` plus `Module source URI is not allowed in this document` at `index.html:13`. The SPA shell was served into the sandboxed iframe, whose origin is opaque (`null`), so its `crossorigin` module script fails CORS. The markdown, CSV and PDF viewers fail too, because they fetch `/a/v/...` and get HTML back.
+- **Verify.** `curl -si https://<content host>/a/v/invalid/x` returns `404` with `content-security-policy: sandbox ...` and `access-control-allow-origin: *`.
 
-**Feature:** Local Agent Kit public entrypoint — see [Local Agent Kit](../application/local_agent_kit/local_agent_kit.md).
-**Why at origin root:** `/agent-start` is the URL a user pastes into a coding assistant ("read `https://{instance}/agent-start` and help me start making my agents"). It has to be short and memorable, and it is read by callers that know nothing about the instance — including a plain browser, which gets an HTML landing page. Without this block the SPA shell answers it and the assistant reads an empty React page instead of the kit.
-**Match:** `location ~ ^/agent-start(/|$)` — a regex, not the prefix form. `/agent-start`, `/agent-start/`, `/agent-start/kit.tar.gz` and `/agent-start/kit/<path>` all reach the backend, and a future SPA route such as `/startup` does not (an nginx prefix match is on the raw string, so `location /agent-start` would swallow it).
-**Upstream:** backend. Unauthenticated and read-only by design; responses are `Cache-Control: public, max-age=300` and identical for every caller, so an intermediary cache in front is fine.
+### Local Agent Kit (`/agent-start`)
 
-**Local dev (Vite):** the Vite dev server has no nginx in front, so `frontend/vite.config.ts` carries the same rule as a `server.proxy` entry (`^/agent-start(/|$)` → `VITE_API_URL`). Without it `http://localhost:5173/agent-start` falls through to the SPA and 404s.
+`/agent-start` is what a user pastes into a coding assistant. A plain browser gets an HTML landing page. The pattern `agent-start(/|$)` matches `/agent-start`, `/agent-start/` and `/agent-start/<path>`, but not a future SPA route such as `/startup` or `/agent-starter`. A plain prefix `agent-start` would match those, because nginx prefix matching is on the raw string. Responses are `Cache-Control: public, max-age=300` and the same for every caller.
 
-**`/api/agent-start` alias:** the same router is mounted a second time under `/api/agent-start`, which the universal `/api/` block above already proxies. Every link *inside* the kit points at the alias, so an instance whose reverse proxy was never given a `/agent-start` block still serves a fully working kit — only the pretty URL is affected. Adding the block is still recommended: the pasteable prompt is the feature's entry point.
+The router is mounted a second time under `/api/agent-start`, and every link inside the kit points at that alias. An instance whose proxy lacks the `/agent-start` route still serves a working kit; only the pretty URL fails.
 
-### `/git/`
+**Local dev (Vite).** The Vite dev server has no nginx in front, so `frontend/vite.config.ts` carries `server.proxy` entries for `^/agent-start(/|$)` and `^/a/` → `VITE_API_URL`.
 
-**Feature:** desktop agent git smart HTTP (`/git/<repo_id>.git/...`) — see [Desktop Agents in the Catalog](../application/catalog/desktop_agents.md).
-**Why a dedicated block:** clones and pushes stream large packs both ways. The generic `/api/` block's 1 MB body default would break pushes, and there is deliberately no `/api/...` alias.
-**Special requirements:** `proxy_buffering off`, `proxy_request_buffering off`, `proxy_cache off`, `client_max_body_size 256m` (matches `GIT_MAX_PUSH_BYTES`), `proxy_read_timeout`/`proxy_send_timeout` 600s (matches `GIT_HTTP_TIMEOUT_SECONDS`), forwarded headers. Declare before `/`.
-**Upstream:** backend.
+### Git smart HTTP (`/git/`)
 
-### `/`
+`/git/<repo_id>.git/...` clones and pushes stream packs both ways. The block uses `proxy_buffering off`, `proxy_request_buffering off`, `client_max_body_size 256m` (= `GIT_MAX_PUSH_BYTES`) and 600 s timeouts (= `GIT_HTTP_TIMEOUT_SECONDS`). There is deliberately no `/api/` alias.
 
-**Feature:** frontend SPA. `try_files $uri $uri/ /index.html` to support client-side routing.
-**Upstream:** static files (served by nginx itself, no proxy).
+## Frontend container nginx
 
-## Configuration Files
+`frontend/nginx.conf` is baked into the frontend image. It keeps per-path blocks with `set $upstream http://backend:8000; proxy_pass $upstream;` and Docker's resolver, so nginx starts even before the backend container resolves. It must route the same backend paths as the production config, apart from those local docker-compose never sends through it (`/mcp/`, `/ws/`, `/acp/`, `/agent-hooks/`; the SPA reaches the backend directly via `VITE_API_URL`). `frontend/nginx-backend-not-found.conf` is a mountable snippet that returns 404 for `/api`, `/docs`, `/redoc` when the frontend container runs without a backend.
 
-- `frontend/nginx.conf` — in-container nginx config baked into the frontend Docker image. Serves the SPA and proxies `/api/`, the two WebSocket/SSE-upgrade blocks (`/api/v1/cli/`, `/api/v1/env-console/`) that must precede it, the `.well-known/*` URIs above, and `/agent-start`. Kept in parity with the production reverse proxy so the frontend container can act as the entry point in local docker-compose. (When the SPA talks to the backend directly via `VITE_API_URL`, these blocks are bypassed — but they must still match prod for correctness.)
-- `frontend/nginx-backend-not-found.conf` — mountable snippet that returns 404 for `/api`, `/docs`, `/redoc` when the frontend container is used without a backend in front.
-- Production reverse-proxy config — lives in deployment infrastructure (outside this repo). Must include all location blocks listed above.
+## Adding a backend path
 
-## Adding a New Well-Known URI
-
-When a new feature introduces a `/.well-known/*` endpoint:
-
-1. Register the route at the app level in `backend/app/main.py` (not under `/api/v1/`).
-2. Add a matching `location /.well-known/{name}` proxy block to `frontend/nginx.conf`.
-3. Add the same block to the production reverse proxy (deployment infra).
-4. Add a subsection to this doc under **Required Location Blocks** referencing the feature doc.
+1. **Prefer `/api/`.** A route under `/api/` needs no proxy change on any deployment. Add an origin-root path only when a spec requires it (`/.well-known/*`) or the URL is user-facing and has to be short (pasted, or stored by external systems).
+2. For an origin-root path:
+   - add it to the regex in [Production setup](#production-setup) (and to the comment list above it)
+   - add a block to `frontend/nginx.conf`, plus a `server.proxy` entry in `frontend/vite.config.ts` if it is hit from the browser in local dev
+   - add a row to [Backend paths](#backend-paths)
+   - add it to the check loop under [Production setup](#production-setup)
+3. Prefer serving the route under an `/api/...` alias as well (as `/agent-start` does), so a deployment that has not re-copied the file degrades to "the short URL fails" rather than "the feature fails".
+4. Say in the release notes that operators must re-apply the production config.
+5. A route whose needs exceed the backend block (bigger bodies, request streaming) gets its own location in the config, like `/git/`.
 
 ## Integration Points
 
-- [MCP Integration](../application/mcp_integration/agent_mcp_architecture.md) — uses `/mcp/`, `/.well-known/oauth-protected-resource`, `/.well-known/oauth-authorization-server`
-- [App MCP Server](../application/app_mcp_server/app_mcp_server.md) — shares the `/mcp/` routing with per-agent MCP servers
-- [Desktop App Authentication](../application/desktop_auth/desktop_auth.md) — uses `/.well-known/cinna-desktop`
-- [Artifacts](../application/artifacts/artifacts.md) — uses `/a/` and the artifact upload body-size block
-- [Realtime Events](../application/realtime_events/event_bus_system.md) — uses `/ws/`
-- [Cinna CLI Integration](../application/cinna_cli_integration/cinna_cli_integration.md) — uses `/api/v1/cli/` (WebSocket sync tunnel + SSE exec stream)
-- [Agent Environment Console](../agents/agent_environments/agent_env_console.md) — uses `/api/v1/env-console/` (`WS .../{id}/terminal` + `WS .../{id}/logs/stream`, web terminal + live logs follow)
-- [Agent Webhooks](../agents/agent_webhooks/agent_webhooks.md) — uses `/agent-hooks/` (public webhook execution, no JWT)
-- [Task Triggers](../application/input_tasks/task_triggers.md) — uses `/hooks/` (same pattern as agent webhooks, public webhook execution, no JWT)
-- [Local Agent Kit](../application/local_agent_kit/local_agent_kit.md) — uses `/agent-start` (public kit entrypoint, no auth) with the `/api/agent-start` alias as the no-proxy-change fallback
+- [Artifacts](../application/artifacts/artifacts.md): `/a/` and the backend-enforced upload cap
+- [MCP Integration](../application/mcp_integration/agent_mcp_architecture.md): `/mcp/`, `/.well-known/oauth-protected-resource`, `/.well-known/oauth-authorization-server`
+- [App MCP Server](../application/app_mcp_server/app_mcp_server.md): shares `/mcp/` with per-agent MCP servers
+- [Desktop App Authentication](../application/desktop_auth/desktop_auth.md): `/.well-known/cinna-desktop`, `/.well-known/cinna-app`
+- [Desktop Agents in the Catalog](../application/catalog/desktop_agents.md): `/git/`
+- [Realtime Events](../application/realtime_events/event_bus_system.md): `/ws/`
+- [Cinna CLI Integration](../application/cinna_cli_integration/cinna_cli_integration.md): `/api/v1/cli/` (WebSocket sync tunnel, SSE exec stream)
+- [Agent Environment Console](../agents/agent_environments/agent_env_console.md): `/api/v1/env-console/` (WebSocket terminal and logs follow)
+- [Agent Webhooks](../agents/agent_webhooks/agent_webhooks.md): `/agent-hooks/` (public, no JWT)
+- [Task Triggers](../application/input_tasks/task_triggers.md): `/api/v1/hooks/` (public, no JWT; under `/api/`)
+- [Local Agent Kit](../application/local_agent_kit/local_agent_kit.md): `/agent-start`, with the `/api/agent-start` alias as the fallback
+- [Data Volumes](data_volumes.md): storage mounts behind these routes
