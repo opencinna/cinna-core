@@ -252,6 +252,8 @@ independently use the same string.
 
 **What happens.** When the session-to-task status sync would move such a task to `completed`, it instead moves it `in_progress → blocked` as a system change with the reason **Ended without reporting** (a task not `in_progress` is left alone). A session **error** still sets `error`, and an explicit `force_status` is not intercepted. The status-repair sweep applies the same rule, writing the same reason. The task then waits for a person (or a later run) like any blocked task; nothing auto-completes it.
 
+**Session-owned exemption.** A [session-owned task](../../agents/agent_environment_core/cinna_tasks_tools.md#session-owned-tasks) is outside the rule: `requires_report` is false (context block `report required: no`), and session end, error, stop, the status-repair sweep and a person typing never move it (so it is not "ended → completed" nor "Ended without reporting"); only an explicit report, answer, close or a person's move does.
+
 **What does not change.** A task a user opened and assigned directly, and any task whose session runs on a protocol-0 environment, keep session-end auto-completion. A stored final report always takes precedence over session-derived status, as before.
 
 **The agent's side.** The context block of a conversation working on such a task shows `report required: yes`, and the `cinna-tasks` skill's first rule is to call `tasks_report` before ending the turn — see [Cinna Task Tools](../../agents/agent_environment_core/cinna_tasks_tools.md#the-report-rule).
@@ -420,6 +422,7 @@ Parent Task ──tasks_create(parent)──> Subtask ──auto_execute──> 
 
 ## Changelog
 
+- 2026-10-21: Session-owned tasks (`tasks_create` `category: active`, attaching `tasks_report`); exempt from the report rule and from session-end settlement. Contract 1.16.0, protocol_version stays 1.
 - 2026-09-11: External execution ownership prevents duplicate cinna runs; marker-aware web controls and owner events expose the execution source. Incremental paging now accepts a task ID alongside the timestamp, and completed tasks may restart through the validated status API.
 - 2026-09-19: Added the cross-agent delegation contract — `delegation_metadata` on create, the `handover_report` tool and its owner/environment report routes, the delegation reply route, and a status-sync guard that lets a structured `done`/`failed`/`blocked` result outlive session completion.
 - 2026-10-06: Cinna Task Protocol v1 — the `cinna` server's `tasks_*` tools replace the `agent_task` tools; `tasks_report` works on any assigned task; `tasks_create` without an assignee fills the caller's own queue, with chain limits (depth 2, 20 per conversation, new `chain_depth` column) and a report footer on every report-rule task; environments record `task_protocol_version`, and from version 1 agent- or automation-given work that ends without a final report is left blocked with "Ended without reporting"; result messages, handover prompts and the delegated-task footer are version-gated.

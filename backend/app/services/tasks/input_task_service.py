@@ -1428,6 +1428,7 @@ class InputTaskService:
                 changed_by_system=True, reason="Session started",
             )
             task.session_id = session_id
+            task.session_owned = False
             task.delegation_result = None
             task.error_message = None
             task.completed_at = None
@@ -1442,6 +1443,7 @@ class InputTaskService:
             return task
 
         task.session_id = session_id
+        task.session_owned = False
         task.delegation_result = None
         db_session.add(task)
         db_session.commit()
@@ -1459,6 +1461,71 @@ class InputTaskService:
             )
             db_session.refresh(task)
 
+        return task
+
+    @staticmethod
+    def bind_session_owned(
+        db_session: DBSession,
+        task_id: UUID,
+        session_id: UUID,
+        changed_by_agent_id: UUID | None,
+        reason: str,
+    ) -> InputTask:
+        """Make ``session_id`` the conversation working on the task, which it owns.
+
+        Sets ``task.session_id``, ``session.source_task_id`` and
+        ``task.session_owned`` and moves the task to in_progress, in one commit
+        under row locks on both rows. An unassigned task becomes the calling
+        agent's. Refused (ConflictError) when another conversation got there
+        first, the session meanwhile took a task, or the task is no longer
+        unstarted (a person moved it, or it was dispatched, since the caller
+        looked): only a task in Backlog or Ready that nothing runs is bound.
+        """
+        task = db_session.exec(select(InputTask).where(InputTask.id == task_id)
+                               .with_for_update().execution_options(populate_existing=True)).first()
+        if not task:
+            raise TaskNotFoundError()
+        session = db_session.exec(select(Session).where(Session.id == session_id)
+                                  .with_for_update().execution_options(populate_existing=True)).first()
+        if not session:
+            raise ValidationError("Session not found")
+        ref = task.short_code or str(task.id)
+        if session.source_task_id and session.source_task_id != task.id:
+            current = db_session.get(InputTask, session.source_task_id)
+            current_ref = (current.short_code or str(current.id)) if current else str(session.source_task_id)
+            raise ConflictError(f"This conversation is already working on {current_ref}")
+        if task.session_owned or (task.session_id and task.session_id != session.id):
+            raise ConflictError(f"{ref} is already being worked on in another conversation")
+        if (
+            task.status not in (InputTaskStatus.NEW, InputTaskStatus.OPEN)
+            or task.executed_at is not None
+            or task.auto_execute
+            or task.delegation_metadata
+            or task.external_executor
+        ):
+            raise ConflictError(f"{ref} is no longer waiting to be picked up; read it with tasks_get")
+
+        if task.selected_agent_id is None:
+            task.selected_agent_id = session.agent_id
+
+        from_status = InputTaskService._apply_status_transition(
+            db_session, task, InputTaskStatus.IN_PROGRESS,
+            changed_by_agent_id=changed_by_agent_id,
+            changed_by_system=changed_by_agent_id is None,
+            reason=reason,
+        )
+        task.session_id = session.id
+        task.session_owned = True
+        task.updated_at = datetime.now(UTC)
+        session.source_task_id = task.id
+        db_session.add(task)
+        db_session.add(session)
+        db_session.commit()
+        db_session.refresh(task)
+        if from_status is not None:
+            InputTaskService._emit_status_changed(
+                task, from_status, changed_by_agent_id=changed_by_agent_id,
+            )
         return task
 
     @staticmethod
@@ -1502,6 +1569,7 @@ class InputTaskService:
         # No sessions remain - reset to 'new'
         task.status = InputTaskStatus.NEW
         task.session_id = None
+        task.session_owned = False
         task.todo_progress = None
         task.error_message = None
         task.executed_at = None
@@ -1768,6 +1836,9 @@ class InputTaskService:
         An ordinary user-opened task, or one run on an older image, keeps
         session-end auto-completion.
         """
+        if task.session_owned:
+            # Its own conversation claimed it: settled by reports, not turn ends.
+            return False
         if InputTaskService.has_final_report(task):
             return False
         if not InputTaskService.is_automated(db_session, task):
@@ -1820,6 +1891,12 @@ class InputTaskService:
         # the report keeps status 'blocked' verbatim (so a retried report still
         # matches), and reply progress lives in reply_state.
         if InputTaskService.has_final_report(task):
+            return None
+
+        # A session-owned task is settled by the agent's reports, the answer to
+        # its question and a person's moves; how a turn ended says nothing
+        # (neither "ended without a report -> blocked" nor "ended -> completed").
+        if task.session_owned and not force_status:
             return None
 
         # Compute or use forced status
@@ -1880,7 +1957,10 @@ class InputTaskService:
                     return  # Session not linked to a task
 
                 task = db.get(InputTask, session.source_task_id)
-                if not task:
+                if not task or task.session_owned:
+                    # A session-owned task keeps its status when a turn starts:
+                    # a closed one is not reopened, and a blocked question is
+                    # resumed by the answer flow or the agent's next report.
                     return
 
                 # Only update if task is in execution phase
@@ -1993,7 +2073,8 @@ class InputTaskService:
                     return  # Session not linked to a task
 
                 task = db.get(InputTask, session.source_task_id)
-                if not task:
+                if not task or task.session_owned:
+                    # A failed or stopped turn leaves a session-owned task as it is.
                     return
 
                 # Only update if task is in execution phase
@@ -2109,6 +2190,13 @@ class InputTaskService:
                 if not task:
                     return
 
+                # A session-owned task tells its requester only when it closes.
+                if task.session_owned and task.status not in (
+                    InputTaskStatus.COMPLETED, InputTaskStatus.ERROR,
+                    InputTaskStatus.CANCELLED, InputTaskStatus.ARCHIVED,
+                ):
+                    return
+
                 # Deliver feedback if auto_feedback enabled and not already delivered
                 if task.auto_feedback and not task.feedback_delivered:
                     await InputTaskService.deliver_feedback_to_source(
@@ -2214,6 +2302,10 @@ class InputTaskService:
             True if feedback was delivered successfully
         """
         if not task.source_session_id:
+            return False
+        if task.source_session_id == task.session_id:
+            # The conversation that asked is the one doing the work (a task
+            # created with category active): there is nobody to tell.
             return False
 
         source_session = db_session.get(Session, task.source_session_id)

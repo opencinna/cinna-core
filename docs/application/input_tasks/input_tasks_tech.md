@@ -43,6 +43,7 @@
 
 **Migrations:**
 - `backend/app/alembic/versions/e5a9c3d7f2b4_add_chain_depth_to_input_task.py` — `input_task.chain_depth` (INTEGER, nullable)
+- `backend/app/alembic/versions/d26d5d827d17_input_task_session_owned.py` — `input_task.session_owned` (BOOLEAN, default false)
 - `backend/app/alembic/versions/d4f8b2c6e1a3_add_task_protocol_version_to_environment.py` — `agent_environment.task_protocol_version` (INTEGER NOT NULL, server default 0)
 - `backend/app/alembic/versions/l2g3h4i5j6k7_add_input_task_table.py` — initial `input_task` table
 - `backend/app/alembic/versions/o5j6k7l8m9n0_add_agent_initiated_fields_to_input_task.py` — agent_initiated, auto_execute, source_session_id
@@ -98,6 +99,7 @@ Core fields (existing):
 - `agent_initiated` (bool)
 - `auto_execute` (bool)
 - `source_session_id` (UUID FK → session.id, nullable)
+- `session_owned` (bool, default false) — the conversation running the task owns it; set by `InputTaskService.bind_session_owned`, cleared by `link_session` / `reset_task_if_no_sessions`; not in `InputTaskPublic`. Migration `d26d5d827d17_input_task_session_owned.py`
 - `chain_depth` (int, nullable) — depth in an agent task chain, recorded by `tasks_create` for tasks without `delegation_metadata`; NULL on older rows (see `InputTaskService.chain_depth`)
 - `auto_feedback` (bool, default=True)
 - `feedback_delivered` (bool, default=False)
@@ -368,6 +370,7 @@ Exception classes: `InputTaskError`, `TaskNotFoundError`, `AgentNotFoundError`, 
 - `handle_todo_list_updated()` — propagate session todos to task, emit `TASK_TODO_UPDATED`
 
 **Report rule and result packet:**
+- `bind_session_owned(...)` — atomically sets `session_owned`, `session_id` and `in_progress` (raises if already owned or run by another session); `requires_report` is false and `sync_task_status_from_sessions`, `handle_stream_started` and the status-repair sweep (`status_repair_tasks.py`, filter `session_owned IS FALSE`) skip session-owned tasks; `task_protocol_service._attachable` gates the `tasks_report` attach
 - `has_final_report(task)` — `delegation_result.status` is `done`/`failed`, or `blocked` with `reply_state != 'delivered'`; used by the status-sync guard
 - `is_automated(session, task)` — agent- or automation-given: `delegation_metadata`, `agent_initiated`, `source_session_id`, `created_by_node_id`, or a `TaskTrigger` row (not `auto_execute`); shared by the report rule and the footer
 - `requires_report(session, task)` — True when no final report is stored, `is_automated` holds, and its session's environment has `task_protocol_version >= 1`

@@ -28,7 +28,7 @@ class TasksCreateRequest(_ProtocolRequest):
     title: str = Field(min_length=1, max_length=500)
     description: str = Field(min_length=1, max_length=100000)
     priority: TaskPriority | None = None
-    category: Literal["backlog", "ready", "draft"] | None = None
+    category: Literal["backlog", "ready", "active", "draft"] | None = None
     parent: str | None = Field(default=None, min_length=1, max_length=128)
     assignee: str | None = Field(default=None, max_length=256)
     id: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9._-]{2,63}$")

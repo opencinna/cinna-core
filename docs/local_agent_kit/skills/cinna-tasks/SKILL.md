@@ -27,6 +27,7 @@ All task tools are on the `cinna` tool server and start with `tasks_`. A `ref` (
 | Say how your task went | `tasks_report {status, summary, question?, body?, artifacts?}` |
 | Leave a note or an intermediate finding | `tasks_comment {body, files?}` |
 | Put work in your own queue | `tasks_create {title, description, category?: ready}` |
+| Say this conversation is working on a task | `tasks_create {title, description, category: active}` for new work; `tasks_report {ref, status: in_progress, summary}` for a task that already exists |
 | Hand work to another agent | `tasks_targets`, then `tasks_create {assignee, id, title, description}`, then end the turn |
 | Answer a question from work you delegated | `tasks_reply {ref, message}` |
 | See what concerns you | `tasks_list {relation?, category?}` |
@@ -35,7 +36,7 @@ All task tools are on the `cinna` tool server and start with `tasks_`. A `ref` (
 
 ## Lifecycle
 
-Backlog, Ready, Active, then Waiting or Done. The host moves a task to Active when a turn starts on it. You move it out: `tasks_report done` or `failed` closes it, `blocked` parks it in Waiting with your question, `in_progress` records a progress line. `tasks_update {category}` is a person's move between Backlog, Ready, Done and Cancelled for a task nothing is working on; it is refused on anything with a run, a question or a delegation behind it.
+Backlog, Ready, Active, then Waiting or Done. The host moves a task to Active when a turn starts on it. `category: active` on your own create, or an `in_progress` report from a conversation with no current task, binds this conversation to the task; from then on the turn context names it, and only your reports or a person close it — ending a turn does not. You move it out: `tasks_report done` or `failed` closes it, `blocked` parks it in Waiting with your question, `in_progress` records a progress line. `tasks_update {category}` is a person's move between Backlog, Ready, Done and Cancelled for a task nothing is working on; it is refused on anything with a run, a question or a delegation behind it.
 
 ## Delegating
 

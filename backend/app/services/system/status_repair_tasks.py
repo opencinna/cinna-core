@@ -115,7 +115,7 @@ def _claim_still_held(task: InputTask, claim: _Claim) -> bool:
 def _repair_task(session: Session, claim: _Claim, now: datetime) -> bool:
     """Re-derive one task's status and write it if it changed."""
     task = session.get(InputTask, claim.task_id)
-    if task is None or not _claim_still_held(task, claim):
+    if task is None or task.session_owned or not _claim_still_held(task, claim):
         session.rollback()
         return False
 
@@ -226,6 +226,8 @@ async def repair_input_tasks(ctx: RepairContext) -> int:
             )
             .where(
                 InputTask.status == InputTaskStatus.IN_PROGRESS,
+                # A session-owned task settles by reports only; never repaired.
+                col(InputTask.session_owned).is_(False),
                 col(InputTask.executed_at).is_not(None),
                 col(InputTask.executed_at) < cutoff,
             )

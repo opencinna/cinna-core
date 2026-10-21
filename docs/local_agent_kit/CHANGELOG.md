@@ -16,6 +16,40 @@ folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
 
+## 1.16.0 — a conversation can own its task
+
+Additive. Every 1.x folder stays valid and needs no change, and a tool built
+against an earlier 1.x keeps operating a 1.16.0 folder, because the majors match.
+The task protocol stays at `protocol_version` 1: a host built before this
+release refuses `category: active` with its existing "Choose category backlog
+or ready" message rather than misreading it.
+
+An agent can now say that the conversation it is in is the one working on a
+task. The task shows on the board as Active, a person opens the conversation
+from it, and it closes when the agent reports or a person moves it, never
+because a turn ended.
+
+### Added
+
+- **`tasks_create.category: active`** (own queue only). Creates the task In
+  progress and binds the calling conversation to it. Refused with an
+  `assignee` ("`category: active` is for your own queue; a delegation starts at
+  once") and when the conversation already has a current task ("This
+  conversation is already working on <ref>"). The result carries
+  `attached: true`.
+
+### Changed
+
+- **`tasks_report` attaches when it can.** `in_progress` or `blocked` from a
+  conversation with no current task, on a task assigned to or created by the
+  agent that nothing has run or owns, binds the conversation to it and answers
+  with `attached: true`. `done` and `failed` on such a task close it as before.
+- **Settlement of a conversation-owned task is report-only.** Ending, erroring
+  or stopping a turn leaves its status as it is; the turn context names it with
+  `report required: no`.
+- **`cinna-tasks` skill**: one verb-table line and one Lifecycle sentence;
+  `references/file-protocol.md` notes that a file task's `id` is a valid `ref`.
+
 ## 1.15.0 — marketplace skills on desktop
 
 Additive. Every 1.x folder stays valid and needs no change, and a tool built

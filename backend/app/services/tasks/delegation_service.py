@@ -206,11 +206,15 @@ class DelegationService:
         """Deliver the owner's answer to a blocked report into its task session.
 
         ``require_delegation=False`` is the task protocol's ``tasks_reply``: a
-        blocked ``tasks_report`` on any task is answered the same way.
+        blocked ``tasks_report`` on any task is answered the same way. A
+        session-owned task's question is answered here too (the board's answer
+        flow): the reply goes into its own conversation.
         """
         # Serialize duplicate replies before any streaming side effect.
         task = _lock_task(db_session, task_id)
-        if not task or task.owner_id != user_id or (require_delegation and not task.delegation_metadata):
+        if not task or task.owner_id != user_id or (
+            require_delegation and not task.delegation_metadata and not task.session_owned
+        ):
             raise TaskNotFoundError()
         result = dict(task.delegation_result or {})
         if result.get('id') != str(data.result_id):

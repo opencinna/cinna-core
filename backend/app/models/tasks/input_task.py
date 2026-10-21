@@ -160,6 +160,14 @@ class InputTask(InputTaskBase, table=True):
     # tasks a person created.
     chain_depth: int | None = Field(default=None)
     external_executor: str | None = Field(default=None, max_length=100)
+    # Cinna Task Protocol: the conversation in ``session_id`` claimed this task
+    # itself (``tasks_create`` with ``category: active``, or an attaching
+    # ``tasks_report``). Such a task settles by the agent's reports, the answer
+    # to its question, or a person's move, never by a turn ending. Cleared when
+    # an execution links a new session (``link_session``).
+    session_owned: bool = Field(
+        default=False, nullable=False, sa_column_kwargs={"server_default": "false"}
+    )
 
 
 class ExternalExecutorFields(SQLModel):

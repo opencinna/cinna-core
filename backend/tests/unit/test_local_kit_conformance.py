@@ -132,12 +132,13 @@ def _load(rel: str):
 def test_contract_version_is_coherent_across_the_four_carriers() -> None:
     # LocalAgentKitService 503s the contract when these disagree.
     file_version = (KIT_DIR / "CONTRACT_VERSION").read_text(encoding="utf-8").strip()
-    assert file_version == "1.15.0"
+    assert file_version == "1.16.0"
     assert _load("kit.json")["contract_version"] == file_version
     assert _load("layout.json")["contract_version"] == file_version
     changelog = (KIT_DIR / "CHANGELOG.md").read_text(encoding="utf-8")
     assert f"## {file_version} — " in changelog
     assert "## 1.8.0 — shared agents" in changelog
+    assert "## 1.16.0 — a conversation can own its task" in changelog
     assert "## 1.15.0 — marketplace skills on desktop" in changelog
     assert "## 1.14.0 — Google OAuth credentials on desktop" in changelog
     # newest entry first: no higher-numbered heading precedes it

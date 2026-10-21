@@ -116,6 +116,17 @@ MAX_TASK_TEXT = 10000
 # DelegationReply.message.
 MAX_ANSWER = 10000
 
+# Refusals of `category: active`, word for word as Cinna Desktop mirrors them.
+ACTIVE_WITH_ASSIGNEE_REFUSAL = "`category: active` is for your own queue; a delegation starts at once"
+ALREADY_WORKING_REFUSAL = "This conversation is already working on {ref}"
+REPORT_ELSEWHERE_REFUSAL = (
+    "{ref} is being worked on in another conversation; only that conversation can report on it"
+)
+
+# Statuses a task may be attached from by a report: never run, not dispatched.
+ATTACHABLE_STATUSES = frozenset({InputTaskStatus.NEW, InputTaskStatus.OPEN})
+ATTACHING_REPORTS = frozenset({"in_progress", "blocked"})
+
 CUSTOM_FIELDS_REFUSAL = (
     "custom_fields are not supported on cinna-core (capabilities.custom_fields is false); "
     "put those values in the description instead"
@@ -437,6 +448,13 @@ class TaskProtocolService:
             raise ValidationError(CUSTOM_FIELDS_REFUSAL)
         if data.category == "draft":
             raise ValidationError("category `draft` is only for a delegation to a folder target; cinna-core has none")
+        active = data.category == "active"
+        if active:
+            if data.assignee and data.assignee.strip():
+                raise ValidationError(ACTIVE_WITH_ASSIGNEE_REFUSAL)
+            current = TaskProtocolService._current_task(db, ctx, session)
+            if current:
+                raise ConflictError(ALREADY_WORKING_REFUSAL.format(ref=_ref_of(current)))
         text_length = len(data.title) + len(data.description) + 2
         if text_length > MAX_TASK_TEXT:
             raise ValidationError(_too_long("title and description together", text_length))
@@ -513,6 +531,27 @@ class TaskProtocolService:
                 changed_by_agent_id=ctx.agent.id,
                 reason="Created as ready",
             )
+        if active:
+            # The create commits on its own, so a bind that loses a race (the
+            # conversation took another task meanwhile) removes the new task
+            # rather than leave a stray one in Backlog.
+            task_id = task.id
+            try:
+                task = InputTaskService.bind_session_owned(
+                    db, task_id, session.id,
+                    changed_by_agent_id=ctx.agent.id,
+                    reason="Created as active: this conversation is working on it",
+                )
+            except (ConflictError, ValidationError):
+                db.rollback()
+                orphan = db.get(InputTask, task_id)
+                if orphan:
+                    InputTaskService.delete_task(db, orphan)
+                raise
+            result = TaskProtocolService._create_result(db, ctx, task, created, delegation, notes)
+            result["attached"] = True
+            result["message"] = f"Task {result['ref']} created; this conversation is working on it."
+            return result
         return TaskProtocolService._create_result(db, ctx, task, created, delegation, notes)
 
     @staticmethod
@@ -725,16 +764,54 @@ class TaskProtocolService:
         return {"kind": "file", "name": name[:500]}, True
 
     @staticmethod
+    def _attachable(db: DBSession, ctx: AgentEnvContext, task: InputTask) -> bool:
+        """Whether a report may bind the calling conversation to ``task``.
+
+        The task is the caller's (assigned to it, or created by it in its own
+        queue), and nothing has run or owns it: no session, no delegation, no
+        external executor, not dispatched, still in Backlog or Ready.
+        """
+        if task.status not in ATTACHABLE_STATUSES or task.executed_at is not None:
+            return False
+        if task.session_owned or task.session_id or task.auto_execute:
+            return False
+        if task.delegation_metadata or task.external_executor:
+            return False
+        if task.selected_agent_id != ctx.agent.id and not (
+            task.selected_agent_id is None and TaskProtocolService._created_by_agent(db, task, ctx.agent.id)
+        ):
+            return False
+        ran = db.exec(select(Session.id).where(Session.source_task_id == task.id).limit(1)).first()
+        return ran is None
+
+    @staticmethod
     def report(db: DBSession, ctx: AgentEnvContext, data: TasksReportRequest) -> dict[str, Any]:
-        """Store the executor's statement on any task assigned to this agent."""
+        """Store the executor's statement on any task assigned to this agent.
+
+        From a conversation with no current task, an ``in_progress`` or
+        ``blocked`` report on an unowned task of the caller's first binds the
+        conversation to it (session-owned); ``done`` / ``failed`` never bind.
+        """
         session = TaskProtocolService._session(db, ctx, data.source_session_id)
         current = TaskProtocolService._current_task(db, ctx, session)
         task = TaskProtocolService._require_task(db, ctx, session, data.ref)
-        if task.selected_agent_id != ctx.agent.id:
+        attach = (
+            current is None
+            and data.status in ATTACHING_REPORTS
+            and TaskProtocolService._attachable(db, ctx, task)
+        )
+        if not attach and task.selected_agent_id != ctx.agent.id:
             raise PermissionDeniedError("You can report only on a task assigned to you")
+        # A task another conversation is running (dispatched, delegated or
+        # session-owned) takes reports from that conversation only. Its own
+        # session's earlier executions are refused by DelegationService.
+        if task.session_id and task.session_id != session.id and not (current and current.id == task.id):
+            raise ConflictError(REPORT_ELSEWHERE_REFUSAL.format(ref=_ref_of(task)))
 
+        # The person in a session-owned conversation is the one to ask.
         audience = data.audience or (
-            "requester" if (task.delegation_metadata or task.source_session_id) else "user"
+            "user" if (attach or task.session_owned)
+            else "requester" if (task.delegation_metadata or task.source_session_id) else "user"
         )
         artifacts = [TaskProtocolService._artifact(item) for item in data.artifacts]
         notes = [PATH_ARTIFACT_NOTE] if any(by_name for _a, by_name in artifacts) else []
@@ -750,6 +827,14 @@ class TaskProtocolService:
         except PydanticValidationError as error:
             raise ValidationError(_pydantic_message(error))
 
+        if attach:
+            task = InputTaskService.bind_session_owned(
+                db, task.id, session.id,
+                changed_by_agent_id=ctx.agent.id,
+                reason="Taken up by this conversation's report",
+            )
+            current = task
+
         # The conversation's own task carries its session, so a report from an
         # earlier execution is refused exactly as for a delegation.
         session_id = session.id if current and current.id == task.id else None
@@ -759,6 +844,8 @@ class TaskProtocolService:
             require_delegation=False,
         )
         result = {"ref": _ref_of(task), **stored.model_dump(mode="json")}
+        if attach:
+            result["attached"] = True
         if notes:
             result["notes"] = notes
         return result

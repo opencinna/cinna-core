@@ -6,7 +6,7 @@ Both file contracts use the same small frontmatter subset: flat `key: value` lin
 
 ## Own queue: `.cinna/tasks/<slug>.md`
 
-One file per task, directly under `.cinna/tasks/`. Create a task by writing a file; read your queue by listing the folder.
+One file per task, directly under `.cinna/tasks/`. Create a task by writing a file; read your queue by listing the folder. A file task's `id` is a valid `ref` for the `tasks_*` tools of the agent whose folder it is; the desktop resolves it.
 
 ```markdown
 ---

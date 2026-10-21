@@ -14,6 +14,8 @@ platform hands it. Each text follows the environment that consumes it:
   4. Feedback to a requester session at v0 keeps the `[Sub-task completed]`
      line pointing at mcp__agent_task__get_details, with no tasks_* names
      (the v1 result packet is covered in test_task_protocol_scenarios.py)
+  5. Contract 1.16.0 (`category: active`) is additive: tasks_targets still
+     answers protocol_version 1, before and after an active create
 
 The env version is not exposed by any public API, so it is read and set on
 the test DB, as test_task_report_rule.py does, right before the step that
@@ -285,3 +287,34 @@ def _task_id_by_code(client: TestClient, headers: dict, ref: str) -> str:
     r = client.get(f"{settings.API_V1_STR}/tasks/by-code/{ref}", headers=headers)
     assert r.status_code == 200, r.text
     return r.json()["id"]
+
+
+def test_active_category_keeps_protocol_version_one(
+    client: TestClient, superuser_token_headers: dict[str, str], db: Session,
+) -> None:
+    """`category: active` arrived without a protocol bump: a version-1
+    environment is answered protocol_version 1 and accepts `active`."""
+    from tests.utils.session import create_session_via_api
+
+    headers = superuser_token_headers
+    owner_id = _owner_id(client, headers)
+    agent = create_agent_via_api(client, headers, name="CTP Version Active")
+    drain_tasks()
+    _set_version(db, _environment(client, headers, db, agent["id"]), 1)
+    session_id = str(create_session_via_api(client, headers, agent["id"])["id"])
+    _, env_headers = create_env_with_token(db, agent_id=agent["id"], owner_id=owner_id)
+
+    def _version() -> int:
+        r = client.get(f"{_PROTOCOL}/targets", headers=env_headers,
+                       params={"source_session_id": session_id})
+        assert r.status_code == 200, r.text
+        return r.json()["protocol_version"]
+
+    assert _version() == 1
+    r = client.post(f"{_PROTOCOL}/create", headers=env_headers, json={
+        "source_session_id": session_id, "title": "Own it", "description": "Now",
+        "category": "active",
+    })
+    assert r.status_code == 200, r.text
+    assert r.json()["attached"] is True
+    assert _version() == 1

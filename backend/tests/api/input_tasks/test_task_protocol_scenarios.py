@@ -30,12 +30,31 @@ description cap. This file fills the gaps:
      built by the older routes, whose rows carry no chain_depth)
  17. 20 creates per conversation; a repeated `id` is still answered at the cap
  18. A non-lead team member's own subtask lands in its own queue
+ 19. `category: active` binds the calling conversation (session-owned);
+     refused with an assignee and from a conversation that has a task
+ 20. A session-owned task: turn end, a failed turn, a turn start and the
+     status repair leave it; blocked -> tasks_reply -> the same conversation
+     continues; done closes it with no result packet to itself
+ 21. tasks_report attaches an unowned task of the caller's (in_progress,
+     blocked); done does not; no ref never binds; a task another
+     conversation works on is refused; not-the-caller's is refused
+ 22. A non-owned own-queue task still follows the report rule (ended
+     without a report -> blocked)
+ 23. Attach edge cases: an unassigned task the agent created is assigned on
+     attach and later closed; a task created in one conversation and
+     attached in another tells the first only when done; a task the person
+     completed is not reopened; a foreign task gets the authorization
+     refusal before the "another conversation" one
+ 24. A lost `active` create race leaves no stray task
+ 25. The person answers a session-owned question on delegation-reply;
+     a task with neither a delegation nor an owner is still a 404
 
 Like the other input_tasks protocol files, a few setup steps and the result
 packet renderer touch the test DB / service directly: there is no API that
 mints an env token, and the packet is only otherwise visible after a full
 second executor turn.
 """
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 from uuid import UUID
 
@@ -56,9 +75,14 @@ from tests.utils.input_task import (
     get_task_detail,
     get_task_sessions,
     list_comments,
+    force_task_stranded_in_progress,
+    list_tasks,
     set_task_status,
+    update_task,
 )
 from tests.utils.message import list_messages, send_message
+from tests.utils.session import create_session_via_api, get_session
+from tests.utils.status_repair import RepairTick
 
 _PROTOCOL = f"{settings.API_V1_STR}/agent/tasks/protocol"
 _AGENT_ENV_PATCH = "app.services.sessions.message_service.agent_env_connector"
@@ -1120,3 +1144,527 @@ def test_team_member_own_subtask_lands_in_its_own_queue(
     assert task["assigned_node_id"] == member_node["id"]
     assert task["status"] == "new" and task["session_id"] is None
     assert get_task_sessions(client, headers, task["id"]) == []
+
+
+# ── 19–22. Session-owned tasks (`category: active`, attaching reports) ───
+
+ACTIVE_WITH_ASSIGNEE = "`category: active` is for your own queue; a delegation starts at once"
+
+
+def _session_owned(db: Session, task_id: str) -> bool:
+    """InputTask.session_owned (not exposed by any public schema)."""
+    from app.models import InputTask
+
+    db.expire_all()
+    return db.get(InputTask, UUID(task_id)).session_owned
+
+
+def _conversation(client: TestClient, headers: dict, agent_id: str) -> str:
+    """A plain conversation with the agent: no task behind it."""
+    session = create_session_via_api(client, headers, agent_id)
+    assert session["source_task_id"] is None
+    return str(session["id"])
+
+
+def _turn(client: TestClient, headers: dict, session_id: str, text: str,
+          stub: StubAgentEnvConnector | None = None) -> None:
+    """One person's message and the agent's turn on it, streamed to the end."""
+    with patch(_AGENT_ENV_PATCH, stub or StubAgentEnvConnector(response_text="Still on it")):
+        send_message(client, headers, session_id, text)
+        drain_tasks()
+
+
+def _assert_bound(client: TestClient, headers: dict, db: Session, task_id: str,
+                  session_id: str) -> dict:
+    task = get_task(client, headers, task_id)
+    assert task["session_id"] == session_id
+    assert get_session(client, headers, session_id)["source_task_id"] == task_id
+    assert _session_owned(db, task_id) is True
+    return task
+
+
+def _result_packets(client: TestClient, headers: dict, session_id: str) -> list[str]:
+    return [m["content"] for m in list_messages(client, headers, session_id)
+            if m["role"] == "user" and m["content"].startswith("Task result from")]
+
+
+def test_active_create_binds_the_conversation_and_its_refusals(
+    client: TestClient, superuser_token_headers: dict[str, str], db: Session,
+) -> None:
+    """
+      1. With an assignee, `active` is refused; nothing is created
+      2. Own create with `active`: in_progress, attached, session-owned, the
+         conversation and the task point at each other
+      3. The turn context names it as the current task, report required: no
+      4. A second `active` create from the same conversation is refused
+         naming the task it works on; so is one from a conversation that
+         runs a dispatched task
+    """
+    headers = superuser_token_headers
+    owner_id = _owner_id(client, headers)
+    agent = create_agent_via_api(client, headers, name="CTP Active Creator")
+    peer = create_agent_via_api(client, headers, name="CTP Active Peer")
+    drain_tasks()
+    _set_env_version(client, headers, db, agent["id"], 1)
+    session_id = _conversation(client, headers, agent["id"])
+    _, env_headers = create_env_with_token(db, agent_id=agent["id"], owner_id=owner_id)
+
+    # ── Phase 1: active with an assignee ───────────────────────────────
+    for assignee in (peer["name"], f"agent:{peer['id']}"):
+        r = _post(client, env_headers, "create", session_id, title="Delegate", description="Do",
+                  assignee=assignee, category="active")
+        assert r.status_code == 400, r.text
+        assert r.json()["detail"] == ACTIVE_WITH_ASSIGNEE
+    r = _get(client, env_headers, "list", session_id, relation="assigned")
+    assert r.status_code == 200, r.text
+    assert get_session(client, headers, session_id)["source_task_id"] is None
+
+    # ── Phase 2: own active create binds this conversation ─────────────
+    created = _own(client, env_headers, session_id, "Plan the launch", category="active")
+    assert created["attached"] is True and created["created"] is True
+    assert created["status"] == "in_progress" and created["category"] == "active"
+    assert created["assignee"] == agent["name"] and created["relation"] == "assigned"
+    assert "this conversation is working on it" in created["message"]
+    task = get_task_by_code(client, headers, created["ref"])
+    assert task["status"] == "in_progress"
+    assert task["selected_agent_id"] == agent["id"]
+    assert task["source_session_id"] == session_id
+    _assert_bound(client, headers, db, task["id"], session_id)
+    reasons = [h["reason"] for h in get_task_detail(client, headers, task["id"])["status_history"]]
+    assert "Created as active: this conversation is working on it" in reasons
+    r = _get(client, env_headers, "get", session_id, ref=created["ref"])
+    assert r.status_code == 200 and r.json()["category"] == "active"
+
+    # ── Phase 3: the turn context names it, no report required ─────────
+    context = _session_protocol(db, session_id, agent["id"])
+    assert context["current_task"] == {
+        "ref": created["ref"], "title": task["title"], "report_required": False,
+    }
+
+    # ── Phase 4: a conversation that already has a task ────────────────
+    r = _post(client, env_headers, "create", session_id, title="Second", description="Again",
+              category="active")
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"] == f"This conversation is already working on {created['ref']}"
+    host, host_session = _running_session(client, headers, agent["id"])
+    r = _post(client, env_headers, "create", host_session, title="Third", description="Again",
+              category="active")
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"] == f"This conversation is already working on {host['short_code']}"
+    # Neither refusal moved anything.
+    assert get_session(client, headers, session_id)["source_task_id"] == task["id"]
+    assert get_session(client, headers, host_session)["source_task_id"] == host["id"]
+    assert _session_owned(db, host["id"]) is False
+    # A plain own create from the bound conversation still lands in the queue.
+    plain = _own(client, env_headers, session_id, "Queue item")
+    assert "attached" not in plain and plain["status"] == "new"
+
+
+def test_session_owned_task_is_settled_by_reports_not_turns(
+    client: TestClient, superuser_token_headers: dict[str, str], db: Session,
+) -> None:
+    """
+      1. Active create, then a full turn in its conversation: stays in_progress
+      2. A turn that errors: stays in_progress
+      3. The status repair skips it even past the age threshold
+      4. blocked report: audience defaults to the user; a new turn does not
+         unblock it
+      5. tasks_reply answers the question into the same conversation: back
+         to in_progress, still owned by it
+      6. done closes it; no result packet lands in its own conversation; a
+         later turn does not reopen it
+    """
+    headers = superuser_token_headers
+    owner_id = _owner_id(client, headers)
+    agent = create_agent_via_api(client, headers, name="CTP Owned Settlement")
+    drain_tasks()
+    _set_env_version(client, headers, db, agent["id"], 1)
+    session_id = _conversation(client, headers, agent["id"])
+    _, env_headers = create_env_with_token(db, agent_id=agent["id"], owner_id=owner_id)
+    created = _own(client, env_headers, session_id, "Long running", category="active")
+    task_id = get_task_by_code(client, headers, created["ref"])["id"]
+
+    # ── Phase 1: a turn ends without a report ──────────────────────────
+    _turn(client, headers, session_id, "How is it going?")
+    assert get_task(client, headers, task_id)["status"] == "in_progress"
+    detail = get_task_detail(client, headers, task_id)
+    assert not any("Ended without reporting" in c["content"] for c in detail["comments"])
+    _assert_bound(client, headers, db, task_id, session_id)
+
+    # ── Phase 2: a turn that errors ────────────────────────────────────
+    _turn(client, headers, session_id, "Try again",
+          StubAgentEnvConnector(events=[{"type": "error", "content": "Agent crashed"}]))
+    assert get_task(client, headers, task_id)["status"] == "in_progress"
+    _assert_bound(client, headers, db, task_id, session_id)
+
+    # ── Phase 3: status repair leaves it ───────────────────────────────
+    force_task_stranded_in_progress(
+        db, task_id, executed_at=datetime.now(UTC) - timedelta(days=2),
+    )
+    assert RepairTick(db).run_input_tasks() == 0
+    assert get_task(client, headers, task_id)["status"] == "in_progress"
+
+    # ── Phase 4: blocked; a new turn does not unblock it ───────────────
+    r = _post(client, env_headers, "report", session_id, status="blocked", summary="Need a date",
+              question="Which launch date?")
+    assert r.status_code == 200, r.text
+    assert r.json()["ref"] == created["ref"] and r.json()["audience"] == "user"
+    assert "attached" not in r.json()
+    assert get_task(client, headers, task_id)["status"] == "blocked"
+    _turn(client, headers, session_id, "Unrelated chat")
+    assert get_task(client, headers, task_id)["status"] == "blocked"
+
+    # ── Phase 5: the answer resumes the same conversation ──────────────
+    with patch(_AGENT_ENV_PATCH, StubAgentEnvConnector(response_text="Thanks, continuing")):
+        r = _post(client, env_headers, "reply", session_id, ref=created["ref"],
+                  message="March 3rd")
+        drain_tasks()
+    assert r.status_code == 200, r.text
+    assert r.json()["answered_question"] is True and r.json()["delivered"] is True
+    assert any("March 3rd" in m["content"] for m in list_messages(client, headers, session_id))
+    assert get_task(client, headers, task_id)["status"] == "in_progress"
+    _assert_bound(client, headers, db, task_id, session_id)
+
+    # ── Phase 6: done closes it, and it stays closed ───────────────────
+    r = _post(client, env_headers, "report", session_id, status="done", summary="Launched")
+    assert r.status_code == 200, r.text
+    drain_tasks()
+    assert get_task(client, headers, task_id)["status"] == "completed"
+    assert _result_packets(client, headers, session_id) == []
+    _turn(client, headers, session_id, "Thanks!")
+    assert get_task(client, headers, task_id)["status"] == "completed"
+    assert _result_packets(client, headers, session_id) == []
+
+
+def test_report_attaches_an_unowned_task_and_done_does_not(
+    client: TestClient, superuser_token_headers: dict[str, str], db: Session,
+) -> None:
+    """
+      1. in_progress by ref from a conversation with no task: attaches a
+         backlog task the agent created (attached, session-owned, bound)
+      2. blocked by ref attaches a ready task assigned by the person, with
+         the user as the audience
+      3. done by ref on an unowned task closes it without binding
+      4. A report without ref from a conversation with no task never binds
+      5. A task another conversation works on is refused, for any status
+      6. A task not assigned to the caller does not attach and is refused
+    """
+    headers = superuser_token_headers
+    owner_id = _owner_id(client, headers)
+    agent = create_agent_via_api(client, headers, name="CTP Attach Reporter")
+    drain_tasks()
+    _set_env_version(client, headers, db, agent["id"], 1)
+    _, host_session = _running_session(client, headers, agent["id"])
+    _, env_headers = create_env_with_token(db, agent_id=agent["id"], owner_id=owner_id)
+    backlog = _own(client, env_headers, host_session, "Backlog work")
+    finished = _own(client, env_headers, host_session, "Already finished")
+    ready = create_task(client, headers, original_message="Ready work",
+                        selected_agent_id=agent["id"])
+    set_task_status(client, headers, ready["id"], "open")
+
+    # ── Phase 1: in_progress attaches ──────────────────────────────────
+    first = _conversation(client, headers, agent["id"])
+    r = _post(client, env_headers, "report", first, ref=backlog["ref"], status="in_progress",
+              summary="Picking this up")
+    assert r.status_code == 200, r.text
+    assert r.json()["attached"] is True and r.json()["status"] == "in_progress"
+    assert r.json()["audience"] == "user"
+    backlog_id = get_task_by_code(client, headers, backlog["ref"])["id"]
+    task = _assert_bound(client, headers, db, backlog_id, first)
+    assert task["status"] == "in_progress"
+    reasons = [h["reason"] for h in get_task_detail(client, headers, backlog_id)["status_history"]]
+    assert "Taken up by this conversation's report" in reasons
+    assert _session_protocol(db, first, agent["id"])["current_task"]["report_required"] is False
+    # Now its current task: a report without ref lands on it.
+    r = _post(client, env_headers, "report", first, status="in_progress", summary="Halfway")
+    assert r.status_code == 200, r.text
+    assert r.json()["ref"] == backlog["ref"] and "attached" not in r.json()
+
+    # ── Phase 2: blocked attaches a ready task the person assigned ─────
+    second = _conversation(client, headers, agent["id"])
+    r = _post(client, env_headers, "report", second, ref=ready["short_code"], status="blocked",
+              summary="Need access", question="Which repository?")
+    assert r.status_code == 200, r.text
+    assert r.json()["attached"] is True and r.json()["audience"] == "user"
+    assert r.json()["question"] == "Which repository?"
+    task = _assert_bound(client, headers, db, ready["id"], second)
+    assert task["status"] == "blocked"
+
+    # ── Phase 3: done closes without binding ───────────────────────────
+    third = _conversation(client, headers, agent["id"])
+    r = _post(client, env_headers, "report", third, ref=finished["ref"], status="done",
+              summary="Was already done")
+    assert r.status_code == 200, r.text
+    assert "attached" not in r.json()
+    finished_task = get_task_by_code(client, headers, finished["ref"])
+    assert finished_task["status"] == "completed" and finished_task["session_id"] is None
+    assert _session_owned(db, finished_task["id"]) is False
+    assert get_session(client, headers, third)["source_task_id"] is None
+
+    # ── Phase 4: no ref, no task: nothing is created or bound ──────────
+    r = _post(client, env_headers, "report", third, status="in_progress", summary="Stray")
+    assert r.status_code == 400, r.text
+    assert "pass `ref`" in r.json()["detail"]
+    assert get_session(client, headers, third)["source_task_id"] is None
+
+    # ── Phase 5: a task another conversation works on ──────────────────
+    elsewhere = (f"{backlog['ref']} is being worked on in another conversation; "
+                 "only that conversation can report on it")
+    for status, extra in (("in_progress", {}), ("done", {}),
+                          ("blocked", {"question": "Mine?"})):
+        r = _post(client, env_headers, "report", third, ref=backlog["ref"], status=status,
+                  summary="Not mine", **extra)
+        assert r.status_code == 409, (status, r.text)
+        assert r.json()["detail"] == elsewhere
+    # A conversation running a dispatched task is refused the same way.
+    r = _post(client, env_headers, "report", host_session, ref=backlog["ref"], status="done",
+              summary="Not mine")
+    assert r.status_code == 409 and r.json()["detail"] == elsewhere
+    _assert_bound(client, headers, db, backlog_id, first)
+    assert get_task(client, headers, backlog_id)["status"] == "in_progress"
+    assert get_session(client, headers, third)["source_task_id"] is None
+
+    # ── Phase 6: not the caller's ──────────────────────────────────────
+    unassigned = create_task(client, headers, original_message="Nobody's yet")
+    r = _post(client, env_headers, "report", third, ref=unassigned["short_code"],
+              status="in_progress", summary="Taking it")
+    assert r.status_code == 400, r.text
+    assert "assigned to you" in r.json()["detail"]
+    assert get_task(client, headers, unassigned["id"])["session_id"] is None
+    assert _session_owned(db, unassigned["id"]) is False
+    assert get_session(client, headers, third)["source_task_id"] is None
+
+
+def test_own_queue_task_not_session_owned_keeps_the_report_rule(
+    client: TestClient, superuser_token_headers: dict[str, str], db: Session,
+) -> None:
+    """An own-queue task the person runs (not attached) is not session-owned:
+    the context asks for a report and a turn ending without one blocks it."""
+    headers = superuser_token_headers
+    owner_id = _owner_id(client, headers)
+    agent = create_agent_via_api(client, headers, name="CTP Not Owned")
+    drain_tasks()
+    _set_env_version(client, headers, db, agent["id"], 1)
+    _, host_session = _running_session(client, headers, agent["id"])
+    _, env_headers = create_env_with_token(db, agent_id=agent["id"], owner_id=owner_id)
+    own = _own(client, env_headers, host_session, "Queued for later")
+    task_id = get_task_by_code(client, headers, own["ref"])["id"]
+
+    with patch(_AGENT_ENV_PATCH, StubAgentEnvConnector(response_text="Done, I think")):
+        run_session = str(execute_task(client, headers, task_id)["session_id"])
+        drain_tasks()
+
+    task = get_task(client, headers, task_id)
+    assert task["session_id"] == run_session
+    assert _session_owned(db, task_id) is False
+    assert task["status"] == "blocked"
+    blocked = [h for h in get_task_detail(client, headers, task_id)["status_history"]
+               if h["to_status"] == "blocked"]
+    assert blocked and blocked[-1]["reason"] == "Ended without reporting"
+    assert _session_protocol(db, run_session, agent["id"])["current_task"]["report_required"] is True
+
+
+def _task_row(db: Session, task_id: str):
+    """The InputTask row, for columns no public schema carries."""
+    from app.models import InputTask
+
+    db.expire_all()
+    return db.get(InputTask, UUID(task_id))
+
+
+def test_attach_edge_cases_feedback_and_refusal_order(
+    client: TestClient, superuser_token_headers: dict[str, str], db: Session,
+) -> None:
+    """
+      1. An unassigned task the agent created attaches, is assigned to the
+         agent, and a later done from that conversation closes it
+      2. Created in conversation A, attached from B: blocked and turn ends in
+         B tell A nothing; done does (one result packet in A)
+      3. A task the person completed before the attach is not reopened
+      4. A task assigned to another agent, running in another session: the
+         authorization refusal, not the "another conversation" 409
+    """
+    headers = superuser_token_headers
+    owner_id = _owner_id(client, headers)
+    agent = create_agent_via_api(client, headers, name="CTP Attach Edges")
+    peer = create_agent_via_api(client, headers, name="CTP Attach Edges Peer")
+    drain_tasks()
+    _set_env_version(client, headers, db, agent["id"], 1)
+    source = _conversation(client, headers, agent["id"])
+    _, env_headers = create_env_with_token(db, agent_id=agent["id"], owner_id=owner_id)
+
+    # ── Phase 1: unassigned, created by the agent ──────────────────────
+    created = _own(client, env_headers, source, "Unassigned later")
+    created_id = get_task_by_code(client, headers, created["ref"])["id"]
+    update_task(client, headers, created_id, selected_agent_id=None)
+    assert get_task(client, headers, created_id)["selected_agent_id"] is None
+    worker = _conversation(client, headers, agent["id"])
+    r = _post(client, env_headers, "report", worker, ref=created["ref"], status="in_progress",
+              summary="Mine now")
+    assert r.status_code == 200, r.text
+    assert r.json()["attached"] is True
+    task = _assert_bound(client, headers, db, created_id, worker)
+    assert task["selected_agent_id"] == agent["id"]
+    r = _post(client, env_headers, "report", worker, status="done", summary="Finished it")
+    assert r.status_code == 200, r.text
+    drain_tasks()
+    assert get_task(client, headers, created_id)["status"] == "completed"
+
+    # ── Phase 2: created in A, attached in B; A hears only the end ─────
+    packets_before = len(_result_packets(client, headers, source))
+    later = _own(client, env_headers, source, "Hand to another chat")
+    later_id = get_task_by_code(client, headers, later["ref"])["id"]
+    other = _conversation(client, headers, agent["id"])
+    r = _post(client, env_headers, "report", other, ref=later["ref"], status="in_progress",
+              summary="Taking it here")
+    assert r.status_code == 200 and r.json()["attached"] is True, r.text
+    _assert_bound(client, headers, db, later_id, other)
+    _turn(client, headers, other, "Keep going")
+    r = _post(client, env_headers, "report", other, status="blocked", summary="Question",
+              question="Proceed?")
+    assert r.status_code == 200, r.text
+    assert r.json()["audience"] == "user"
+    drain_tasks()
+    _turn(client, headers, other, "Thinking")
+    assert get_task(client, headers, later_id)["status"] == "blocked"
+    assert _task_row(db, later_id).feedback_delivered is False
+    assert len(_result_packets(client, headers, source)) == packets_before
+    r = _post(client, env_headers, "report", other, status="done", summary="All done")
+    assert r.status_code == 200, r.text
+    drain_tasks()
+    assert get_task(client, headers, later_id)["status"] == "completed"
+    # The turn that filed the report ends: that is when A hears of it.
+    _turn(client, headers, other, "Wrap up")
+    assert _task_row(db, later_id).feedback_delivered is True
+    packets = _result_packets(client, headers, source)
+    assert len(packets) == packets_before + 1
+    assert later["ref"] in packets[-1].splitlines()[0]
+    assert _result_packets(client, headers, other) == []
+
+    # ── Phase 3: the person completed it first ─────────────────────────
+    closed = _own(client, env_headers, source, "Closed by the person")
+    closed_id = get_task_by_code(client, headers, closed["ref"])["id"]
+    set_task_status(client, headers, closed_id, "in_progress")
+    set_task_status(client, headers, closed_id, "completed")
+    fresh = _conversation(client, headers, agent["id"])
+    r = _post(client, env_headers, "report", fresh, ref=closed["ref"], status="in_progress",
+              summary="Reopen?")
+    assert "attached" not in (r.json() if r.status_code == 200 else {}), r.text
+    task = get_task(client, headers, closed_id)
+    assert task["status"] == "completed" and task["session_id"] is None
+    assert _session_owned(db, closed_id) is False
+    assert get_session(client, headers, fresh)["source_task_id"] is None
+    # The person's move landed between the up-front check and the bind: the
+    # locked re-check in the bind refuses it (staged by letting the up-front
+    # check pass; the bind itself runs for real).
+    with patch(
+        "app.services.tasks.task_protocol_service.TaskProtocolService._attachable",
+        staticmethod(lambda db, ctx, task: True),
+    ):
+        r = _post(client, env_headers, "report", fresh, ref=closed["ref"], status="in_progress",
+                  summary="Reopen?")
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"] == (
+        f"{closed['ref']} is no longer waiting to be picked up; read it with tasks_get"
+    )
+    task = get_task(client, headers, closed_id)
+    assert task["status"] == "completed" and task["session_id"] is None
+    assert _session_owned(db, closed_id) is False
+    assert get_session(client, headers, fresh)["source_task_id"] is None
+
+    # ── Phase 4: refusal order on a task that is not the caller's ──────
+    peer_task, _peer_session = _running_session(client, headers, peer["id"])
+    for status in ("in_progress", "done"):
+        r = _post(client, env_headers, "report", fresh, ref=peer_task["short_code"],
+                  status=status, summary="Not mine")
+        assert r.status_code == 400, (status, r.text)
+        assert r.json()["detail"] == "You can report only on a task assigned to you"
+    assert get_task(client, headers, peer_task["id"])["status"] == "in_progress"
+
+
+def test_lost_active_create_race_leaves_no_stray_task(
+    client: TestClient, superuser_token_headers: dict[str, str], db: Session,
+) -> None:
+    """Two `active` creates from one conversation race: both pass the
+    up-front current-task check, the loser is refused when it binds, and no
+    task of its own is left behind.
+
+    The race is staged by hiding the winner from the loser's up-front check
+    (`_current_task` -> None), which is exactly what the loser saw before the
+    winner committed; everything after it, the locked bind, runs for real.
+    """
+    headers = superuser_token_headers
+    owner_id = _owner_id(client, headers)
+    agent = create_agent_via_api(client, headers, name="CTP Active Race")
+    drain_tasks()
+    _set_env_version(client, headers, db, agent["id"], 1)
+    session_id = _conversation(client, headers, agent["id"])
+    _, env_headers = create_env_with_token(db, agent_id=agent["id"], owner_id=owner_id)
+    winner = _own(client, env_headers, session_id, "Winner", category="active")
+    winner_id = get_task_by_code(client, headers, winner["ref"])["id"]
+    before = list_tasks(client, headers, limit=1000)["count"]
+
+    with patch(
+        "app.services.tasks.task_protocol_service.TaskProtocolService._current_task",
+        staticmethod(lambda db, ctx, session: None),
+    ):
+        r = _post(client, env_headers, "create", session_id, title="Loser",
+                  description="Too late", category="active")
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"] == f"This conversation is already working on {winner['ref']}"
+    assert list_tasks(client, headers, limit=1000)["count"] == before
+    titles = [t["title"] for t in list_tasks(client, headers, limit=1000)["data"]]
+    assert "Loser" not in titles
+    _assert_bound(client, headers, db, winner_id, session_id)
+
+
+def test_person_answers_a_session_owned_question_via_delegation_reply(
+    client: TestClient, superuser_token_headers: dict[str, str], db: Session,
+) -> None:
+    """
+      1. A session-owned task reports blocked (audience: the user)
+      2. The person answers on /tasks/{id}/delegation-reply: delivered into
+         the task's own conversation, back to in_progress, still owned by it
+      3. A task with no delegation and not session-owned is still a 404
+    """
+    headers = superuser_token_headers
+    owner_id = _owner_id(client, headers)
+    agent = create_agent_via_api(client, headers, name="CTP Person Answers")
+    drain_tasks()
+    _set_env_version(client, headers, db, agent["id"], 1)
+    session_id = _conversation(client, headers, agent["id"])
+    _, env_headers = create_env_with_token(db, agent_id=agent["id"], owner_id=owner_id)
+    created = _own(client, env_headers, session_id, "Needs the person", category="active")
+    task_id = get_task_by_code(client, headers, created["ref"])["id"]
+
+    # ── Phase 1: blocked, the question is for the user ─────────────────
+    r = _post(client, env_headers, "report", session_id, status="blocked", summary="Need a name",
+              question="What should the product be called?")
+    assert r.status_code == 200, r.text
+    assert r.json()["audience"] == "user"
+    result_id = r.json()["id"]
+    assert get_task(client, headers, task_id)["status"] == "blocked"
+
+    # ── Phase 2: the person's answer resumes the same conversation ─────
+    with patch(_AGENT_ENV_PATCH, StubAgentEnvConnector(response_text="Great, continuing")):
+        r = client.post(f"{settings.API_V1_STR}/tasks/{task_id}/delegation-reply",
+                        headers=headers, json={"result_id": result_id, "message": "Call it Nova"})
+        drain_tasks()
+    assert r.status_code == 200, r.text
+    assert r.json()["delivered"] is True and r.json()["uncertain"] is False
+    assert any("Call it Nova" in m["content"]
+               for m in list_messages(client, headers, session_id) if m["role"] == "user")
+    assert get_task(client, headers, task_id)["status"] == "in_progress"
+    _assert_bound(client, headers, db, task_id, session_id)
+    assert _task_row(db, task_id).delegation_result["reply_state"] == "delivered"
+
+    # ── Phase 3: a plain task without a delegation is still not found ──
+    plain, plain_session = _running_session(client, headers, agent["id"])
+    r = _post(client, env_headers, "report", plain_session, status="blocked", summary="Stuck",
+              question="Which one?")
+    assert r.status_code == 200, r.text
+    assert _session_owned(db, plain["id"]) is False
+    r = client.post(f"{settings.API_V1_STR}/tasks/{plain['id']}/delegation-reply",
+                    headers=headers, json={"result_id": r.json()["id"], "message": "That one"})
+    assert r.status_code == 404, r.text
+    assert get_task(client, headers, plain["id"])["status"] == "blocked"

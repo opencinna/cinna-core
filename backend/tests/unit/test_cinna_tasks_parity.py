@@ -242,3 +242,57 @@ def test_env_tools_find_the_installed_schema_path():
 
     assert SCHEMA_RELATIVE_PATH.as_posix() in PROTOCOL_FILES
     assert SKILL_RELATIVE_PATH.as_posix() in PROTOCOL_FILES
+
+
+# ── Server request models ────────────────────────────────────────────────
+
+
+def _literal_values(annotation) -> set | None:
+    """The values a ``Literal[...]`` (or ``Literal[...] | None``) field accepts."""
+    import typing
+
+    if typing.get_origin(annotation) is typing.Literal:
+        return set(typing.get_args(annotation))
+    for arg in typing.get_args(annotation):
+        values = _literal_values(arg)
+        if values is not None:
+            return values
+    return None
+
+
+def test_server_request_models_accept_exactly_the_schema_enums(expected):
+    """Every enum a write tool declares is what the backend route accepts:
+    `tasks_create.category` (with `active` since 1.16.0), `tasks_update.category`,
+    `tasks_report.status` / `audience`, `tasks_create.priority` / `execution`."""
+    from app.models.tasks import task_protocol as models
+
+    request_models = {
+        "tasks_create": models.TasksCreateRequest,
+        "tasks_update": models.TasksUpdateRequest,
+        "tasks_comment": models.TasksCommentRequest,
+        "tasks_report": models.TasksReportRequest,
+        "tasks_reply": models.TasksReplyRequest,
+    }
+    checked = 0
+    for tool, model in request_models.items():
+        properties = expected[tool]["inputSchema"]["properties"]
+        for name, spec in properties.items():
+            if "enum" not in spec:
+                continue
+            assert name in model.model_fields, (tool, name)
+            accepted = _literal_values(model.model_fields[name].annotation)
+            assert accepted == set(spec["enum"]), (tool, name, accepted, spec["enum"])
+            checked += 1
+    assert checked >= 5
+    create_category = expected["tasks_create"]["inputSchema"]["properties"]["category"]
+    assert "active" in create_category["enum"]
+    assert "own queue" in create_category["description"]
+
+
+def test_protocol_version_stays_one(schema):
+    """1.16.0 is additive: the protocol version the server answers with is
+    the schema's, and both are still 1."""
+    from app.models.tasks.task_protocol import PROTOCOL_VERSION, TaskTargetsPublic
+
+    assert PROTOCOL_VERSION == schema["protocol_version"] == 1
+    assert TaskTargetsPublic(targets=[]).protocol_version == 1
