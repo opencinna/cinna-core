@@ -75,6 +75,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import useWorkspace from "@/hooks/useWorkspace"
+import { useActivateEntityWorkspace } from "@/hooks/useActivateEntityWorkspace"
 import useCustomToast from "@/hooks/useCustomToast"
 import { useMultiEventSubscription, EventTypes } from "@/hooks/useEventBus"
 import { downloadAuthenticatedFile } from "@/utils"
@@ -431,6 +432,16 @@ function TaskDetailPage() {
     queryKey: ["task-detail", taskId],
     queryFn: () => isByUUID ? TasksService.getTaskDetail({ id: taskId }) : TasksService.getTaskDetailByCode({ shortCode: taskId }),
   })
+
+  useActivateEntityWorkspace(
+    task
+      ? {
+          entityId: task.id,
+          ownerId: task.owner_id,
+          userWorkspaceId: task.user_workspace_id,
+        }
+      : undefined,
+  )
 
   const { data: agentsData } = useQuery({
     queryKey: ["agents", workspaceFilter],

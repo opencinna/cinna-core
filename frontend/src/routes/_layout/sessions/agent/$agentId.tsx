@@ -4,6 +4,10 @@ import { useQuery } from "@tanstack/react-query"
 import { SessionsService, AgentsService } from "@/client"
 import { AgentSessionsTable } from "@/components/Sessions/AgentSessionsTable"
 import PendingItems from "@/components/Pending/PendingItems"
+import {
+  isWorkspaceAgnosticAgent,
+  useActivateEntityWorkspace,
+} from "@/hooks/useActivateEntityWorkspace"
 import { usePageHeader } from "@/routes/_layout"
 
 export const Route = createFileRoute("/_layout/sessions/agent/$agentId")({
@@ -21,6 +25,17 @@ function AgentSessionsPage() {
     queryKey: ["agent", agentId],
     queryFn: () => AgentsService.readAgent({ id: agentId }),
   })
+
+  useActivateEntityWorkspace(
+    agentData
+      ? {
+          entityId: agentData.id,
+          ownerId: agentData.owner_id,
+          userWorkspaceId: agentData.user_workspace_id,
+          workspaceAgnostic: isWorkspaceAgnosticAgent(agentData),
+        }
+      : undefined,
+  )
 
   const {
     data: sessionsData,

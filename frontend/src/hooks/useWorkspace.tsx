@@ -5,16 +5,30 @@ import {
   type UserPublic,
   type UserWorkspaceCreate,
   type UserWorkspacePublic,
+  type UserWorkspacesPublic,
 } from "@/client"
-import { useState, useEffect, useRef, createContext, useContext, type ReactNode } from "react"
+import { useState, useEffect, createContext, useContext, type ReactNode } from "react"
 import { handleError } from "@/utils"
 import useCustomToast from "./useCustomToast"
 import { isLoggedIn } from "./useAuth"
-import { useRouter } from "@tanstack/react-router"
 
+// Two storage layers decide which workspace a browser tab shows:
+//   - Global preference (localStorage): the user's last MANUAL pick. New tabs
+//     start here. Written only by `switchWorkspace` (sidebar dropdown, and the
+//     create / delete-active-workspace flows).
+//   - Tab workspace (sessionStorage): what THIS tab shows. Written by every
+//     switch, including auto-activation from a detail page
+//     (`activateTabWorkspace`), so opening an entity of another workspace by
+//     URL re-scopes only the tab it was opened in. Other open tabs are not
+//     updated live.
+// Boot resolution: tab value if present, else the global preference.
 const WORKSPACE_STORAGE_KEY = "last_user_workspace_id"
+const TAB_WORKSPACE_STORAGE_KEY = "tab_user_workspace_id"
+// Stored in the tab layer for "Default pinned in this tab", so it is
+// distinguishable from "this tab has no value of its own".
+const TAB_DEFAULT_MARKER = "default"
 
-const getActiveWorkspaceId = (): string | null => {
+const readGlobalWorkspaceId = (): string | null => {
   const value = localStorage.getItem(WORKSPACE_STORAGE_KEY)
   // Normalize empty string and "null" string to actual null for default workspace
   if (value === "" || value === "null") {
@@ -23,7 +37,7 @@ const getActiveWorkspaceId = (): string | null => {
   return value
 }
 
-const setActiveWorkspaceId = (workspaceId: string | null) => {
+const writeGlobalWorkspaceId = (workspaceId: string | null) => {
   if (workspaceId === null) {
     localStorage.removeItem(WORKSPACE_STORAGE_KEY)
   } else {
@@ -31,25 +45,65 @@ const setActiveWorkspaceId = (workspaceId: string | null) => {
   }
 }
 
+/** `undefined` = this tab has no value of its own; `null` = Default pinned. */
+const readTabWorkspaceId = (): string | null | undefined => {
+  const value = sessionStorage.getItem(TAB_WORKSPACE_STORAGE_KEY)
+  if (value === null || value === "") return undefined
+  return value === TAB_DEFAULT_MARKER ? null : value
+}
+
+const writeTabWorkspaceId = (workspaceId: string | null) => {
+  sessionStorage.setItem(
+    TAB_WORKSPACE_STORAGE_KEY,
+    workspaceId ?? TAB_DEFAULT_MARKER,
+  )
+}
+
+/** The workspace this tab boots into: tab value, else global preference. */
+const getActiveWorkspaceId = (): string | null => {
+  const tabValue = readTabWorkspaceId()
+  return tabValue !== undefined ? tabValue : readGlobalWorkspaceId()
+}
+
 // Create context for shared workspace state
 const WorkspaceContext = createContext<{
   activeWorkspaceId: string | null
   setActiveWorkspaceIdState: (id: string | null) => void
-  previousWorkspaceId: React.MutableRefObject<string | null>
 } | null>(null)
 
 export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
-  const initialId = getActiveWorkspaceId()
-  const [activeWorkspaceId, setActiveWorkspaceIdState] = useState<string | null>(initialId)
-  // Track the previous workspace ID to detect actual changes
-  const previousWorkspaceId = useRef<string | null>(initialId)
+  const [activeWorkspaceId, setActiveWorkspaceIdState] = useState<string | null>(
+    getActiveWorkspaceId,
+  )
+
+  // Stale-id repair, once for the whole app: a workspace deleted elsewhere
+  // (another tab, Settings) can leave this tab — or the global preference —
+  // pointing at nothing, which would filter every list to empty. Drop the
+  // stale tab value and fall back to the global preference, and if that is
+  // stale too, to Default.
+  const { data: workspacesData } = useQuery({
+    queryKey: ["userWorkspaces"],
+    queryFn: () => UserWorkspacesService.readWorkspaces(),
+    enabled: isLoggedIn(),
+  })
+  useEffect(() => {
+    if (!workspacesData || activeWorkspaceId === null) return
+    const known = new Set(workspacesData.data.map((w) => w.id))
+    if (known.has(activeWorkspaceId)) return
+    sessionStorage.removeItem(TAB_WORKSPACE_STORAGE_KEY)
+    let fallback = readGlobalWorkspaceId()
+    if (fallback !== null && !known.has(fallback)) {
+      writeGlobalWorkspaceId(null)
+      fallback = null
+    }
+    setActiveWorkspaceIdState(fallback)
+  }, [workspacesData, activeWorkspaceId])
 
   return (
     <WorkspaceContext.Provider
       value={{
         activeWorkspaceId,
         setActiveWorkspaceIdState,
-        previousWorkspaceId,
       }}
     >
       {children}
@@ -60,18 +114,13 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
 const useWorkspace = () => {
   const queryClient = useQueryClient()
   const { showErrorToast } = useCustomToast()
-  const router = useRouter()
   const context = useContext(WorkspaceContext)
 
   if (!context) {
     throw new Error('useWorkspace must be used within WorkspaceProvider')
   }
 
-  const {
-    activeWorkspaceId,
-    setActiveWorkspaceIdState,
-    previousWorkspaceId,
-  } = context
+  const { activeWorkspaceId, setActiveWorkspaceIdState } = context
 
   // Workspaces-enabled preference is stored on the user profile so the
   // setting follows the user across browsers and devices. Subscribe to
@@ -95,37 +144,6 @@ const useWorkspace = () => {
     ? (activeWorkspaceId ?? "")
     : undefined
 
-  // Load active workspace ID from localStorage on mount
-  useEffect(() => {
-    const storedId = getActiveWorkspaceId()
-    if (storedId !== activeWorkspaceId) {
-      setActiveWorkspaceIdState(storedId)
-    }
-  }, [setActiveWorkspaceIdState, activeWorkspaceId])
-
-  // Handle workspace change - redirect if needed
-  useEffect(() => {
-    // Check if workspace actually changed
-    if (previousWorkspaceId.current === activeWorkspaceId) {
-      return
-    }
-
-    // Update the ref to track the new workspace
-    previousWorkspaceId.current = activeWorkspaceId
-
-    // If on a detail page (not a list page), redirect to index
-    const listPages = ['/', '/agents', '/credentials', '/sessions', '/activities']
-    const currentPath = window.location.pathname
-
-    if (!listPages.includes(currentPath)) {
-      router.navigate({ to: '/' })
-    }
-
-    // Note: We don't need to manually invalidate queries here
-    // The key prop on components will force them to remount when activeWorkspaceId changes
-    // React Query will automatically fetch when new queries are mounted
-  }, [activeWorkspaceId, router, previousWorkspaceId])
-
   // Fetch all user workspaces
   const { data: workspacesData } = useQuery({
     queryKey: ["userWorkspaces"],
@@ -133,6 +151,7 @@ const useWorkspace = () => {
   })
 
   const workspaces = workspacesData?.data || []
+  const workspacesLoaded = workspacesData !== undefined
 
   // Get the currently active workspace object
   const activeWorkspace: UserWorkspacePublic | "default" | null =
@@ -140,9 +159,19 @@ const useWorkspace = () => {
       ? "default"
       : workspaces.find((w) => w.id === activeWorkspaceId) || null
 
-  // Switch to a different workspace
+  // Manual switch (sidebar dropdown, create / delete flows): pins this tab
+  // AND becomes the global preference new tabs start from. Never navigates —
+  // the dropdown decides that (see SidebarWorkspaceSwitcher).
   const switchWorkspace = (workspaceId: string | null) => {
-    setActiveWorkspaceId(workspaceId)
+    writeGlobalWorkspaceId(workspaceId)
+    writeTabWorkspaceId(workspaceId)
+    setActiveWorkspaceIdState(workspaceId)
+  }
+
+  // Auto-activation (an entity's detail page): this tab only. The global
+  // preference is left alone so other / new tabs are unaffected.
+  const activateTabWorkspace = (workspaceId: string | null) => {
+    writeTabWorkspaceId(workspaceId)
     setActiveWorkspaceIdState(workspaceId)
   }
 
@@ -185,6 +214,13 @@ const useWorkspace = () => {
     mutationFn: (data: UserWorkspaceCreate) =>
       UserWorkspacesService.createWorkspace({ requestBody: data }),
     onSuccess: (newWorkspace) => {
+      // Seed the cache first: the provider's stale-id repair checks the
+      // active id against this list and would drop an id it doesn't contain.
+      queryClient.setQueryData<UserWorkspacesPublic>(["userWorkspaces"], (old) =>
+        old
+          ? { data: [...old.data, newWorkspace], count: old.count + 1 }
+          : { data: [newWorkspace], count: 1 },
+      )
       queryClient.invalidateQueries({ queryKey: ["userWorkspaces"] })
       // Automatically switch to the newly created workspace
       switchWorkspace(newWorkspace.id)
@@ -227,17 +263,19 @@ const useWorkspace = () => {
 
   return {
     workspaces,
+    workspacesLoaded,
     activeWorkspace,
     activeWorkspaceId,
     workspaceFilter,
     workspacesEnabled,
     setWorkspacesEnabled,
     switchWorkspace,
+    activateTabWorkspace,
     createWorkspaceMutation,
     deleteWorkspaceMutation,
     updateWorkspaceMutation,
   }
 }
 
-export { getActiveWorkspaceId, setActiveWorkspaceId }
+export { getActiveWorkspaceId }
 export default useWorkspace

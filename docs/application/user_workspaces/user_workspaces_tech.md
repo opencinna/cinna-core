@@ -16,11 +16,11 @@
 
 ### Frontend
 
-- **Hook**: `frontend/src/hooks/useWorkspace.tsx` - `useWorkspace()` hook, `WorkspaceProvider` context, `getActiveWorkspaceId()`, `setActiveWorkspaceId()`. Reads `workspaces_enabled` from the cached `["currentUser"]` query and persists changes via `PATCH /users/me`
+- **Hook**: `frontend/src/hooks/useWorkspace.tsx` - `useWorkspace()` hook, `WorkspaceProvider` context, `getActiveWorkspaceId()`. Reads `workspaces_enabled` from the cached `["currentUser"]` query and persists changes via `PATCH /users/me`
+- **Auto-activation hook**: `frontend/src/hooks/useActivateEntityWorkspace.ts` - `useActivateEntityWorkspace()`, `isWorkspaceAgnosticAgent()`
 - **Switcher**: `frontend/src/components/Common/WorkspaceSwitcher.tsx` - `SidebarWorkspaceSwitcher`
 - **Sidebar host**: `frontend/src/components/Sidebar/AppSidebar.tsx` - reads `workspacesEnabled` to render or hide the switcher
 - **Settings card**: `frontend/src/components/UserSettings/WorkspaceSettings.tsx` - hosts the Workspaces Enabled toggle in the card header (corner switch pattern), disables "New Workspace" when off
-- **Create Modal**: `frontend/src/components/Common/CreateWorkspaceModal.tsx` - `CreateWorkspaceModal`
 - **Icon Config**: `frontend/src/config/workspaceIcons.ts` - `WORKSPACE_ICONS` array, `getWorkspaceIcon()` helper
 
 ### Modified Entity Models (workspace FK column)
@@ -52,6 +52,9 @@ Knowledge sources (`backend/app/models/knowledge/knowledge.py`) have no `user_wo
 - `frontend/src/routes/_layout/agent/creating.tsx`
 - `frontend/src/routes/_layout/agent/$agentId/conversations.tsx`
 - `frontend/src/routes/_layout/task/$taskId.tsx`
+- `frontend/src/routes/_layout/artifacts.tsx` ("Mine" tab)
+
+Detail routes calling `useActivateEntityWorkspace`: `agent/$agentId.tsx`, `sessions/agent/$agentId.tsx`, `session/$sessionId.tsx`, `artifact/$artifactId.tsx`, `credential/$credentialId.tsx`, `task/$taskId.tsx` (all under `frontend/src/routes/_layout/`).
 
 ### Tests
 
@@ -74,7 +77,7 @@ Knowledge sources (`backend/app/models/knowledge/knowledge.py`) have no `user_wo
 
 ### FK Column on Related Tables
 
-`user_workspace_id` (UUID, nullable, FK to `user_workspace.id`) added to: `agent`, `credential`, `session`, `activity`, `input_task`
+`user_workspace_id` (UUID, nullable, FK to `user_workspace.id`) added to: `agent`, `credential`, `session`, `activity`, `input_task`, `artifact` (`backend/app/models/artifacts/artifact.py`)
 
 Null value = entity belongs to Default workspace.
 
@@ -116,10 +119,9 @@ All entity list endpoints accept optional `user_workspace_id` query parameter:
 
 ### WorkspaceProvider (`frontend/src/hooks/useWorkspace.tsx`)
 
-React Context provider wrapping the app in `__root.tsx`. Provides shared workspace state:
+React Context provider wrapping the app in `__root.tsx`. Provides shared workspace state (initial value from `getActiveWorkspaceId()`: tab value, else global):
 - `activeWorkspaceId` - current workspace (state)
 - `setActiveWorkspaceIdState` - state setter
-- `previousWorkspaceId` - mutable ref for change detection
 
 ### useWorkspace Hook (`frontend/src/hooks/useWorkspace.tsx`)
 
@@ -130,18 +132,20 @@ Central workspace state management. Returns:
 - `workspaceFilter` - derived value to pass into list queries as `userWorkspaceId`. `undefined` when the toggle is off (no filter), `""` for Default, the workspace UUID otherwise
 - `workspacesEnabled` - boolean reflecting the user's toggle state. Read from the cached `["currentUser"]` query (`UserPublic.workspaces_enabled`)
 - `setWorkspacesEnabled(enabled)` - calls `PATCH /users/me` with `{workspaces_enabled: enabled}`, optimistically updates the cached `["currentUser"]` so dependent UI flips immediately, and invalidates the query on settle. Errors are toasted and the optimistic update is rolled back
-- `switchWorkspace()` - updates localStorage and state
-- `createWorkspaceMutation` - creates workspace and auto-switches to it
-- `deleteWorkspaceMutation` - deletes workspace, switches to default if was active
+- `workspacesLoaded` - true once the workspaces query has data
+- `switchWorkspace(id)` - manual switch: writes the global preference (localStorage) and the tab value (sessionStorage), updates state. Never navigates
+- `activateTabWorkspace(id)` - auto-activation: writes the tab value and state only, leaves the global preference alone
+- `createWorkspaceMutation` - creates workspace and calls `switchWorkspace` on success (not used by Settings)
+- `deleteWorkspaceMutation` - deletes workspace, `switchWorkspace(null)` if it was active (no redirect)
 - `updateWorkspaceMutation` - updates workspace name/icon
 
 ### SidebarWorkspaceSwitcher (`frontend/src/components/Common/WorkspaceSwitcher.tsx`)
 
-Dropdown in sidebar footer. Shows active workspace icon in button, lists all workspaces with icons in dropdown, highlights active with background + check icon.
+`handleWorkspaceSelect` calls `switchWorkspace`, then navigates to `/` only if the workspace changed and the pathname from `useRouterState` (trailing slashes stripped) is not in `WORKSPACE_LIST_PAGES` (`/`, `/agents`, `/credentials`, `/sessions`, `/activities`, `/artifacts`, `/tasks`). Dropdown in sidebar footer. Shows active workspace icon in button, lists all workspaces with icons in dropdown, highlights active with background + check icon.
 
-### CreateWorkspaceModal (`frontend/src/components/Common/CreateWorkspaceModal.tsx`)
+### Workspace creation
 
-Dialog with name input and 5-column icon selector grid. Resets form on close. Submits via `createWorkspaceMutation`.
+Workspaces are created in Settings via `WorkspaceSettings.tsx` (its own `createMutation`, no switch to the new workspace). `CreateWorkspaceModal.tsx` is unused; the hook's `createWorkspaceMutation` is not the Settings path.
 
 ### Icon Config (`frontend/src/config/workspaceIcons.ts`)
 
@@ -150,20 +154,20 @@ Dialog with name input and 5-column icon selector grid. Resets form on close. Su
 
 ## Key Implementation Patterns
 
-### localStorage Value Normalization
+### Two Storage Layers
 
-`getActiveWorkspaceId()` normalizes inconsistent values:
-- Empty string `""` → `null` (default workspace)
-- String `"null"` → actual `null`
-- Prevents false comparison bugs between `""`, `"null"`, and `null`
+- Global preference: localStorage `last_user_workspace_id` (absent = Default). Normalized on read: `""` and `"null"` become `null`
+- Tab workspace: sessionStorage `tab_user_workspace_id`; the marker `"default"` means Default pinned, absent/empty means the tab has no value of its own
+- `getActiveWorkspaceId()` = tab value if present, else global. Reload and "Duplicate tab" copy sessionStorage so they keep the tab's workspace; a link-opened tab has none and starts from the global value
+- No live cross-tab sync: other open tabs keep their value until reload
 
-### Workspace Change Detection
+### Stale-id Repair
 
-Uses shared `previousWorkspaceId` ref in Context (not per-hook refs) to detect actual workspace changes:
-- Compares `previousWorkspaceId.current` with `activeWorkspaceId`
-- Only redirects if values differ (actual workspace switch)
-- Detail pages redirect to index; list pages stay in place
-- Avoids false redirects during normal navigation
+`WorkspaceProvider` (provider-level, once for the app) reads the shared `["userWorkspaces"]` query. When loaded and the active id is not in the list, it clears the `tab_user_workspace_id` key and falls back to the global value; if the global id is stale too, it clears `last_user_workspace_id` and falls back to Default.
+
+### `useActivateEntityWorkspace`
+
+`useActivateEntityWorkspace(info | undefined)` with `{ entityId, ownerId, userWorkspaceId, workspaceAgnostic? }`. Pages pass `undefined` until the entity (and, for sessions, the agent) is loaded. Once `currentUser` and `workspacesLoaded` are available it decides once per `entityId` (ref guard; safe against refetch, StrictMode and later manual switches) and skips when: `workspacesEnabled` is off, `ownerId !== currentUser.id`, `workspaceAgnostic`, target is neither Default (`null`) nor in `workspaces`, or target equals the active workspace. Otherwise it calls `activateTabWorkspace(target)` and toasts `Switched to "<name>" workspace for this tab`. It never navigates. `isWorkspaceAgnosticAgent(agent)` = `bundle_uuid != null && !is_publisher_install && user_workspace_id == null` (mirrors Agent List Foreign-Install Handling); session pages apply it to the session's agent. `session/$sessionId.tsx` decides once the agent query has settled; if the agent fails to load it decides from the session alone.
 
 ### Component Remount via Key Prop
 
@@ -176,7 +180,7 @@ List page components use `key={activeWorkspaceId ?? 'default'}`:
 
 - `null` workspace ID → "Default" workspace (filter for `IS NULL`)
 - `undefined` → no filter (returns all entities)
-- `""` (empty string) → normalized to `null` by `getActiveWorkspaceId()`
+- `""` (empty string) → normalized to `null` when read from storage
 - Frontend sends `null` for default, UUID for specific workspace
 
 ### `workspaceFilter` Helper

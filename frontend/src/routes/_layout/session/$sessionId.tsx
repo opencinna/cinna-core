@@ -39,6 +39,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import {
+  isWorkspaceAgnosticAgent,
+  useActivateEntityWorkspace,
+} from "@/hooks/useActivateEntityWorkspace"
 import useCustomToast from "@/hooks/useCustomToast"
 import { useNavigationHistory } from "@/hooks/useNavigationHistory"
 import { useSessionStreaming } from "@/hooks/useSessionStreaming"
@@ -145,11 +149,29 @@ function ChatInterface() {
     refetchInterval: isSessionStreaming ? 2000 : undefined,
   })
 
-  const { data: agent } = useQuery({
+  const {
+    data: agent,
+    isFetched: agentFetched,
+    isError: agentError,
+  } = useQuery({
     queryKey: ["agent", session?.agent_id],
     queryFn: () => AgentsService.readAgent({ id: session!.agent_id! }),
     enabled: !!session?.agent_id,
   })
+
+  // A session of a foreign-bundle install is as workspace-agnostic as its
+  // agent, so wait for the agent query to settle before deciding; if it
+  // failed, decide on the session alone.
+  useActivateEntityWorkspace(
+    session && (!session.agent_id || agentFetched || agentError)
+      ? {
+          entityId: session.id,
+          ownerId: session.user_id,
+          userWorkspaceId: session.user_workspace_id,
+          workspaceAgnostic: !!agent && isWorkspaceAgnosticAgent(agent),
+        }
+      : undefined,
+  )
 
   // Panel must always follow the agent's active environment. The session's
   // environment_id is just the env this session was last bound to and can be

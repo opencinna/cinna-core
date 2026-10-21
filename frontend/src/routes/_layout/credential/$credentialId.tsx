@@ -45,6 +45,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { LoadingButton } from "@/components/ui/loading-button"
 import { Textarea } from "@/components/ui/textarea"
+import { useActivateEntityWorkspace } from "@/hooks/useActivateEntityWorkspace"
 import useCustomToast from "@/hooks/useCustomToast"
 import { useNavigationHistory } from "@/hooks/useNavigationHistory"
 import { usePageHeader } from "@/routes/_layout"
@@ -550,6 +551,16 @@ function CredentialDetail() {
     queryFn: () => CredentialsService.readCredential({ id: credentialId }),
     enabled: !!credentialId,
   })
+
+  useActivateEntityWorkspace(
+    credentialMeta
+      ? {
+          entityId: credentialMeta.id,
+          ownerId: credentialMeta.owner_id,
+          userWorkspaceId: credentialMeta.user_workspace_id,
+        }
+      : undefined,
+  )
 
   // If owned, fetch with data for editing.
   //

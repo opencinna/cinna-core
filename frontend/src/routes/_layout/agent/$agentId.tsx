@@ -4,6 +4,10 @@ import { ArrowLeft, EllipsisVertical, Mail, Package, Tag, User } from "lucide-re
 import { useState, useEffect } from "react"
 
 import { AgentsService, BundlesService } from "@/client"
+import {
+  isWorkspaceAgnosticAgent,
+  useActivateEntityWorkspace,
+} from "@/hooks/useActivateEntityWorkspace"
 import useRole, { RoleOverrideContext } from "@/hooks/useRole"
 import { useNavigationHistory } from "@/hooks/useNavigationHistory"
 import { AgentConfigTab } from "@/components/Agents/AgentConfigTab"
@@ -55,6 +59,17 @@ function AgentDetail() {
     refetchOnWindowFocus: true,
     staleTime: 0,
   })
+
+  useActivateEntityWorkspace(
+    agent
+      ? {
+          entityId: agent.id,
+          ownerId: agent.owner_id,
+          userWorkspaceId: agent.user_workspace_id,
+          workspaceAgnostic: isWorkspaceAgnosticAgent(agent),
+        }
+      : undefined,
+  )
 
   // Live-refresh the agent config (Workflow/Entrypoint/Refiner prompt cards)
   // when the backend pulls prompt changes from the environment into the DB.

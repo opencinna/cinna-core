@@ -33,6 +33,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet"
 import { Skeleton } from "@/components/ui/skeleton"
+import { useActivateEntityWorkspace } from "@/hooks/useActivateEntityWorkspace"
 import useCustomToast from "@/hooks/useCustomToast"
 import { usePageHeader } from "@/routes/_layout"
 import { APP_NAME, getErrorMessage } from "@/utils"
@@ -97,6 +98,16 @@ function ArtifactPage() {
       count < 2,
   })
   const artifact = detail.data
+
+  useActivateEntityWorkspace(
+    artifact
+      ? {
+          entityId: artifact.id,
+          ownerId: artifact.owner_id,
+          userWorkspaceId: artifact.user_workspace_id,
+        }
+      : undefined,
+  )
   const current = artifact?.current_revision_number ?? null
   const oldRevision =
     search.rev !== undefined && search.rev !== current ? search.rev : null

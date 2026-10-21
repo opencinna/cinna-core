@@ -1,5 +1,5 @@
 import { FolderKanban, Check, Settings } from "lucide-react"
-import { useNavigate } from "@tanstack/react-router"
+import { useNavigate, useRouterState } from "@tanstack/react-router"
 
 import {
   DropdownMenu,
@@ -17,9 +17,22 @@ import useWorkspace from "@/hooks/useWorkspace"
 import { getWorkspaceIcon } from "@/config/workspaceIcons"
 import { cn } from "@/lib/utils"
 
+// Workspace-scoped list pages remount on a switch (`key={activeWorkspaceId}`)
+// and stay put; anywhere else a manual switch leaves the page for "/".
+const WORKSPACE_LIST_PAGES = [
+  "/",
+  "/agents",
+  "/credentials",
+  "/sessions",
+  "/activities",
+  "/artifacts",
+  "/tasks",
+]
+
 export const SidebarWorkspaceSwitcher = () => {
   const { isMobile } = useSidebar()
   const navigate = useNavigate()
+  const pathname = useRouterState({ select: (s) => s.location.pathname })
   const { workspaces, activeWorkspace, switchWorkspace, activeWorkspaceId } = useWorkspace()
 
   const activeWorkspaceName =
@@ -31,7 +44,12 @@ export const SidebarWorkspaceSwitcher = () => {
   const ActiveIcon = getWorkspaceIcon(activeWorkspaceIcon)
 
   const handleWorkspaceSelect = (workspaceId: string | null) => {
+    const changed = workspaceId !== activeWorkspaceId
     switchWorkspace(workspaceId)
+    const path = pathname.replace(/\/+$/, "") || "/"
+    if (changed && !WORKSPACE_LIST_PAGES.includes(path)) {
+      navigate({ to: "/" })
+    }
   }
 
   return (
