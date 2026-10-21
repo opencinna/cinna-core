@@ -56,7 +56,9 @@ services:
       TEST_DB_PASSWORD: "${POSTGRES_PASSWORD}"
 
   db:
-    image: postgres:17
+    # Pin the Debian base: a floating tag can swap glibc under existing data and
+    # break collation (template1 "collation version mismatch").
+    image: postgres:17-trixie
     restart: "no"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
