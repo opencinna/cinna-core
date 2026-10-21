@@ -121,6 +121,55 @@ Auto-generated from OpenAPI spec. Tag: `agent-api`
 
 ---
 
+## GET `/api/v1/agents/{agent_id}/agent-api/group-grants`
+**List Agent Api Group Grants**
+
+**Path parameters:**
+- `agent_id`: uuid
+
+**Response:** `AgentApiAccessGroupGrantsPublic`
+
+---
+
+## POST `/api/v1/agents/{agent_id}/agent-api/group-grants`
+**Create Agent Api Group Grant**
+
+**Path parameters:**
+- `agent_id`: uuid
+
+**Request body** (`AgentApiAccessGroupGrantCreate`):
+  - `group_id`: uuid (required)
+  - `scopes`: string[]
+
+**Response:** `AgentApiAccessGroupGrantPublic`
+
+---
+
+## PUT `/api/v1/agents/{agent_id}/agent-api/group-grants/{grant_id}`
+**Update Agent Api Group Grant**
+
+**Path parameters:**
+- `agent_id`: uuid
+- `grant_id`: uuid
+
+**Request body** (`AgentApiAccessGroupGrantUpdate`):
+  - `scopes`: array | null
+
+**Response:** `AgentApiAccessGroupGrantPublic`
+
+---
+
+## DELETE `/api/v1/agents/{agent_id}/agent-api/group-grants/{grant_id}`
+**Delete Agent Api Group Grant**
+
+**Path parameters:**
+- `agent_id`: uuid
+- `grant_id`: uuid
+
+**Response:** `Message`
+
+---
+
 ## POST `/api/v1/agents/{agent_id}/agent-api/keys`
 **Create Agent Api Key**
 

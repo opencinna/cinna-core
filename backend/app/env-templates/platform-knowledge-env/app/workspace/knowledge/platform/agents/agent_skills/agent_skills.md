@@ -730,7 +730,7 @@ a reader of the folder cannot see. The publisher is never asked to invent one:
 
 ### Access: same model as bundles
 
-Access is visibility plus grants (user or role x use/edit/maintain); publishing a new version needs edit. The model is shared with [Agent Bundles](../agent_bundles/agent_bundles.md#access-visibility-plus-grants-one-access-model) (rule P1, maintainers are people, at least one required, `PUT /api/v1/catalog/items/{uuid}/grants`).
+Access is visibility plus grants (user, role or group x use/edit/maintain; groups hold `use`/`edit` only, see [User Groups](../../application/user_groups/user_groups.md)); publishing a new version needs edit. The model is shared with [Agent Bundles](../agent_bundles/agent_bundles.md#access-visibility-plus-grants-one-access-model) (rule P1, maintainers are people, at least one required, `PUT /api/v1/catalog/items/{uuid}/grants`).
 
 - Publishing a new revision of an existing package needs `edit`; changing visibility needs `maintain`. A caller who can see the package but lacks `edit` gets 403 `not_publisher`.
 - Managing a package through `/skills/packages/*` needs `maintain`; an admin can still delist (a superuser may see and delist a public package). Publishers became `maintain` rows in migration `6ab98dfbbe62`.

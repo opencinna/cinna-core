@@ -255,6 +255,8 @@ Cinna Desktop (interactive session)
 
 ## Changelog
 
+- A credential shared with a user group counts as a direct share for local copy (needs `allow_local_use`; a copied value is not recalled when the member leaves the group). See [User Groups](../user_groups/user_groups.md).
+
 - Google OAuth credentials: the eight Google OAuth types became locally compatible and Core-brokered;
   Desktop can create, reconnect and fetch access tokens; materialize refreshes before delivering;
   new refusal reasons; list fields `oauth_status` / `granted_user_email`; kit contract 1.14.0.

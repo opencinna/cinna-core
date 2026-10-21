@@ -121,6 +121,28 @@ Auto-generated from OpenAPI spec. Tag: `installs`
 
 ---
 
+## POST `/api/v1/agents/{agent_id}/bundle-permissions/group-grants`
+**Add Bundle Group Grant**
+
+**Path parameters:**
+- `agent_id`: uuid
+
+**Request body** (`BundleGroupGrantCreate`):
+  - `group_id`: uuid (required)
+
+**Response:** `BundlePermissionGroup`
+
+---
+
+## DELETE `/api/v1/agents/{agent_id}/bundle-permissions/group-grants/{grant_id}`
+**Revoke Bundle Group Grant**
+
+**Path parameters:**
+- `agent_id`: uuid
+- `grant_id`: uuid
+
+---
+
 ## PUT `/api/v1/agents/{agent_id}/setup-credentials/{credential_id}`
 **Update Setup Credential**
 

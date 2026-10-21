@@ -35,6 +35,15 @@ Auto-generated from OpenAPI spec. Tag: `ai-credentials`
 
 ---
 
+## GET `/api/v1/ai-credentials/shared-with-me`
+**List Ai Credentials Shared With Me**
+
+> Not available via `cinna api` (excluded_path).
+
+**Response:** `SharedAICredentialsPublic`
+
+---
+
 ## GET `/api/v1/ai-credentials/resolve-default/{sdk_engine}`
 **Resolve Default Credential**
 
@@ -139,5 +148,45 @@ Auto-generated from OpenAPI spec. Tag: `ai-credentials`
 - `credential_id`: uuid
 
 **Response:** `AffectedEnvironmentsPublic`
+
+---
+
+## POST `/api/v1/ai-credentials/{credential_id}/group-shares`
+**Share Ai Credential With Group**
+
+> Not available via `cinna api` (excluded_path).
+
+**Path parameters:**
+- `credential_id`: uuid
+
+**Request body** (`AICredentialGroupShareCreate`):
+  - `group_id`: uuid (required)
+
+**Response:** `AICredentialGroupSharePublic`
+
+---
+
+## GET `/api/v1/ai-credentials/{credential_id}/group-shares`
+**List Ai Credential Group Shares**
+
+> Not available via `cinna api` (excluded_path).
+
+**Path parameters:**
+- `credential_id`: uuid
+
+**Response:** `AICredentialGroupSharesPublic`
+
+---
+
+## DELETE `/api/v1/ai-credentials/{credential_id}/group-shares/{group_id}`
+**Revoke Ai Credential Group Share**
+
+> Not available via `cinna api` (excluded_path).
+
+**Path parameters:**
+- `credential_id`: uuid
+- `group_id`: uuid
+
+**Response:** `Message`
 
 ---

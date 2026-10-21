@@ -162,3 +162,33 @@ Auto-generated from OpenAPI spec. Tag: `knowledge-sources`
 - `user_id`: uuid
 
 ---
+
+## GET `/api/v1/knowledge-sources/{source_id}/shared-groups`
+**List Knowledge Source Shared Groups**
+
+**Path parameters:**
+- `source_id`: uuid
+
+---
+
+## POST `/api/v1/knowledge-sources/{source_id}/shared-groups`
+**Add Knowledge Source Shared Group**
+
+**Path parameters:**
+- `source_id`: uuid
+
+**Request body** (`KnowledgeSourceGroupShareCreate`):
+  - `group_id`: uuid (required)
+
+**Response:** `KnowledgeSourceSharedGroupPublic`
+
+---
+
+## DELETE `/api/v1/knowledge-sources/{source_id}/shared-groups/{group_id}`
+**Remove Knowledge Source Shared Group**
+
+**Path parameters:**
+- `source_id`: uuid
+- `group_id`: uuid
+
+---

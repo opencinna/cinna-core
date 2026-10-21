@@ -18,7 +18,8 @@ Routes marked *Not available via `cinna api`* are refused by the account CLI esc
 | Admin Environments | [admin_environments.md](./admin_environments.md) | 3 |
 | Admin Llm Providers | [admin_llm_providers.md](./admin_llm_providers.md) | 7 |
 | Admin Routing | [admin_routing.md](./admin_routing.md) | 6 |
-| Agent Api | [agent_api.md](./agent_api.md) | 14 |
+| Admin User Groups | [admin_user_groups.md](./admin_user_groups.md) | 13 |
+| Agent Api | [agent_api.md](./agent_api.md) | 18 |
 | Agent Api Public | [agent_api_public.md](./agent_api_public.md) | 1 |
 | Agent Artifacts | [agent_artifacts.md](./agent_artifacts.md) | 1 |
 | Agent Credentials | [agent_credentials.md](./agent_credentials.md) | 1 |
@@ -28,7 +29,7 @@ Routes marked *Not available via `cinna api`* are refused by the account CLI esc
 | Agent Webhooks | [agent_webhooks.md](./agent_webhooks.md) | 9 |
 | Agentic Teams | [agentic_teams.md](./agentic_teams.md) | 18 |
 | Agents | [agents.md](./agents.md) | 42 |
-| Ai Credentials | [ai_credentials.md](./ai_credentials.md) | 11 |
+| Ai Credentials | [ai_credentials.md](./ai_credentials.md) | 15 |
 | App Auth | [app_auth.md](./app_auth.md) | 9 |
 | App Data | [app_data.md](./app_data.md) | 3 |
 | Artifact Links | [artifact_links.md](./artifact_links.md) | 2 |
@@ -36,7 +37,7 @@ Routes marked *Not available via `cinna api`* are refused by the account CLI esc
 | Bundles | [bundles.md](./bundles.md) | 9 |
 | Catalog | [catalog.md](./catalog.md) | 14 |
 | Cli | [cli.md](./cli.md) | 69 |
-| Credentials | [credentials.md](./credentials.md) | 23 |
+| Credentials | [credentials.md](./credentials.md) | 26 |
 | Desktop Auth | [desktop_auth.md](./desktop_auth.md) | 9 |
 | Desktop Download | [desktop_download.md](./desktop_download.md) | 1 |
 | Environments | [environments.md](./environments.md) | 17 |
@@ -49,10 +50,10 @@ Routes marked *Not available via `cinna api`* are refused by the account CLI esc
 | Identity | [identity.md](./identity.md) | 7 |
 | Identity Contacts | [identity_contacts.md](./identity_contacts.md) | 2 |
 | Improvement Requests | [improvement_requests.md](./improvement_requests.md) | 8 |
-| Installs | [installs.md](./installs.md) | 12 |
+| Installs | [installs.md](./installs.md) | 14 |
 | Invitations | [invitations.md](./invitations.md) | 2 |
 | Knowledge | [knowledge.md](./knowledge.md) | 1 |
-| Knowledge Sources | [knowledge_sources.md](./knowledge_sources.md) | 15 |
+| Knowledge Sources | [knowledge_sources.md](./knowledge_sources.md) | 18 |
 | Llm Plugins | [llm_plugins.md](./llm_plugins.md) | 15 |
 | Mail Servers | [mail_servers.md](./mail_servers.md) | 6 |
 | Mcp Connectors | [mcp_connectors.md](./mcp_connectors.md) | 9 |
@@ -68,6 +69,7 @@ Routes marked *Not available via `cinna api`* are refused by the account CLI esc
 | Task Triggers | [task_triggers.md](./task_triggers.md) | 16 |
 | Tasks | [tasks.md](./tasks.md) | 29 |
 | User Channels | [user_channels.md](./user_channels.md) | 3 |
+| User Groups | [user_groups.md](./user_groups.md) | 1 |
 | User Workspaces | [user_workspaces.md](./user_workspaces.md) | 5 |
 | Users | [users.md](./users.md) | 27 |
 | Webapp | [webapp.md](./webapp.md) | 4 |

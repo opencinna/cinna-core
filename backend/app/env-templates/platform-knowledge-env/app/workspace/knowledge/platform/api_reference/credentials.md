@@ -66,6 +66,46 @@ Auto-generated from OpenAPI spec. Tag: `credentials`
 
 ---
 
+## POST `/api/v1/credentials/{credential_id}/group-shares`
+**Share Credential With Group**
+
+> Not available via `cinna api` (excluded_path).
+
+**Path parameters:**
+- `credential_id`: uuid
+
+**Request body** (`CredentialGroupShareCreate`):
+  - `group_id`: uuid (required)
+
+**Response:** `CredentialGroupSharePublic`
+
+---
+
+## GET `/api/v1/credentials/{credential_id}/group-shares`
+**List Credential Group Shares**
+
+> Not available via `cinna api` (excluded_path).
+
+**Path parameters:**
+- `credential_id`: uuid
+
+**Response:** `CredentialGroupSharesPublic`
+
+---
+
+## DELETE `/api/v1/credentials/{credential_id}/group-shares/{group_id}`
+**Revoke Credential Group Share**
+
+> Not available via `cinna api` (excluded_path).
+
+**Path parameters:**
+- `credential_id`: uuid
+- `group_id`: uuid
+
+**Response:** `Message`
+
+---
+
 ## GET `/api/v1/credentials/`
 **Read Credentials**
 

@@ -312,6 +312,7 @@ create / start / resume / rebuild:
 
 ## Invariants and traps
 
+- **Unlink narrows to users without any remaining path.** Revoking a direct share, a group share, removing a group member or deleting a group deletes links and re-syncs only for users who are neither owner, direct recipient nor covered by another group share (`CredentialShareService.users_without_access`). Group removal precomputes the covered (credential, user) pairs first and releases only those; no `credential_share_revocation` rows are written. For AI credentials the lost user's env pin columns are NULLed and running environments restarted, since `AICredential` changes otherwise land only on restart. See [User Groups](../application/user_groups/user_groups.md).
 - **The link, not the share, is what syncs.** A `CredentialShare` only makes a credential *linkable*.
   Every downstream read starts from `AgentCredentialLink`.
 - **A slot is a plain column, and that is the point.** `Credential.service_uri` is non-secret,

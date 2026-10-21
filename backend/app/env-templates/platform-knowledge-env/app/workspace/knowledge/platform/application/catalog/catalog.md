@@ -25,11 +25,11 @@ packages in [Agent Skills](../../agents/agent_skills/agent_skills.md). The UI ne
 
 ## Access model
 
-One rule for every kind: access is visibility plus grants (user or role x use/edit/maintain). The full
+One rule for every kind: access is visibility plus grants (user, role or **group** x use/edit/maintain). The full
 rules, including who may manage an item, are in
 [Agent Bundles](../../agents/agent_bundles/agent_bundles.md#access-visibility-plus-grants-one-access-model).
 In short: `edit` or `maintain` count at any visibility; `use` counts when the item is limited to listed
-people and listed in the catalog, or when it is public; a superuser can manage anything. An item with no
+people and listed in the catalog, or when it is public; a superuser can manage anything. A group is a principal like a role: groups hold `use` or `edit`, never `maintain` (a person maintains), and membership is live, so adding or removing a member changes access at once; the next listing, detail, install, download or git request returns 404 for a member who lost it. Installs and per-person install shares stay. See [User Groups](../user_groups/user_groups.md). An item with no
 version yet (a desktop agent before its first share) is listed only to people with `edit` or `maintain`.
 
 ## The listing
@@ -121,8 +121,7 @@ are shown beside the facts.
 ### Maintainer controls
 
 People who hold `maintain` (and superusers) get a menu on the desktop agent card, the skill package card and the install page's agent header card: edit who can use or change
-it (a People dialog, which is also where a skill's visibility is changed;  with general access, user and role rows, and the levels Can use, Can share changes
-and Maintainer; at least one person must be a maintainer), and delete (showing the sentence above when
+it (a People dialog, which is also where a skill's visibility is changed;  with general access, user and role rows, and kind-aware levels: Can use; the second level reads "Can share changes" on a desktop agent, "Can publish versions" on a skill package, and is hidden on a hosted agent bundle (labels from `catalogAccessOptions(kind, current)` / `catalogAccessLabel` in `frontend/src/utils/catalogAccess.ts`; the private-visibility hint for bundles reads "Only its maintainers see it.") (a non-publisher holding `edit` cannot publish a bundle, so an existing `edit` row there reads "Can use (any visibility)"); and Maintainer; at least one person must be a maintainer), and delete (showing the sentence above when
 refused). Superusers can also delist or relist an item.
 
 ### Admin catalog
@@ -146,7 +145,11 @@ row. It replaces the former admin team library page.
 - [Event Bus](../realtime_events/event_bus_system.md): `catalog.updated`, `catalog.granted`.
 - [User Roles](../user_roles/user_roles.md): role principals in grants.
 
+
+
 ## Changelog
+
+- User groups: grants accept a group principal (`use` / `edit` only); see [User Groups](../user_groups/user_groups.md).
 
 - One unified listing replaced the separate agent and skill catalog pages; local installs, the local-aware delete guard and `catalog.updated` for cloud and skill publishes were added.
 - Skills can be published from a desktop, and a skill revision pinned by a usable desktop agent can be downloaded through that agent.

@@ -28,7 +28,7 @@ Enables users to share their credentials with other users, allowing recipients t
 2. Alternatively, owner disables sharing entirely (`allow_sharing=false`)
 3. Disabling sharing immediately revokes ALL existing shares (destructive, with confirmation). When the credential is publisher-provided (PBP) in published bundles, the disable-sharing dialog also surfaces the blast-radius data (same `GET /credentials/{id}/deletion-impact` cache as the delete dialog) so the publisher can see which bundles and installs will break before confirming.
 4. Either way, revocation also **unlinks the credential from every agent the recipient owns** and re-syncs their running environments. A share is a right to use the credential, but the environment payload is built from `AgentCredentialLink` alone — leaving the link behind would keep a working secret inside the recipient's containers while the credential page said access was gone. The owner's own links are untouched.
-5. **Owner removal is remembered.** `DELETE /credentials/{id}/shares/{share_id}` (any share source) records a row in `credential_share_revocation`. While it exists, `provision-local` answers `not_shareable` for that person and cloud bundle/skill installs treat the publisher credential as unavailable (`publisher_unavailable` / placeholder). Only the owner's direct re-share (`POST /credentials/{id}/shares`) clears it. Turning sharing off writes and clears no records; turning it on again lets `provision-local` share again for everyone except people removed one by one (known behaviour).
+5. **Owner removal is remembered.** `DELETE /credentials/{id}/shares/{share_id}` (any share source) records a row in `credential_share_revocation`. While it exists, `provision-local` answers `not_shareable` for that person and cloud bundle/skill installs treat the publisher credential as unavailable (`publisher_unavailable` / placeholder). Only the owner's direct re-share (`POST /credentials/{id}/shares`) clears it. Exception: if the person still holds a **group** share, `provision-local` answers `already_shared` (no row written) and a server install links through the group without writing a direct share; the link is dropped (placeholder on next provision) once the group path ends. Turning sharing off writes and clears no records; turning it on again lets `provision-local` share again for everyone except people removed one by one (known behaviour).
 6. **A skill-installer share outlives the skill version.** A share created by `provision-local` (`skill_local_install`) stays while the credential allows sharing. It ends only when the owner turns sharing off or unshares that person. A later skill version that stops providing the credential does not revoke it. Core warns first (the unshare dialog and sharing-off confirm list the agents and skills, including skills on the person's own computer) but allows it.
 7. Deleting a credential is **blast-radius-gated** (see Deletion Impact Gate below).
 
@@ -58,7 +58,7 @@ Template sharing is designed for bundle publishers who want to pre-configure par
 
 **If the installer already owns a suitable credential:**
 
-The installer can choose `mode="use_existing"` on the install form. `_setup_install_credentials` detects this and skips template materialisation — linking the existing credential directly.
+The installer can choose `mode="use_existing"` on the install form. `_setup_install_credentials` detects this and skips template materialisation — linking the existing credential directly. The credential may be owned, directly shared, or reachable through a user group share; a group-reachable one is linked rather than swapped for a placeholder.
 
 ## `service_uri` Slot ID and the Per-User Token Pattern
 
@@ -291,7 +291,25 @@ Publisher sets allow_template_sharing=true + marks private fields
 - [User Workspaces](../../application/user_workspaces/user_workspaces.md) - Credentials exist within workspace context
 - [Desktop Credential Delivery](../../application/desktop_credentials/desktop_credentials.md) - A recipient's Desktop can only copy a shared credential once the owner has separately turned on local-use consent (`allow_local_use`); the switch is shown only for locally-compatible credential types
 
+## Sharing with a Group
+
+An owner can share a credential with a [user group](../../application/user_groups/user_groups.md) instead of (or besides) individual people.
+
+1. In the credential's sharing section the owner picks a group (the picker's groups mode, backed by `GET /user-groups/search`). The share row is a `credential_group_share`, a separate table from `credential_shares`.
+2. Every current and future member can link the credential to their agents, read-only, exactly like a direct recipient. Recipient lists mark such users "via group"; the owner's list shows group rows with the member count.
+3. The credential must still allow sharing (`allow_sharing`); sharing off removes group shares as it removes direct ones.
+
+Rules:
+
+- **Access is lost only when no share path remains.** On revoking a group share, removing a member or deleting a group, links are deleted and environments re-synced only for users with no remaining path (owner, direct share, any other group share). This also fixes revoking a direct share while a group still covers the user.
+- **Group shares write no revocation records.** `credential_share_revocation`, the provisioner, provision-local, the D15 claim rule and `CredentialShare.source` stay per-person and never see group shares; a group share is always the owner's explicit, direct-like share.
+- **Desktop:** a group share counts as a direct share for local copy; it still needs `allow_local_use`, and a copied value is not recalled.
+- **Superuser** can revoke any single group share from the group page.
+- Owned credentials report `group_share_count` next to `share_count`.
+
 ## Changelog
+
+- Credentials can be shared with user groups (`credential_group_share`); unlink narrows to users without any remaining path.
 
 - Owner removal of a share is recorded in `credential_share_revocation`; a skill-installer share persists across skill versions; share and deletion-impact payloads list agent and local-skill usages; delete is Tier 2 for active local skill installs.
 - `/credentials` list moved from a card grid to a searchable, paged table with a counted segmented section control; editing happens on the credential page (`/credential/$id`).
