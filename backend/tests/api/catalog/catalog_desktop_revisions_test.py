@@ -186,14 +186,14 @@ def test_marketplace_skill_pins_round_trip_byte_for_byte(
 ) -> None:
     """M7 round trip.
 
-    1. Vacuity guard: the mirrored schema knows ``marketplace_skills``, contract 1.15.0
+    1. Vacuity guard: the mirrored schema knows ``marketplace_skills``, contract >= 1.15.0
     2. Owner pushes a manifest with a pin carrying an unknown extra key -> accepted
     3. A ``use`` holder clones it: ``cinna-agent.json`` is byte-for-byte what was written
     4. A pin with ``archive_sha256: "xyz"`` is refused by the hook (mirror enforces)
     """
     schema = (local_kit_dir() / "schema" / "cinna-agent.schema.json").read_text()
     assert '"marketplace_skills"' in schema
-    assert server_contract_version() == (1, 15, 0)
+    assert server_contract_version() >= (1, 15, 0)
 
     su = superuser_token_headers
     owner = make_developer(client, su)
