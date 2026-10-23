@@ -15,7 +15,7 @@ Workspaces let users organize agents, credentials, sessions, and tasks into sepa
 
 - **Workspace** - Named isolation boundary for a user's entities, with an optional icon for visual identification
 - **Default Workspace** - Virtual workspace for entities with no explicit workspace assignment (`user_workspace_id = null`)
-- **Active Workspace** - The currently selected workspace in the browser session, stored in localStorage (not server-side)
+- **Active Workspace** - The workspace a browser tab is currently showing. Held per tab (sessionStorage) with a global last-manual-pick preference (localStorage) that new tabs start from; never server-side
 - **Workspace Inheritance** - Sessions and activities automatically inherit their workspace from their parent agent, rather than being assigned directly
 - **Workspaces Enabled Toggle** - Per-user UI preference (Settings → Interface → Workspaces card) that turns workspace filtering on or off. When off, list queries omit the workspace filter and show every entity owned by the user; the sidebar workspace switcher is hidden. Persisted on the `User` row (`User.workspaces_enabled` boolean column) so the setting follows the user across browsers and devices. The toggle is role-agnostic and works the same for `agent-user`, `agent-developer`, and `admin`
 
@@ -37,7 +37,8 @@ Workspaces let users organize agents, credentials, sessions, and tasks into sepa
 3. Active workspace highlighted with background color and check icon
 4. User selects a workspace
 5. All list pages refresh to show only entities belonging to that workspace
-6. If user was on a detail page, they are redirected to the index page
+6. If the user was on a page that is not a list page (`/`, `/agents`, `/credentials`, `/sessions`, `/activities`, `/artifacts`, `/tasks`) and the workspace actually changed, they are redirected to `/`; list pages stay in place and remount
+7. The pick is written to both the tab and the global preference (other open tabs are not updated live)
 
 ### Entity Assignment
 
@@ -46,20 +47,24 @@ Workspaces let users organize agents, credentials, sessions, and tasks into sepa
 3. Sessions inherit workspace from their parent agent at creation time
 4. Activities inherit workspace from their parent session/agent
 
-### Direct URL Navigation
+### Opening an Entity from Another Workspace
 
-1. User accesses an entity detail page via URL
-2. Entity loads from API regardless of active workspace
-3. UI auto-activates the entity's workspace
-4. Browser's stored workspace ID updates accordingly
+1. User opens the detail page of an owned entity (agent, agent sessions list, session, artifact, credential, task) by URL or in-app link
+2. The entity loads regardless of the active workspace
+3. If workspaces are enabled, the user owns the entity, and the entity's workspace (Default or one of the user's workspaces) differs from the tab's, the tab switches to it and shows the toast `Switched to "<name>" workspace for this tab`
+4. Only this tab changes: the global preference is untouched, so new tabs still start from the last manual pick. The page is never navigated away
+5. The decision is made once per entity id per page mount; a later manual switch on the same page is not overridden
+6. Never auto-switches for: shared or guest entities (owner is not the current user), foreign-bundle installs and sessions of such agents (workspace-agnostic), workspaces disabled. Environment file/database pages do not auto-activate (they do not load the agent)
 
 ## Business Rules
 
-- **One active workspace per browser tab** - different tabs can have different active workspaces simultaneously
+- **Active workspace is per browser tab** - two layers: the tab workspace (sessionStorage `tab_user_workspace_id`, value `"default"` = Default pinned) and the global preference (localStorage `last_user_workspace_id`). Boot uses the tab value, else the global one. Tabs opened from links start with the global value; reload and "Duplicate tab" keep the tab's workspace. Manual dropdown picks write both layers (creating a workspace in Settings does not switch to it); auto-activation from a detail page writes the tab only
+- **Stale workspace repair** - if the stored active workspace no longer exists in the loaded workspace list (e.g. deleted in another tab or in Settings), the tab value is cleared and the global preference is used; if that is stale too, it is cleared and Default is used
+- **Redirect only on manual dropdown pick** - creating or deleting a workspace in Settings does not redirect
 - **Stateless API** - server never tracks "active workspace" per user; frontend passes filter on each request
 - **Null means Default** - entities with `user_workspace_id = null` belong to the Default workspace
 - **Cascade delete** - deleting a workspace cascades to its `user_workspace_id` foreign keys
-- **Workspace-aware entities**: agents, credentials, sessions, activities, input tasks. Knowledge sources are server-wide and not workspace-scoped — see [Knowledge Sources](../knowledge_sources/knowledge_sources.md)
+- **Workspace-aware entities**: agents, credentials, sessions, activities, input tasks, artifacts (the `/artifacts` "Mine" tab is workspace-filtered). Knowledge sources are server-wide and not workspace-scoped — see [Knowledge Sources](../knowledge_sources/knowledge_sources.md)
 - **Explicitly assigned entities**: agents, credentials (user picks workspace)
 - **Inherited entities**: sessions (from agent), activities (from session/agent)
 - **Deletion behavior** - if the deleted workspace was active, UI switches to Default
@@ -72,7 +77,7 @@ Workspaces let users organize agents, credentials, sessions, and tasks into sepa
 ## Architecture Overview
 
 ```
-User → Sidebar Switcher → localStorage (active workspace ID)
+User → Sidebar Switcher → sessionStorage (tab) + localStorage (global preference)
                               ↓
          List Pages (pass workspace ID as query param)
                               ↓
@@ -87,6 +92,7 @@ Frontend → Backend API → Service Layer → PostgreSQL
 - **Sessions** - inherit workspace from parent agent via `SessionService.create_session()`
 - **Activities** - inherit workspace from session/agent via `ActivityService.create_activity()`
 - **Input Tasks** - `user_workspace_id` column; filtered in list endpoint
+- **Artifacts** - `user_workspace_id` column; the `/artifacts` "Mine" tab is workspace-filtered; detail page auto-activates the workspace
 - **Knowledge Sources** - not workspace-scoped; sources are server-wide and admin-managed, with a separate per-source access level (private/public/shared) governing who may query them. See [Knowledge Sources](../knowledge_sources/knowledge_sources.md)
 
 ## Workspace Icons
@@ -109,3 +115,7 @@ Users select from 20 predefined themed icons during workspace creation:
 | Scheduling | Calendar |
 
 Icons are stored as string identifiers in the database and rendered via lucide-react components on the frontend.
+
+## Changelog
+
+- Active workspace became per tab (sessionStorage) with a global localStorage preference; detail pages of owned entities auto-activate their workspace for the tab; redirect to `/` now only on a manual dropdown pick away from non-list pages.

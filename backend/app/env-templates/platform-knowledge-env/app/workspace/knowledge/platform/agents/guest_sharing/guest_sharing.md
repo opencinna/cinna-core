@@ -113,6 +113,7 @@ Deleting the share is the revocation mechanism. There is no separate revoke acti
 - **What guests cannot do**: Access agent configuration, manage credentials, view credential values, use building mode, invoke slash commands (autocomplete is inactive without `sessionId` context), access the database viewer in the env panel.
 - **What guests can do with env panel (if enabled)**: View and download workspace files.
 - **Ownership requirement**: Only the agent owner can create, list, update, or delete shares for an agent.
+- **Not indexed**: Guest share links carry their credential in the URL, so every response is served with `X-Robots-Tag: noindex`; see [Nginx Setup](../../infrastructure/nginx_setup.md#production-setup).
 - **Multiple shares**: An agent can have any number of concurrent guest shares (different clients, different expiration windows, different security codes).
 - **Token reveal**: The full token is returned exactly once — in the `AgentGuestShareCreated` response body on creation. It cannot be retrieved again. The `share_url` is reconstructed from `token` when the token is stored and shown in list responses.
 

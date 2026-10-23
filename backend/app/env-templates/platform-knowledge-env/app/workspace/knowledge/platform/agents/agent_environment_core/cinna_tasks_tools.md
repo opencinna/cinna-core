@@ -43,6 +43,7 @@ Agents read and write category words, never raw statuses:
 - **Refused.** `custom_fields` (cinna-core has none), `category: draft` (only for folder targets, which cinna-core has none of), and a title plus description over **10,000 characters** (the refusal says to move long material into a file or a comment).
 - **Subtasks.** `parent` must be the current task or one of the caller's own tasks. A delegated subtask needs a member of the parent's team as `assignee`; it goes through `InputTaskService.create_subtask`, which still enforces the team's connection topology. A subtask without `assignee` goes to the caller's own team node (the `own_queue` flag on `AgentSubtaskCreate`, so the team-lead fallback never assigns it to the lead), not started.
 - **Own queue.** `own_queue=True` on `AgentTaskCreate` / `AgentSubtaskCreate` marks the create; the source session gets the system message "Task <code> added to <agent>'s queue". The task counts in the context block's `ready tasks` once `open`, and accepts `tasks_report` and `tasks_update`. Because it is agent-created (`agent_initiated`, `source_session_id`), the report rule applies when a person later runs it.
+- **Active create (`category: active`).** Starts work on a task in *this* conversation: own queue only, status `in_progress`, bound as a session-owned task (see [Session-owned tasks](#session-owned-tasks)). The result carries `attached: true`. Refused: with an assignee ("`category: active` is for your own queue; a delegation starts at once", 400), and when the conversation already has a current task ("This conversation is already working on <ref>", 409). A lost bind race deletes the new task. On an active create `source_session_id` and `session_id` are both the caller.
 - **Chain limits**, checked after the idempotency check, so a repeated `id` is answered even at a limit:
   - **Depth.** The new task's depth is 1 + the current task's depth (`InputTaskService.chain_depth`: the deeper of `delegation_metadata.depth` and the recorded `input_task.chain_depth`, or, when both are NULL, a walk of at most 5 hops through `parent_task_id` / the creating conversation's task). Above `MAX_CHAIN_DEPTH` = 2 the create is refused, telling the agent to do the work itself or report what it needs. A created task without delegation metadata records its depth in `chain_depth`.
   - **Per conversation.** At most `MAX_TASKS_PER_SESSION` = 20 tasks per source session, counted by `source_session_id`.
@@ -61,6 +62,8 @@ Allowed only on tasks related to the caller (assigned to it, or created in its c
 
 Works on **any task assigned to the calling agent** — a delegation, an own-queue task, a team subtask, a scheduled or triggered run — not only on tasks with `delegation_metadata` (it calls `DelegationService.report` with `require_delegation=False`, keeping the delegation contract's idempotency and status rules). A report on the conversation's own task is bound to its session, so a report from an earlier execution is refused.
 
+- **Attach.** An `in_progress` or `blocked` report from a session with no current task, naming a task in `new`/`open` that never ran (no `session_id`), has no delegation, external executor or `auto_execute`, and is assigned to the caller (or unassigned and created by it), binds the task to the session as session-owned (assigning it to the caller if unassigned); the result carries `attached: true`. `done`/`failed` never attach, and a report without a ref never creates a task. Refusals after the locked recheck: "<ref> is no longer waiting to be picked up; read it with tasks_get" (409); lost bind race: "<ref> is already being worked on in another conversation" (409).
+- **Other conversation's task.** A by-ref report on a task another session runs is refused, after the assignee check: "<ref> is being worked on in another conversation; only that conversation can report on it" (409).
 - `audience` defaults to `requester` when the task has `delegation_metadata` or was created from another conversation (`source_session_id`), otherwise `user`.
 - **Artifacts.** An `http(s)` reference is stored as a link. A working-folder path (a bare string, or a `ref` that is not a URL) cannot be reached by the requester, so it is recorded **by name only** (`{kind: "file", name}`, no `ref`) and the result carries a note to attach the file with `tasks_comment`. A report is never refused over an artifact.
 
@@ -70,6 +73,16 @@ Only for a task this conversation created (`task.source_session_id`).
 
 - If its result is a `blocked` question not yet answered (or the same answer is being retried), the reply goes through the delegation-reply path (`DelegationService.reply`, `require_delegation=False`), limited to 10,000 characters; the result says whether it was delivered or is uncertain.
 - Otherwise it is a follow-up: the message is sent into the executor's linked conversation (`SessionService.send_session_message`). Its `client_message_id` is derived from the task, the message and the requester's latest user message, so a retry in the same turn is deduplicated while the same words in a later turn are a new message. A task with no conversation yet is refused.
+
+### Session-owned tasks
+
+`InputTask.session_owned` marks a task the *conversation itself* works on. Binding is `task.session_id` (the session running it) plus `session.source_task_id`; `source_session_id` keeps meaning "the conversation that created it". Created by an active `tasks_create` or an attaching `tasks_report`; `InputTaskService.bind_session_owned` sets the flag and `in_progress` in one commit.
+
+Settlement is explicit only. Turn end, session error or stop, the status-repair sweep, `sync_task_status_from_sessions` and `handle_stream_started` leave the task alone, and a person typing does not unblock a `blocked` one. What changes it: `tasks_report` `done`/`failed`, the `tasks_reply` answer flow, a person's status move, or an explicit close. A `blocked` question defaults to audience `user`. Feedback to the creator is delivered only once terminal, and `deliver_feedback_to_source` skips when `source_session_id == session_id`. `link_session` and `reset_task_if_no_sessions` clear the flag. The report rule does not apply (context block `report required: no`). The field is not in `InputTaskPublic`.
+
+A person answers a session-owned task's `blocked` question from the board via `POST /tasks/{id}/delegation-reply`: the answer is posted into the task's own conversation and the task moves `blocked` → `in_progress`, the same way `tasks_reply` does. Typing in the chat does not unblock it; the agent's next `in_progress` report does.
+
+This shipped as kit contract 1.16.0 with `protocol_version` staying 1, so an older host refuses `active` with "Choose category backlog or ready".
 
 ## artifacts_publish
 
@@ -85,7 +98,7 @@ The environment advertises its version on every stream's final `done` event (`pr
 
 What the prompt carries is data; how to use the tools is the `cinna-tasks` skill's business.
 
-- **Context block.** For a conversation-mode session with a current task, open delegations or ready tasks, `prompt_generator.build_task_context_section()` renders the schema's `context_block`: where the agent runs, the current task (`ref`, title, `report required: yes|no`), chain depth, open delegations (with how many wait on the user), ready tasks, and `tasks skill: cinna-tasks v1`. A subtask received over a team connection adds that connection's prompt under "Why you received this:". The backend supplies the facts as `session_context["task_protocol"]` (`message_service._task_protocol_context`); an older backend that sends only `task_short_code`/`task_title` yields the current-task line with `report required: no`.
+- **Context block.** For a conversation-mode session with a current task, open delegations or ready tasks, `prompt_generator.build_task_context_section()` renders the schema's `context_block`: where the agent runs, the current task (`ref`, title, `report required: yes|no`), chain depth, open delegations (with how many wait on the user), ready tasks, and `tasks skill: cinna-tasks v1`. A subtask received over a team connection adds that connection's prompt under "Why you received this:". The backend supplies the facts as `session_context["task_protocol"]` (`message_service._task_protocol_context`); a session-owned task is named as the current task with `report required: no`; an older backend that sends only `task_short_code`/`task_title` yields the current-task line with `report required: no`.
 - **Report footer.** When the executor's environment is at protocol ≥ 1, `InputTaskService.execute_task()` appends `REPORT_REQUIRED_FOOTER` (call `tasks_report` once, `blocked` with a question if stuck, otherwise "Ended without reporting") to the first message of every task the report rule applies to (`InputTaskService.is_automated()`, no final report yet). A delegation-contract task (`delegation_metadata`) keeps its own footer, `how_to_report(version)`.
 - **Configured handovers.** The handover prompt lists each configured target as `agent:<uuid>` with its user-authored trigger — see [Agent Handover](../agent_handover/agent_handover.md).
 - **Result packet.** A delegated task's outcome arrives in the requester's conversation as `Task result from <agent> on <ref>:` followed by status, summary, body (cut at 8,000 characters with a pointer to `tasks_get`), artifacts and any question — see [Input Tasks](../../application/input_tasks/input_tasks.md).
@@ -127,6 +140,7 @@ Same scoped env token as every agent-env → backend call: `Authorization: Beare
 ## Known gaps
 
 - The 20-per-conversation cap counts existing rows by `source_session_id`, so a deleted task no longer counts and frees a slot — an accepted approximation.
+- A session-owned task is never ended by its session; it stays `in_progress`/`blocked` until reported, answered, closed or moved by a person.
 - The report rule replaces only auto-completion: a session that ends in an **error** still sets the task to `error`, report or not.
 
 ## Related Docs

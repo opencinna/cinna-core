@@ -140,6 +140,7 @@ These settings apply globally to all share links for the agent — there is no p
 - Shares can have an expiration time (`expires_at`)
 - The `allow_data_api` flag controls whether the data API is accessible through this share
 - JWT issued on auth has `role: "webapp-viewer"`, 24h max lifetime (or share expiry, whichever is sooner)
+- Share links are never indexed by search engines (`X-Robots-Tag: noindex` on every response); see [Nginx Setup](../../infrastructure/nginx_setup.md#production-setup)
 
 ### Access Levels
 
