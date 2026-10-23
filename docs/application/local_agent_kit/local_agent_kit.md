@@ -436,6 +436,16 @@ publishing the kit — see **Business Rules** below.
   tester who cannot tell whether they were talking to the agent or to an
   assistant imitating it has learned nothing, which is the entire reason the
   verb exists.
+- **Scripts are written to be readable by Cinna Desktop's Run Script form.**
+  Guide 03 (`guides/03-scripts-and-data.md`) asks every workspace script to open
+  with a module docstring carrying a `Usage:` line and to define one argparse
+  parser (at module level or in `build_parser()`), with `help=` on every
+  argument and the option names, choices and defaults written as literals (a
+  click or typer single command is also readable). Cinna Desktop reads the
+  script's source — it never runs it — and builds one form field per option.
+  A script that does not follow the rule still runs; the user just types its
+  arguments by hand. This is authoring guidance, not a contract change: the
+  contract stays at 1.16.0 and the `CHANGELOG.md` entry is unversioned.
 - **Anti-over-engineering is an explicit rule, not a suggestion.** The kit's own
   text tells the assistant never to add a capability-ladder rung whose trigger
   has not fired, and `kit.py validate` only ever advises (warnings) until the

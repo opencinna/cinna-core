@@ -5,12 +5,16 @@ body, using a temp-file + ``os.replace`` so a reader never sees a partial write.
 This is the same file and the same convention the platform reads in the cloud, so a
 locally built agent's status surfaces on its agent card unchanged after import.
 
-Usage::
+Usage: uv run scripts/update_status.py --status {ok,info,warning,error} [--summary TEXT] [--details TEXT]
 
-    python scripts/update_status.py --status ok --summary "All clear"
-    python scripts/update_status.py --status warning --summary "Queue backing up" \
+Examples::
+
+    uv run scripts/update_status.py --status ok --summary "All clear"
+    uv run scripts/update_status.py --status warning --summary "Queue backing up" \
         --details "Queue depth: 142"
-    python scripts/update_status.py --status error --summary "Source unreachable"
+    uv run scripts/update_status.py --status error --summary "Source unreachable"
+
+In the cloud the same calls run as ``python scripts/update_status.py ...``.
 
 Frontmatter keys are exactly ``status``, ``summary`` and ``timestamp``. Severity is
 one of ok | info | warning | error; anything else is rejected here because the
@@ -30,8 +34,6 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-
-VALID_STATUSES = ("ok", "info", "warning", "error")
 
 AGENT_ROOT = Path(__file__).resolve().parent.parent
 STATUS_FILE = AGENT_ROOT / "app-data" / "storage" / "STATUS.md"
@@ -67,17 +69,22 @@ def write_atomic(content: str, target: Path, tmp: Path) -> None:
     os.replace(tmp, target)
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """The script's options, readable without running it."""
     parser = argparse.ArgumentParser(description="Update the agent's STATUS.md atomically.")
     parser.add_argument(
         "--status",
         required=True,
-        choices=VALID_STATUSES,
+        choices=["ok", "info", "warning", "error"],
         help="Severity: ok | info | warning | error",
     )
     parser.add_argument("--summary", default=None, help="Short one-line description")
     parser.add_argument("--details", default=None, help="Markdown body appended below the heading")
-    args = parser.parse_args()
+    return parser
+
+
+def main() -> int:
+    args = build_parser().parse_args()
 
     try:
         write_atomic(build_content(args.status, args.summary, args.details), STATUS_FILE, TEMP_FILE)

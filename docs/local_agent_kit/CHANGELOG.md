@@ -16,6 +16,19 @@ folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
 
+## Scripts readable without running them
+
+Documentation update, with no schema-shape or contract-version change.
+`guides/03-scripts-and-data.md` now asks every script to open with a docstring
+whose first lines say what it does followed by a `Usage:` line, to build its
+options with one `argparse.ArgumentParser` at module level or in a
+`build_parser()` function, to give every `add_argument` a `help=`, and to keep
+option names, `choices=`, `default=` and `action=` literal (`click` and `typer`
+single commands work too). Cinna Desktop reads a script's options from its
+source, never by running it, and shows them as a form; a script it cannot read
+still runs, its arguments typed by hand. The shipped `scripts/update_status.py`
+follows the rule, and the `scripts/README.md` template and `START.md` say it.
+
 ## 1.16.0 — a conversation can own its task
 
 Additive. Every 1.x folder stays valid and needs no change, and a tool built

@@ -59,6 +59,10 @@ _No agent scripts yet._
 ## Conventions
 
 - One step per script. If a script needs a paragraph to explain, split it.
+- Every script opens with a docstring: what it does, then a `Usage:` line. Its
+  options come from one `argparse.ArgumentParser` (module level or `build_parser()`)
+  with literal names and a `help=` on every argument, so Cinna Desktop can show
+  them as a form without running the script.
 - Scripts take arguments; they do not hardcode values that belong in `config/`.
 - Large results are passed between scripts through files in `app-data/storage/`,
   not through stdout.
