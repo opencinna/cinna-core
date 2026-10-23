@@ -41,7 +41,7 @@ Not to be confused with the `artifacts` field of an input task, which is just a 
 ### 3. Share
 - **Grants:** the owner replaces the full grant list of people or [user groups](../user_groups/user_groups.md) ("view" level; a role principal is rejected). Group members are resolved live: removing someone from the group, or revoking the group grant, makes the next request 404.
 - **Visibility:** the owner flips `private` / `instance`.
-- **Public link:** the owner creates a link; the token (and the code, if any) is shown **once**, at creation. Anyone with the URL (and code) opens the artifact without an account. The owner can revoke it at any time.
+- **Public link:** the owner creates a link; the token (and the code, if any) is shown **once**, at creation. Anyone with the URL (and code) opens the artifact without an account. The owner can revoke it at any time. Public links are never indexed by search engines (`X-Robots-Tag: noindex`); see [Nginx Setup](../../infrastructure/nginx_setup.md#production-setup).
 
 ### 4. Open a public link
 1. `info` tells the page the title, owner name, whether a code is needed, whether it is expired or blocked.

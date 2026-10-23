@@ -1,0 +1,15 @@
+# Crawling is allowed on purpose. Nothing here is meant to be indexed, and every
+# response says so (X-Robots-Tag and <meta name="robots"> noindex). A crawler
+# only sees noindex on a page it is allowed to fetch: `Disallow: /` would leave
+# links (some carry an access token in the URL) indexable as bare URLs.
+User-agent: *
+Allow: /
+
+# AI-training crawlers that do not feed a search index: no crawling at all.
+User-agent: GPTBot
+User-agent: CCBot
+User-agent: Google-Extended
+User-agent: anthropic-ai
+User-agent: ClaudeBot
+User-agent: Bytespider
+Disallow: /

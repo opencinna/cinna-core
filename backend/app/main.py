@@ -12,6 +12,7 @@ from app.api.routes.git_http import router as git_http_router
 from app.api.routes.artifact_content import router as artifact_content_router
 from app.core.artifact_content_middleware import ArtifactContentMiddleware
 from app.core.artifact_upload_limit_middleware import ArtifactUploadLimitMiddleware
+from app.core.robots_middleware import RobotsTagMiddleware
 from app.api.routes.cli import setup_router as cli_setup_router
 from app.api.routes.desktop_auth import router as desktop_auth_router  # noqa: F401 (used below)
 from app.api.routes.local_agent_kit import start_router as local_agent_kit_router
@@ -511,6 +512,11 @@ app.add_middleware(
 app.add_middleware(ArtifactContentMiddleware)
 # Body cap for artifact uploads, whatever the reverse proxy allows.
 app.add_middleware(ArtifactUploadLimitMiddleware)
+# X-Robots-Tag noindex on every HTTP response — MUST stay the last
+# add_middleware call so it is the outermost layer and also stamps the
+# responses the middlewares above write themselves (/a/ preflights and 500s,
+# upload 413s) and the mounted sub-apps. See app/core/robots_middleware.py.
+app.add_middleware(RobotsTagMiddleware)
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
 

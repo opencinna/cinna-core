@@ -78,6 +78,8 @@ location /git/ {
 
 # ── Frontend SPA: everything else ────────────────────────────────────────────
 location / {
+    # The SPA and static files never reach the backend: mark them noindex here.
+    add_header X-Robots-Tag "noindex, nofollow, noarchive, nosnippet, noimageindex" always;
     try_files $uri $uri/ /index.html;
 }
 ```
@@ -88,7 +90,7 @@ It holds three locations:
 |----------|--------|--------------------|
 | `~ ^/(api/\|mcp/\|ws/\|acp/\|a/\|agent-hooks/\|agent-start(/\|$)\|\.well-known/(...))` | every backend path except git | one transport profile fits all of them (below) |
 | `/git/` | desktop agent git smart HTTP | pushes need a 256 MiB body and no request buffering |
-| `/` | the SPA, `try_files $uri $uri/ /index.html` | static files |
+| `/` | the SPA, `try_files $uri $uri/ /index.html`, plus `/robots.txt` | static files; carries `X-Robots-Tag` itself |
 
 **Backend block transport profile.** It is tuned to the most demanding route it carries, which is harmless for the rest:
 
@@ -97,7 +99,9 @@ It holds three locations:
 - `proxy_read_timeout`/`proxy_send_timeout 3600s`: long-lived tunnels and terminals are not cut while idle. The trade-off is that a hung API request is held up to an hour instead of 60 s.
 - `client_max_body_size 100m`, the largest upload (`UPLOAD_MAX_FILE_SIZE_MB`). Smaller per-route caps are enforced by the backend with a JSON 413: skill publish 17 MiB, artifacts `ARTIFACT_MAX_REVISION_BYTES + ARTIFACT_UPLOAD_OVERHEAD_BYTES` (55 MiB).
 - Forwarded headers: `Host`, `X-Real-IP`, `X-Forwarded-For`, `X-Forwarded-Proto`.
-- No `add_header`. The backend sets CSP, CORS and framing headers itself (see [Artifact content](#artifact-content-a)).
+- No `add_header`. The backend sets CSP, CORS, framing and `X-Robots-Tag` headers itself (see [Artifact content](#artifact-content-a)).
+
+**Search engines.** Nothing Cinna serves is meant to be indexed: share, webapp, guest and artifact links carry their credential in the URL. The backend stamps `X-Robots-Tag: noindex, nofollow, noarchive, nosnippet, noimageindex` on every response, `location /` adds the same header to the SPA and static files, and `index.html` carries the matching `<meta name="robots">`. The SPA ships a `/robots.txt` (served by `location /`) that allows crawling on purpose: a crawler only sees `noindex` on a page it may fetch, and a `Disallow: /` URL can still be listed bare. Keep the `add_header` line in `location /`. Note that nginx stops inheriting the `server` block's `add_header` lines in a location that has its own, so repeat any server-wide headers (HSTS and the like) inside `location /`.
 
 **Placement.** nginx picks a matching regex location over prefix ones, so the backend block always beats `location /`. Among regex locations the first match in file order wins, so the config must sit **above** any other regex location in the server block. Otherwise an earlier `location ~* \.(js|css)$` cache rule would capture `/a/v/<cap>/app.js`, for example. A `location ~ /\.(?!well-known)` dotfile deny rule placed below keeps working for non-backend paths.
 

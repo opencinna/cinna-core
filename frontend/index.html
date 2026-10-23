@@ -3,6 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Never indexed: capability links (/s/<token>, /webapp/<token>, /guest/<token>) carry the credential in the URL. Same directive as the backend X-Robots-Tag (backend/app/core/robots_middleware.py). -->
+    <meta name="robots" content="noindex, nofollow, noarchive, nosnippet, noimageindex" />
     <title>%VITE_APP_NAME%</title>
     <link rel="icon" type="image/x-icon" href="/assets/images/favicon.ico" />
     <link rel="icon" type="image/png" sizes="16x16" href="/assets/images/favicon-16x16.png" />
