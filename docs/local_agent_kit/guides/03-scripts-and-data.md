@@ -24,6 +24,26 @@ Run them with `uv run scripts/<x>.py` locally. In the cloud the same file runs a
 `python scripts/<x>.py` with the workspace root as the working directory — so
 **never use an absolute path** and never assume a virtualenv.
 
+## Make every script readable without running it
+
+Cinna Desktop turns a command in the conversation into a form — one field per
+option — by **reading the script's source, never by running it**. Write scripts so
+that reading is enough:
+
+- Open the module with a docstring whose first lines say what the script does,
+  followed by a `Usage:` line, for example
+  `Usage: uv run scripts/book_vacation.py --employee ID --start DATE [--dry-run]`.
+- Build the options with **one** `argparse.ArgumentParser` at module level or in
+  a `build_parser()` function, and give **every** `add_argument` a `help=`.
+- Use literal option names, `choices=[...]`, `default=` and `action="store_true"`
+  rather than computing them; an option whose name is built at runtime cannot be
+  read, and the script gets no form at all.
+- `click` and `typer` work too, as one command function with its options declared
+  directly on it.
+
+A script the desktop cannot read still runs; the person just types its arguments
+by hand.
+
 ## Passing data between scripts
 
 | Data size | How |
@@ -162,4 +182,6 @@ that do not exist.
 - Every paginated fetch specifies an explicit sort order.
 - If a cache exists: it is fully rebuildable, has a `.last_updated` file, and
   `docs/WORKFLOW_PROMPT.md` states the freshness rule.
+- Every script opens with a docstring carrying a `Usage:` line, and every
+  argument has a `help=`.
 - `scripts/README.md` lists exactly the scripts that exist.
