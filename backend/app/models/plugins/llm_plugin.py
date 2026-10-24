@@ -214,6 +214,12 @@ class LLMPluginMarketplacePlugin(LLMPluginMarketplacePluginBase, table=True):
         Index("idx_plugin_marketplace_name_unique", "marketplace_id", "name", unique=True),
         Index("idx_plugin_marketplace", "marketplace_id"),
         Index("idx_plugin_category", "category"),
+        # The snapshot worker's queue scan: only pending rows, ordered by lease.
+        Index(
+            "ix_plugin_snapshot_pending",
+            "snapshot_lease_until",
+            postgresql_where=sa.text("snapshot_status = 'pending'"),
+        ),
     )
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
@@ -237,6 +243,39 @@ class LLMPluginMarketplacePlugin(LLMPluginMarketplacePluginBase, table=True):
     # columns were added.
     skill_archive_sha256: Optional[str] = Field(default=None, max_length=64)
     skill_archive_size: Optional[int] = Field(default=None)
+    # Content snapshot of the entry, every format. ``skills`` rows mirror the
+    # ``skill_archive_*`` pair; ``claude`` / ``codex`` rows hold the archive of
+    # the whole plugin tree (members ``<plugin-name>/<rel>``), built inside the
+    # sync for local entries and by the snapshot worker for external ones.
+    # Independent of ``supported`` / ``unsupported_reason``, which keep their
+    # cloud-install meaning.
+    archive_sha256: Optional[str] = Field(default=None, max_length=64)
+    archive_size: Optional[int] = Field(default=None)
+    #: ``pending`` | ``ready`` | ``failed``; NULL for a format with no snapshot.
+    snapshot_status: Optional[str] = Field(default=None, max_length=16)
+    #: Why ``failed``: ``no_components`` | ``unsafe_path`` | ``too_large`` |
+    #: ``fetch_failed`` | ``unknown_source`` (skills rows: their
+    #: ``unsupported_reason``).
+    snapshot_reason: Optional[str] = Field(default=None, max_length=64)
+    #: ``local:<path>`` or ``<canonical https url>#<subdir>``: what the
+    #: snapshot was (or is to be) taken of. Part of the worker's
+    #: compare-and-set, so a re-planned row discards in-flight work.
+    snapshot_source_key: Optional[str] = Field(default=None, max_length=1024)
+    #: The commit the current verdict was taken at.
+    snapshot_commit: Optional[str] = Field(default=None, max_length=64)
+    #: The ref the worker resolves when the source pins no sha.
+    snapshot_ref: Optional[str] = Field(default=None, max_length=255)
+    snapshot_at: Optional[datetime] = Field(default=None)
+    snapshot_attempts: int = Field(
+        default=0, nullable=False, sa_column_kwargs={"server_default": "0"}
+    )
+    #: Worker claim (uuid per claim batch) and its lease; both NULL when idle.
+    snapshot_claim_id: Optional[uuid.UUID] = Field(default=None)
+    snapshot_lease_until: Optional[datetime] = Field(default=None)
+    #: :class:`PluginComponents` as JSON, from the snapshot analysis.
+    components: Optional[dict] = Field(default=None, sa_column=Column(JSON))
+    #: Scripts, hooks, a stdio MCP server or an LSP server in the snapshot.
+    runs_code: Optional[bool] = Field(default=None)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -269,6 +308,50 @@ class PluginSkillSummary(SQLModel):
     name: str
     description: str = ""
     has_scripts: bool = False
+
+
+class PluginSkillComponent(SQLModel):
+    """One skill folder a plugin snapshot ships."""
+
+    name: str
+    has_scripts: bool = False
+
+
+class PluginMcpEnv(SQLModel):
+    """One environment value an MCP server needs from the user."""
+
+    name: str
+    secret: bool = False
+
+
+class PluginMcpServer(SQLModel):
+    """One MCP server a plugin snapshot declares."""
+
+    name: str
+    #: ``stdio`` | ``http`` | ``sse``
+    transport: str
+    #: ``node`` | ``python`` | ``docker`` | None (read off the command).
+    runtime: Optional[str] = None
+    #: ``none`` | ``oauth`` | ``bearer`` | ``env``
+    auth: str = "none"
+    env: list[PluginMcpEnv] = Field(default_factory=list)
+
+
+class PluginHooksComponent(SQLModel):
+    """The hook events a plugin snapshot registers."""
+
+    events: list[str] = Field(default_factory=list)
+
+
+class PluginComponents(SQLModel):
+    """What a marketplace entry's snapshot contains (README §3.1 ``components``)."""
+
+    skills: list[PluginSkillComponent] = Field(default_factory=list)
+    commands: list[str] = Field(default_factory=list)
+    agents: list[str] = Field(default_factory=list)
+    hooks: Optional[PluginHooksComponent] = None
+    mcp_servers: list[PluginMcpServer] = Field(default_factory=list)
+    lsp_servers: list[str] = Field(default_factory=list)
 
 
 class LLMPluginMarketplacePluginPublic(SQLModel):
@@ -307,6 +390,16 @@ class LLMPluginMarketplacePluginPublic(SQLModel):
     skill_archive_size: Optional[int] = None
     #: Present only for a one-skill entry (``skills`` format).
     skill_summary: Optional[PluginSkillSummary] = None
+    #: Snapshot of the entry, every format: what it contains, its archive
+    #: (served by ``GET /plugins/{id}/archive``) and the snapshot state.
+    components: Optional[PluginComponents] = None
+    archive_sha256: Optional[str] = None
+    archive_size: Optional[int] = None
+    #: ``pending`` | ``ready`` | ``failed`` (None: no snapshot for this row).
+    snapshot_status: Optional[str] = None
+    #: Stable code when ``failed``; the sentence belongs to the client.
+    snapshot_reason: Optional[str] = None
+    runs_code: Optional[bool] = None
     # Additional fields for discovery
     marketplace_name: Optional[str] = None
     #: The marketplace's ``owner`` (name, else email). The Add addon list
@@ -325,6 +418,41 @@ class LLMPluginMarketplacePluginsPublic(SQLModel):
 
     data: list[LLMPluginMarketplacePluginPublic]
     count: int
+
+
+class PluginEntryCounts(SQLModel):
+    """Per-state totals over a whole marketplace (filters ignored)."""
+
+    ready: int = 0
+    pending: int = 0
+    failed: int = 0
+    #: Rows the default retry (``all=false``) would queue: ``fetch_failed``
+    #: rows minus those only a sync can fix (``skipped_needs_sync``).
+    retryable: int = 0
+
+
+class LLMPluginMarketplaceEntriesPublic(SQLModel):
+    """Every entry of one marketplace, for its owner or a superuser.
+
+    ``count`` is the total matching the filters (not the page length);
+    ``counts`` totals snapshot states over the whole marketplace.
+    """
+
+    data: list[LLMPluginMarketplacePluginPublic]
+    count: int
+    counts: PluginEntryCounts = Field(default_factory=PluginEntryCounts)
+
+
+class PluginSnapshotRetryPublic(SQLModel):
+    """How many failed snapshots were queued again.
+
+    ``skipped_needs_sync``: failed local entries the worker cannot fetch (the
+    marketplace is cloned with an SSH key or has no public URL); a sync of the
+    marketplace re-takes them.
+    """
+
+    queued: int
+    skipped_needs_sync: int = 0
 
 
 # =============================================================================

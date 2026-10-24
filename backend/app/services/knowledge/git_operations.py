@@ -834,6 +834,189 @@ def subdir_changed_between(
         return tip_tree != base_tree
 
 
+class GitFetchTooLargeError(GitOperationError):
+    """A snapshot fetch / checkout grew past its byte cap and was killed."""
+    pass
+
+
+_FETCH_SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
+#: Default byte cap of :func:`fetch_tree` (the uncompressed plugin cap).
+FETCH_TREE_MAX_BYTES = 16 * 1024 * 1024
+
+
+def _fetch_tree_env() -> dict:
+    """Subprocess env for an anonymous public-HTTPS fetch of untrusted content."""
+    env = os.environ.copy()
+    _apply_network_timeout_env(env)
+    # Never prompt for credentials (a private or vanished repo fails at once)
+    # and never run an LFS smudge filter on content nobody vetted.
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GIT_LFS_SKIP_SMUDGE"] = "1"
+    return env
+
+
+def _validate_fetch_target(sha: Optional[str], ref: Optional[str]) -> None:
+    """Refuse a sha / ref that git could read as an option or a refspec."""
+    if sha is not None and not _FETCH_SHA_RE.match(sha):
+        raise ValueError(f"invalid commit sha: {sha!r}")
+    if ref is not None and (
+        not ref.strip()
+        or ref.startswith("-")
+        or any(c.isspace() or c in ":^~?*[\\" for c in ref)
+    ):
+        raise ValueError(f"invalid ref: {ref!r}")
+
+
+def _tree_bytes(path: str) -> int:
+    total = 0
+    for dir_path, _dirs, files in os.walk(path, followlinks=False):
+        for name in files:
+            try:
+                total += os.lstat(os.path.join(dir_path, name)).st_size
+            except OSError:
+                pass
+    return total
+
+
+def _run_bounded_git(
+    args: list[str],
+    *,
+    cwd: Optional[str],
+    env: dict,
+    timeout: int,
+    watch_dir: Optional[str] = None,
+    max_bytes: Optional[int] = None,
+) -> str:
+    """Run ``git <args>`` (no redirects followed), killed on timeout or, when
+    ``watch_dir`` is given, as soon as that directory outgrows ``max_bytes``.
+
+    Raises :class:`GitFetchTooLargeError` for the size kill and
+    :class:`GitOperationError` for any other failure.
+    """
+    import subprocess
+    import threading
+
+    proc = subprocess.Popen(
+        ["git", "-c", "http.followRedirects=false", *args],
+        cwd=cwd,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    too_large = threading.Event()
+
+    def _watchdog() -> None:
+        while proc.poll() is None:
+            if _tree_bytes(watch_dir) > max_bytes:
+                too_large.set()
+                proc.kill()
+                return
+            too_large.wait(0.25)
+
+    if watch_dir is not None and max_bytes is not None:
+        threading.Thread(target=_watchdog, daemon=True).start()
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.communicate()
+        raise GitOperationError(f"git {args[0]} timed out after {timeout}s")
+    if too_large.is_set():
+        raise GitFetchTooLargeError(f"git {args[0]} passed {max_bytes} bytes")
+    if proc.returncode != 0:
+        raise GitOperationError(
+            f"git {args[0]} failed: {err.decode('utf-8', 'replace').strip()[:500]}"
+        )
+    return out.decode("utf-8", "replace")
+
+
+def fetch_tree(
+    url: str,
+    dest: str,
+    *,
+    sha: Optional[str] = None,
+    ref: Optional[str] = None,
+    subdirs: Optional[list[str]] = None,
+    max_bytes: int = FETCH_TREE_MAX_BYTES,
+) -> str:
+    """Fetch one commit's tree of a public HTTPS repository into ``dest``.
+
+    A depth-1 partial fetch of ``sha`` (else ``ref``, else the remote
+    ``HEAD``), restricted by a no-cone sparse checkout to ``subdirs`` when any
+    are given, then checked out detached. Blob-less when sparse (the checkout
+    fetches only the blobs it needs); ``blob:limit=<max_bytes>`` for a whole
+    tree. Retried once without ``--filter`` when the server refuses partial
+    clone. Redirects are not followed. The fetch and the checkout are killed
+    once ``dest`` holds more than ``2 * max_bytes + 8 MB`` (a checkout plus
+    its compressed objects), raising :class:`GitFetchTooLargeError`.
+    Returns the resolved commit sha.
+
+    Raises:
+        ValueError: ``sha`` / ``ref`` is malformed.
+        EgressBlockedError: the host is blocked.
+        GitOperationError: any git failure (including timeouts).
+    """
+    _validate_fetch_target(sha, ref)
+    if not url.startswith("https://"):
+        raise ValueError("fetch_tree only fetches public https URLs")
+    assert_git_url_allowed(url)
+    env = _fetch_tree_env()
+    timeout = _git_network_timeout()
+    target = sha or ref or "HEAD"
+    watch = {"watch_dir": dest, "max_bytes": 2 * max_bytes + 8 * 1024 * 1024}
+    os.makedirs(dest, exist_ok=True)
+    run = lambda args, **kw: _run_bounded_git(  # noqa: E731
+        args, cwd=dest, env=env, timeout=timeout, **kw
+    )
+    run(["init", "-q"])
+    run(["remote", "add", "origin", url])
+    wanted = [
+        s.strip("/") for s in (subdirs or []) if s and s.strip("/") not in ("", ".")
+    ]
+    if wanted:
+        run(["sparse-checkout", "set", "--no-cone", *[f"/{s}/" for s in wanted]])
+    flt = "--filter=blob:none" if wanted else f"--filter=blob:limit={max_bytes}"
+    try:
+        run(["fetch", "--depth", "1", flt, "origin", target], **watch)
+    except GitFetchTooLargeError:
+        raise
+    except GitOperationError as exc:
+        logger.info("fetch_tree: retrying %s without --filter: %s", url, exc)
+        run(["fetch", "--depth", "1", "origin", target], **watch)
+    # A partial checkout fetches the blobs it needs: a network call, bounded
+    # the same way.
+    run(["checkout", "-q", "--detach", "FETCH_HEAD"], **watch)
+    return run(["rev-parse", "HEAD"]).strip()
+
+
+def ls_remote_commit(url: str, ref: Optional[str] = None) -> str:
+    """The commit a public repository's ``ref`` (default: its HEAD) points at.
+
+    Tries ``refs/heads/<ref>``, ``refs/tags/<ref>`` (dereferenced), then the
+    raw ref. Redirects are not followed.
+    """
+    _validate_fetch_target(None, ref)
+    if not url.startswith("https://"):
+        raise ValueError("ls_remote_commit only reads public https URLs")
+    assert_git_url_allowed(url)
+    env = _fetch_tree_env()
+    timeout = _git_network_timeout()
+    candidates = ["HEAD"] if not ref or ref == "HEAD" else [
+        f"refs/heads/{ref}", f"refs/tags/{ref}", ref,
+    ]
+    for candidate in candidates:
+        out = _run_bounded_git(
+            ["ls-remote", url, candidate], cwd=None, env=env, timeout=timeout
+        )
+        lines = [ln for ln in out.splitlines() if ln.strip()]
+        if not lines:
+            continue
+        deref = next((ln for ln in lines if ln.split("\t", 1)[-1].endswith("^{}")), None)
+        return (deref or lines[0]).split()[0]
+    raise GitOperationError(f"Ref {ref or 'HEAD'!r} not found in {url}")
+
+
 def get_current_commit_hash(repo: Repo) -> str:
     """
     Get the current commit hash of the repository.

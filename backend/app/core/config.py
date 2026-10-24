@@ -1034,6 +1034,20 @@ class Settings(BaseSettings):
     # catalog skill. See the backend volume in ``docker-compose.yml``.
     SKILL_STORAGE_DIR: str = "/app/data/skills"
 
+    # Marketplace plugin snapshot worker (``plugin_snapshot_worker``): external
+    # plugin sources are fetched and archived off the sync request, from a
+    # queue that is the plugin rows themselves (``snapshot_status='pending'``).
+    PLUGIN_SNAPSHOT_WORKERS: int = Field(default=3, ge=1)
+    #: Rows claimed per tick.
+    PLUGIN_SNAPSHOT_BATCH: int = Field(default=12, ge=1)
+    PLUGIN_SNAPSHOT_TICK_SECONDS: int = Field(default=30, ge=1)
+    #: A claim's lease; renewed by a heartbeat while the row is in flight, so a
+    #: killed process's rows return to the queue within one lease.
+    PLUGIN_SNAPSHOT_LEASE_SECONDS: int = Field(default=120, ge=10)
+    PLUGIN_SNAPSHOT_HEARTBEAT_SECONDS: int = Field(default=30, ge=1)
+    #: Fetch attempts before a row is ``failed`` / ``fetch_failed``.
+    PLUGIN_SNAPSHOT_MAX_ATTEMPTS: int = Field(default=5, ge=1)
+
     # Desktop agents' git storage (bare repos served at ``/git/<repo_id>.git``).
     #   <GIT_STORAGE_DIR>/<repo_id>.git          one bare repo per desktop agent
     #   <GIT_STORAGE_DIR>/.deleted/<repo_id>-<utc>  removed repos, purged by the operator

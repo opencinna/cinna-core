@@ -455,3 +455,221 @@ def delete_marketplace(
         f"{r.status_code}: {r.text}"
     )
     return r.json()
+
+
+# ── Plugin snapshots (claude / codex marketplaces) ───────────────────────────
+
+
+def _write_tree(dest: Path, files: dict) -> None:
+    for rel, content in files.items():
+        target = dest / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(content, bytes):
+            target.write_bytes(content)
+        else:
+            target.write_text(content, encoding="utf-8")
+
+
+def claude_repo(
+    entries: list[dict],
+    files: dict | None = None,
+    name: str | None = None,
+) -> Callable[[Path], None]:
+    """``populate`` for a claude marketplace: a catalog listing ``entries``
+    (raw marketplace.json plugin dicts) plus ``files`` (path -> text/bytes) for
+    local plugin trees."""
+    import json
+
+    def populate(root: Path) -> None:
+        _write_tree(
+            root,
+            {
+                ".claude-plugin/marketplace.json": json.dumps(
+                    {"name": name or f"snap-{uuid.uuid4().hex[:8]}", "owner": {"name": "Snap"}, "plugins": entries}
+                ),
+                **(files or {}),
+            },
+        )
+
+    return populate
+
+
+class PluginFetchStub:
+    """What ``stubbed_plugin_fetch`` yields: call records and fault switches."""
+
+    def __init__(self, trees_by_url: dict, commits_by_url: dict | None) -> None:
+        self.trees_by_url = trees_by_url
+        self.commits_by_url = commits_by_url or {}
+        self.fetch_calls: list[dict] = []
+        self.ls_remote_calls: list[tuple] = []
+        #: urls whose fetch / ls-remote raises a transient git error
+        self.fail_urls: set[str] = set()
+        #: called with the url in the middle of every fetch (race simulation)
+        self.on_fetch: Callable[[str], None] | None = None
+
+    def commit_for(self, url: str) -> str:
+        return self.commits_by_url.get(url, "f" * 40)
+
+    def fetch_urls(self) -> list[str]:
+        return [c["url"] for c in self.fetch_calls]
+
+
+@contextmanager
+def stubbed_plugin_fetch(
+    trees_by_url: dict[str, dict | Callable[[Path], None]],
+    *,
+    commits_by_url: dict[str, str] | None = None,
+) -> Iterator[PluginFetchStub]:
+    """Replace the worker's two network seams with in-memory repositories.
+
+    ``trees_by_url`` maps a canonical https url to ``{relative path: text |
+    bytes}`` (or a ``populate(dest)`` callable). The worker calls
+    ``git_operations.fetch_tree`` / ``ls_remote_commit`` by module attribute,
+    so patching them there is enough. Without this a sync with external
+    entries would try a real network fetch.
+    """
+    from app.services.knowledge.git_operations import GitOperationError
+
+    stub = PluginFetchStub(trees_by_url, commits_by_url)
+
+    def _tree(url: str):
+        if url in trees_by_url:
+            return trees_by_url[url]
+        return trees_by_url.get(url.removesuffix(".git"))
+
+    def _fetch(url, dest, *, sha=None, ref=None, subdirs=None):
+        stub.fetch_calls.append(
+            {"url": url, "sha": sha, "ref": ref, "subdirs": subdirs}
+        )
+        if stub.on_fetch is not None:
+            stub.on_fetch(url)
+        if url in stub.fail_urls:
+            raise GitOperationError(f"fetch of {url} failed (stub)")
+        tree = _tree(url)
+        if tree is None:
+            raise GitOperationError(f"no stub tree for {url}")
+        if callable(tree):
+            tree(Path(dest))
+        else:
+            _write_tree(Path(dest), tree)
+        return sha or stub.commit_for(url)
+
+    def _ls_remote(url, ref=None):
+        stub.ls_remote_calls.append((url, ref))
+        if url in stub.fail_urls:
+            raise GitOperationError(f"ls-remote of {url} failed (stub)")
+        return stub.commit_for(url)
+
+    with (
+        patch("app.services.knowledge.git_operations.fetch_tree", side_effect=_fetch),
+        patch(
+            "app.services.knowledge.git_operations.ls_remote_commit",
+            side_effect=_ls_remote,
+        ),
+    ):
+        yield stub
+
+
+def _plugin_row(db: Session, plugin_id: str):
+    from app.models.plugins.llm_plugin import LLMPluginMarketplacePlugin
+
+    row = db.get(LLMPluginMarketplacePlugin, uuid.UUID(str(plugin_id)))
+    assert row is not None, f"plugin {plugin_id} not found"
+    return row
+
+
+def hold_snapshot_lease(db: Session, plugin_id: str, *, seconds: int = 3600) -> None:
+    """Make a pending row look claimed by a live worker (lease in the future).
+
+    A documented DB seam: a lease held by *another process* has no endpoint.
+    Only the three claim columns are written.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    row = _plugin_row(db, plugin_id)
+    row.snapshot_claim_id = uuid.uuid4()
+    row.snapshot_lease_until = datetime.now(UTC).replace(tzinfo=None) + timedelta(
+        seconds=seconds
+    )
+    db.add(row)
+    db.commit()
+
+
+def expire_snapshot_lease(db: Session, plugin_id: str) -> None:
+    """Move a row's lease into the past (a worker that died / a backoff elapsed)."""
+    from datetime import UTC, datetime, timedelta
+
+    row = _plugin_row(db, plugin_id)
+    row.snapshot_lease_until = datetime.now(UTC).replace(tzinfo=None) - timedelta(
+        seconds=5
+    )
+    db.add(row)
+    db.commit()
+
+
+def snapshot_lease_seconds_left(db: Session, plugin_id: str) -> float | None:
+    """Seconds until the row's lease lapses (None: no lease). Read-only seam."""
+    from datetime import UTC, datetime
+
+    db.expire_all()
+    row = _plugin_row(db, plugin_id)
+    if row.snapshot_lease_until is None:
+        return None
+    return (
+        row.snapshot_lease_until - datetime.now(UTC).replace(tzinfo=None)
+    ).total_seconds()
+
+
+def list_marketplace_entries(
+    client: TestClient,
+    headers: dict[str, str],
+    marketplace_id: str,
+    *,
+    expected_status: int = 200,
+    **params,
+) -> dict:
+    """GET ``/llm-plugins/marketplaces/{id}/entries`` (snapshot_status, search, skip, limit)."""
+    r = client.get(
+        f"{PLUGINS_BASE}/marketplaces/{marketplace_id}/entries",
+        headers=headers,
+        params=params,
+    )
+    assert r.status_code == expected_status, r.text
+    return r.json()
+
+
+def entries_by_name(payload: dict) -> dict[str, dict]:
+    return {row["name"]: row for row in payload["data"]}
+
+
+def retry_snapshots(
+    client: TestClient,
+    headers: dict[str, str],
+    marketplace_id: str,
+    *,
+    include_all: bool = False,
+    expected_status: int = 200,
+) -> dict:
+    """POST ``/llm-plugins/marketplaces/{id}/snapshots/retry[?all=true]``."""
+    r = client.post(
+        f"{PLUGINS_BASE}/marketplaces/{marketplace_id}/snapshots/retry",
+        headers=headers,
+        params={"all": "true"} if include_all else {},
+    )
+    assert r.status_code == expected_status, r.text
+    return r.json()
+
+
+def get_plugin_archive(
+    client: TestClient,
+    headers: dict[str, str],
+    plugin_id: str,
+    *,
+    sha256: str | None = None,
+):
+    """GET ``/llm-plugins/plugins/{id}/archive`` — the raw response."""
+    return client.get(
+        f"{PLUGINS_BASE}/plugins/{plugin_id}/archive",
+        headers=headers,
+        params={"sha256": sha256} if sha256 is not None else {},
+    )

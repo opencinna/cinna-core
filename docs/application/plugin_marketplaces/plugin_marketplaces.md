@@ -1,7 +1,7 @@
 ---
 feature: plugin_marketplaces
 domain: application
-one_liner: "Lets admins register Git-based marketplaces of plugins and skills that users install into their agents, syncing metadata into Postgres and snapshotting skills-format entries for download."
+one_liner: "Lets admins register Git marketplaces of plugins and skills that users install into agents, snapshotting each entry with its components for download."
 docs:
   tech: plugin_marketplaces_tech.md
 ---
@@ -68,7 +68,7 @@ This means marketplace sync is now purely a metadata operation — fast, statele
 
 - **Admin-only management**: Creating, updating, deleting, and syncing marketplaces requires superuser access.
 - **Automatic initial sync**: Marketplace registration always triggers an immediate sync.
-- **Temp-clone**: Every sync (initial or manual) clones to a new throwaway directory and discards it. The backend holds Postgres rows and, for `skills` marketplaces only, one snapshot archive per supported entry.
+- **Temp-clone**: Every sync (initial or manual) clones to a new throwaway directory and discards it. The backend holds Postgres rows and, for `skills` marketplaces only, one snapshot archive per snapshotted entry (see Snapshots below).
 - **Skill snapshots**: at sync each supported entry of a skills-format marketplace is archived under a content digest so a desktop can download exactly that version. An unchanged folder keeps its digest (no "update"); past digests stay downloadable until the marketplace or user is deleted. A tree over 16 MB is unsupported with reason `too_large`. An entry removed by sync is simply not found afterwards. Entries synced before the upgrade have no snapshot until the next sync.
 - **Who can download**: anyone who can see the entry in discovery (own marketplace or public discovery) — superusers get no extra view on that route.
 - **Update detection**: `sync_commit_hash` stores the HEAD commit of the last sync. Comparing installed plugin commit hashes against `LLMPluginMarketplacePlugin.commit_hash` enables `has_update` detection on agent plugin links.
@@ -82,6 +82,14 @@ This means marketplace sync is now purely a metadata operation — fast, statele
 - **Plugin source types within a marketplace** (`claude` and `codex`; a `skills` repo is local-only):
   - `local` — Plugin files live inside the marketplace repo at a relative path (`source_path`). Git coordinates stored: `marketplace.url` + commit hash.
   - `url` — Plugin files live in an external Git repo (`source_url`). Git coordinates stored: `source_url` + `source_commit_hash` or branch.
+
+### Snapshots
+
+- **One archive per entry, one digest per plugin entry.** Every format is archived under a content digest with the entry's components (skills, commands, agents, MCP servers, hooks, LSP) and a "runs code" flag. A plugin entry keeps only its current digest; skills-format entries keep their history. Cloud installs ignore snapshots; they serve Cinna Desktop.
+- **State per entry**: `pending`, `ready` or `failed`, with a reason: `no_components`, `unsafe_path`, `too_large`, `fetch_failed`, `unknown_source`. It is independent of `supported`.
+- **The sync does not wait.** Entries inside the marketplace repo are snapshotted during the sync. Entries pointing at other repos are `pending` and a background worker fetches them after the sync returns; progress survives restarts. An unchanged source is never fetched again.
+- **Failures**: a fetch error is retried with a growing delay up to a limit, then `fetch_failed` (the previous archive stays downloadable). Content failures are final until the source changes. Admins can retry failed entries from the Plugins tab, which shows each entry's snapshot state and components.
+- **Download** follows discovery visibility (own or public marketplace); a download answers "pending" or "failed" only when no digest exists yet. Sources are public HTTPS only; unsafe paths, symlinks, redirects and oversize trees are refused.
 
 ## Marketplace formats
 
@@ -156,4 +164,5 @@ Update detection → compare AgentPluginLink.installed_commit_hash
 
 ## Changelog
 
+- 2026-10-24: Plugin-format (claude/codex) entries are snapshotted too, local ones in the sync and external ones by a background worker; entries carry a component analysis; new `archive`, `entries` and `snapshots/retry` routes.
 - 2026-10-18: Skills-format marketplaces snapshot every supported entry at sync; `skill-archive` and batch `plugins?ids=` routes let Cinna Desktop install marketplace skills.

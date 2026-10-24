@@ -77,6 +77,35 @@ Auto-generated from OpenAPI spec. Tag: `llm-plugins`
 
 ---
 
+## GET `/api/v1/llm-plugins/marketplaces/{marketplace_id}/entries`
+**List Marketplace Entries**
+
+**Path parameters:**
+- `marketplace_id`: uuid
+
+**Query parameters:**
+- `snapshot_status`: string | null
+- `search`: string | null
+- `skip`: integer, default: `0`
+- `limit`: integer, default: `50`
+
+**Response:** `LLMPluginMarketplaceEntriesPublic`
+
+---
+
+## POST `/api/v1/llm-plugins/marketplaces/{marketplace_id}/snapshots/retry`
+**Retry Marketplace Snapshots**
+
+**Path parameters:**
+- `marketplace_id`: uuid
+
+**Query parameters:**
+- `all`: boolean, default: `False`
+
+**Response:** `PluginSnapshotRetryPublic`
+
+---
+
 ## GET `/api/v1/llm-plugins/discover`
 **Discover Plugins**
 
@@ -104,6 +133,17 @@ Auto-generated from OpenAPI spec. Tag: `llm-plugins`
 
 ## GET `/api/v1/llm-plugins/plugins/{plugin_id}/skill-archive`
 **Get Plugin Skill Archive**
+
+**Path parameters:**
+- `plugin_id`: uuid
+
+**Query parameters:**
+- `sha256`: string | null
+
+---
+
+## GET `/api/v1/llm-plugins/plugins/{plugin_id}/archive`
+**Get Plugin Archive**
 
 **Path parameters:**
 - `plugin_id`: uuid

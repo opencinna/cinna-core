@@ -148,3 +148,95 @@ export function unsupportedReasonSentence(
 ): string {
   return UNSUPPORTED_REASON_COPY[code ?? ""] ?? UNSUPPORTED_FALLBACK
 }
+
+/**
+ * An entry's content snapshot — the archive Cinna Desktop downloads — as a
+ * label and a dot tone. Independent of `supported` above, which keeps its
+ * cloud-install meaning: an entry can be "Not installable" in the cloud and
+ * still have a ready snapshot.
+ *
+ * `null` for a row with no snapshot state (a format with no snapshot, or a row
+ * not re-synced since the columns were added): absent facts render nothing.
+ */
+
+/**
+ * Own-key lookup for the copy tables, so a code like `constructor` or
+ * `toString` cannot match a prototype key. Not `Object.hasOwn`: that is
+ * ES2022 and the build's lib is ES2020.
+ */
+function hasOwn(table: object, key: string): boolean {
+  return Object.keys(table).includes(key)
+}
+
+export type SnapshotStatus = "pending" | "ready" | "failed"
+
+const SNAPSHOT_STATUS_COPY: Record<
+  SnapshotStatus,
+  { label: string; tone: "on" | "off" | "error" }
+> = {
+  ready: { label: "Ready", tone: "on" },
+  pending: { label: "Pending", tone: "off" },
+  failed: { label: "Failed", tone: "error" },
+}
+
+export function snapshotStatusMeta(status: string | null | undefined): {
+  status: SnapshotStatus
+  label: string
+  tone: "on" | "off" | "error"
+} | null {
+  if (!status || !hasOwn(SNAPSHOT_STATUS_COPY, status)) return null
+  const known = status as SnapshotStatus
+  return { status: known, ...SNAPSHOT_STATUS_COPY[known] }
+}
+
+/**
+ * Why a snapshot failed, keyed by the server's stable `snapshot_reason`
+ * (`backend/app/models/plugins/llm_plugin.py`). A `skills`-format row carries
+ * its `unsupported_reason` code here, so an unknown code falls through to that
+ * table before the generic sentence.
+ */
+const SNAPSHOT_REASON_COPY: Record<string, string> = {
+  no_components:
+    "This entry ships no skills, commands, agents, hooks or servers, so there is nothing to deliver.",
+  unsafe_path:
+    "This entry contains a path outside its folder or a symlink, so it cannot be packed safely.",
+  too_large: "This entry is larger than 16 MB, so it cannot be packed.",
+  fetch_failed:
+    "Its source could not be fetched; it can be retried from the marketplace's Plugins tab.",
+}
+
+export function snapshotReasonSentence(
+  code: string | null | undefined,
+): string {
+  if (code && hasOwn(SNAPSHOT_REASON_COPY, code))
+    return SNAPSHOT_REASON_COPY[code]
+  if (code && hasOwn(UNSUPPORTED_REASON_COPY, code)) {
+    return UNSUPPORTED_REASON_COPY[code]
+  }
+  return "The snapshot of this entry could not be taken."
+}
+
+/** An MCP server's transport as printed: "stdio", "HTTP", "SSE". */
+export function mcpTransportLabel(transport: string): string {
+  if (transport === "http" || transport === "streamable-http") return "HTTP"
+  if (transport === "sse") return "SSE"
+  return transport
+}
+
+const MCP_AUTH_COPY: Record<string, string> = {
+  none: "no auth",
+  env: "env vars",
+  oauth: "OAuth",
+  bearer: "bearer token",
+}
+
+/** How an MCP server authenticates, in words; the raw code when unknown. */
+export function mcpAuthLabel(auth: string | null | undefined): string | null {
+  if (!auth) return null
+  return MCP_AUTH_COPY[auth] || auth
+}
+
+/** "1 entry" / "3 entries". */
+export function plural(count: number, one: string, many = `${one}s`): string {
+  return `${count} ${count === 1 ? one : many}`
+}

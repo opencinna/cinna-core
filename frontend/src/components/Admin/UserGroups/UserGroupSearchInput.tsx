@@ -25,6 +25,8 @@ interface UserGroupSearchInputProps {
   /** Called by the clear `X`; the caller moves focus back to the input. */
   onClear: () => void
   ariaLabel: string
+  /** Defaults to "Search". */
+  placeholder?: string
 }
 
 /**
@@ -36,7 +38,10 @@ interface UserGroupSearchInputProps {
 export const UserGroupSearchInput = forwardRef<
   HTMLInputElement,
   UserGroupSearchInputProps
->(function UserGroupSearchInput({ value, onChange, onClear, ariaLabel }, ref) {
+>(function UserGroupSearchInput(
+  { value, onChange, onClear, ariaLabel, placeholder = "Search" },
+  ref,
+) {
   return (
     <div className="relative min-w-40 max-w-64 flex-1">
       <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -44,7 +49,7 @@ export const UserGroupSearchInput = forwardRef<
         ref={ref}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder="Search"
+        placeholder={placeholder}
         aria-label={ariaLabel}
         className="pl-9 pr-9"
       />

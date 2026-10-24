@@ -70,3 +70,28 @@ def test_single_plugin_route_is_not_shadowed_by_the_batch_route(
     r = client.get(f"{PLUGINS_BASE}/plugins/{row['id']}", headers=superuser_token_headers)
     assert r.status_code == 200, r.text
     assert r.json()["id"] == row["id"]
+
+
+def test_batch_and_discover_rows_carry_the_k1_snapshot_fields(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """A claude local plugin row has components / digest / status / runs_code in both batch and discover."""
+    from tests.api.agents.marketplace_skills.marketplace_plugin_snapshots_test import (
+        _local_entry,
+        _new_market,
+    )
+    from tests.utils.llm_plugin import claude_repo, discover_plugins
+
+    h = superuser_token_headers
+    m = _new_market(
+        client, h,
+        claude_repo([_local_entry("k1")], {"plugins/k1/commands/go.md": "go"}),
+    )
+    disc = discover_plugins(client, h, marketplace_id=m["id"])["data"][0]
+    batch = _batch(client, h, [disc["id"]]).json()["data"][0]
+    for row in (disc, batch):
+        assert row["snapshot_status"] == "ready"
+        assert len(row["archive_sha256"]) == 64 and row["archive_size"] > 0
+        assert row["components"]["commands"] == ["go"]
+        assert row["runs_code"] is False
+        assert row["snapshot_reason"] is None

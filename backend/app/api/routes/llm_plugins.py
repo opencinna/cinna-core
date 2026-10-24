@@ -9,7 +9,7 @@ This module provides endpoints for:
 
 import uuid
 import logging
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -25,6 +25,8 @@ from app.models.plugins.llm_plugin import (
     LLMPluginMarketplacesPublic,
     LLMPluginMarketplacePluginPublic,
     LLMPluginMarketplacePluginsPublic,
+    LLMPluginMarketplaceEntriesPublic,
+    PluginSnapshotRetryPublic,
     AgentPluginLinkCreate,
     AgentPluginLinkUpdate,
     AgentPluginLinksPublic,
@@ -217,6 +219,70 @@ def sync_marketplace(
         raise HTTPException(status_code=500, detail=f"Sync failed: {str(e)}")
 
 
+@router.get(
+    "/marketplaces/{marketplace_id}/entries",
+    response_model=LLMPluginMarketplaceEntriesPublic,
+)
+def list_marketplace_entries(
+    session: SessionDep,
+    current_user: CurrentUser,
+    marketplace_id: uuid.UUID,
+    snapshot_status: Literal["pending", "ready", "failed"] | None = None,
+    search: str | None = None,
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=500),
+) -> Any:
+    """
+    Every entry of one marketplace with its snapshot state and components.
+
+    Owner or superuser only (403 otherwise, 404 unknown marketplace). `count`
+    is the total matching the filters; `counts` totals `ready` / `pending` /
+    `failed` over the whole marketplace, ignoring `snapshot_status`.
+    `search` matches name or description, case-insensitive.
+    """
+    marketplace = LLMPluginService.get_marketplace_with_access_check(
+        session, marketplace_id, current_user, require_write=True
+    )
+    return LLMPluginService.list_marketplace_entries(
+        session,
+        marketplace,
+        snapshot_status=snapshot_status,
+        search=search,
+        skip=skip,
+        limit=limit,
+    )
+
+
+@router.post(
+    "/marketplaces/{marketplace_id}/snapshots/retry",
+    response_model=PluginSnapshotRetryPublic,
+)
+def retry_marketplace_snapshots(
+    session: SessionDep,
+    current_user: CurrentUser,
+    marketplace_id: uuid.UUID,
+    include_all: bool = Query(
+        default=False, alias="all", description="Also re-take content verdicts"
+    ),
+) -> Any:
+    """
+    Queue failed plugin snapshots again (owner or superuser).
+
+    Without `all`, only `fetch_failed` rows; with `all=true`, every failed
+    plugin row. Skills-format rows are snapshotted by the sync and never
+    queued. Failed local entries the worker cannot fetch (SSH-key or
+    non-public marketplace) are not queued either: they are counted in
+    `skipped_needs_sync`, and a sync re-takes them.
+    """
+    marketplace = LLMPluginService.get_marketplace_with_access_check(
+        session, marketplace_id, current_user, require_write=True
+    )
+    queued, skipped = LLMPluginService.retry_failed_snapshots(
+        session, marketplace, include_all=include_all
+    )
+    return PluginSnapshotRetryPublic(queued=queued, skipped_needs_sync=skipped)
+
+
 # =============================================================================
 # Plugin Discovery Routes
 # =============================================================================
@@ -334,8 +400,79 @@ def get_plugin_skill_archive(
     if plugin.skill_archive_sha256 is None:
         raise HTTPException(status_code=409, detail={"code": "not_a_skill"})
 
-    want = sha256 or plugin.skill_archive_sha256
-    path = MarketplaceSkillSnapshots.existing_archive(marketplace.id, plugin.id, want)
+    return _serve_archive(
+        plugin,
+        marketplace.id,
+        sha256 or plugin.skill_archive_sha256,
+        current_user.id,
+        event="marketplace_skill_archive_download",
+    )
+
+
+@router.get(
+    "/plugins/{plugin_id}/archive",
+    response_class=FileResponse,
+    responses={
+        200: {"content": {"application/gzip": {}}},
+        404: {"description": "`not_found` or `snapshot_missing`"},
+        409: {"description": "`snapshot_pending` or `snapshot_failed` (with `reason`)"},
+    },
+)
+def get_plugin_archive(
+    session: SessionDep,
+    current_user: CurrentUser,
+    plugin_id: uuid.UUID,
+    sha256: str | None = Query(default=None, pattern="^[0-9a-f]{64}$"),
+) -> Any:
+    """
+    Download any marketplace entry's content snapshot (every format).
+
+    Visibility is exactly `skill-archive`'s (`/discover` rule, no superuser
+    bypass). Without `sha256` the current snapshot is served; while a newer
+    snapshot is pending the previous one stays served. Plugin entries keep one
+    digest; skills-format entries keep every digest that was ever current.
+    The digest is in `X-Archive-Sha256`. Plugin archives hold
+    `<plugin-name>/<rel>` members; skills archives `skills/<name>/<rel>`.
+
+    Errors (`detail.code`): 404 `not_found`, 409 `snapshot_pending` (no
+    snapshot yet), 409 `snapshot_failed` (`detail.reason`), 404
+    `snapshot_missing` (that digest is not kept).
+    """
+    found = LLMPluginService.get_discoverable_plugin(
+        session, plugin_id, current_user.id
+    )
+    if found is None:
+        raise HTTPException(status_code=404, detail={"code": "not_found"})
+    plugin, marketplace = found
+    current = plugin.archive_sha256 or plugin.skill_archive_sha256
+    if sha256 is None and current is None:
+        if plugin.snapshot_status == "pending":
+            raise HTTPException(status_code=409, detail={"code": "snapshot_pending"})
+        if plugin.snapshot_status == "failed":
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "snapshot_failed", "reason": plugin.snapshot_reason},
+            )
+        raise HTTPException(status_code=404, detail={"code": "snapshot_missing"})
+    return _serve_archive(
+        plugin,
+        marketplace.id,
+        sha256 or current,
+        current_user.id,
+        event="marketplace_plugin_archive_download",
+    )
+
+
+def _serve_archive(
+    plugin: Any,
+    marketplace_id: uuid.UUID,
+    want: str,
+    user_id: uuid.UUID,
+    *,
+    event: str,
+) -> FileResponse:
+    """The kept archive ``want`` of one entry, or 404 ``snapshot_missing``."""
+    path = MarketplaceSkillSnapshots.existing_archive(marketplace_id, plugin.id, want)
     try:
         if path is None:
             raise FileNotFoundError(want)
@@ -346,8 +483,9 @@ def get_plugin_skill_archive(
         raise HTTPException(status_code=404, detail={"code": "snapshot_missing"})
 
     logger.info(
-        "marketplace_skill_archive_download user_id=%s plugin_id=%s sha=%s bytes=%s",
-        current_user.id,
+        "%s user_id=%s plugin_id=%s sha=%s bytes=%s",
+        event,
+        user_id,
         plugin.id,
         want,
         stat_result.st_size,

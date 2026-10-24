@@ -25111,6 +25111,32 @@ owner_email will be automatically extracted from the repository's
 marketplace.json during sync.`
 } as const;
 
+export const LLMPluginMarketplaceEntriesPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/LLMPluginMarketplacePluginPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        },
+        counts: {
+            '$ref': '#/components/schemas/PluginEntryCounts'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'LLMPluginMarketplaceEntriesPublic',
+    description: `Every entry of one marketplace, for its owner or a superuser.
+
+\`\`count\`\` is the total matching the filters (not the page length);
+\`\`counts\`\` totals snapshot states over the whole marketplace.`
+} as const;
+
 export const LLMPluginMarketplacePluginPublicSchema = {
     properties: {
         id: {
@@ -25310,6 +25336,71 @@ export const LLMPluginMarketplacePluginPublicSchema = {
                     type: 'null'
                 }
             ]
+        },
+        components: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/PluginComponents'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        archive_sha256: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Archive Sha256'
+        },
+        archive_size: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Archive Size'
+        },
+        snapshot_status: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Snapshot Status'
+        },
+        snapshot_reason: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Snapshot Reason'
+        },
+        runs_code: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Runs Code'
         },
         marketplace_name: {
             anyOf: [
@@ -28586,6 +28677,102 @@ export const PendingToolsResponseSchema = {
     description: 'Response for pending tools endpoint'
 } as const;
 
+export const PluginComponentsSchema = {
+    properties: {
+        skills: {
+            items: {
+                '$ref': '#/components/schemas/PluginSkillComponent'
+            },
+            type: 'array',
+            title: 'Skills'
+        },
+        commands: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Commands'
+        },
+        agents: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Agents'
+        },
+        hooks: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/PluginHooksComponent'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        mcp_servers: {
+            items: {
+                '$ref': '#/components/schemas/PluginMcpServer'
+            },
+            type: 'array',
+            title: 'Mcp Servers'
+        },
+        lsp_servers: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Lsp Servers'
+        }
+    },
+    type: 'object',
+    title: 'PluginComponents',
+    description: "What a marketplace entry's snapshot contains (README §3.1 ``components``)."
+} as const;
+
+export const PluginEntryCountsSchema = {
+    properties: {
+        ready: {
+            type: 'integer',
+            title: 'Ready',
+            default: 0
+        },
+        pending: {
+            type: 'integer',
+            title: 'Pending',
+            default: 0
+        },
+        failed: {
+            type: 'integer',
+            title: 'Failed',
+            default: 0
+        },
+        retryable: {
+            type: 'integer',
+            title: 'Retryable',
+            default: 0
+        }
+    },
+    type: 'object',
+    title: 'PluginEntryCounts',
+    description: 'Per-state totals over a whole marketplace (filters ignored).'
+} as const;
+
+export const PluginHooksComponentSchema = {
+    properties: {
+        events: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Events'
+        }
+    },
+    type: 'object',
+    title: 'PluginHooksComponent',
+    description: 'The hook events a plugin snapshot registers.'
+} as const;
+
 export const PluginInstallResultSchema = {
     properties: {
         plugin_name: {
@@ -28627,6 +28814,82 @@ excluded from \`\`settings.json\`\` (so the SDK never gets a missing path) and
 reported, never silently listed-but-absent.`
 } as const;
 
+export const PluginMcpEnvSchema = {
+    properties: {
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        secret: {
+            type: 'boolean',
+            title: 'Secret',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['name'],
+    title: 'PluginMcpEnv',
+    description: 'One environment value an MCP server needs from the user.'
+} as const;
+
+export const PluginMcpServerSchema = {
+    properties: {
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        transport: {
+            type: 'string',
+            title: 'Transport'
+        },
+        runtime: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Runtime'
+        },
+        auth: {
+            type: 'string',
+            title: 'Auth',
+            default: 'none'
+        },
+        env: {
+            items: {
+                '$ref': '#/components/schemas/PluginMcpEnv'
+            },
+            type: 'array',
+            title: 'Env'
+        }
+    },
+    type: 'object',
+    required: ['name', 'transport'],
+    title: 'PluginMcpServer',
+    description: 'One MCP server a plugin snapshot declares.'
+} as const;
+
+export const PluginSkillComponentSchema = {
+    properties: {
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        has_scripts: {
+            type: 'boolean',
+            title: 'Has Scripts',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['name'],
+    title: 'PluginSkillComponent',
+    description: 'One skill folder a plugin snapshot ships.'
+} as const;
+
 export const PluginSkillSummarySchema = {
     properties: {
         name: {
@@ -28653,6 +28916,28 @@ A \`\`skills\`\`-format marketplace publishes one plugin per skill folder, so
 its rows have a skill to describe before anything is installed. Read off
 the parsed \`\`config["skill"]\`\` block rather than recomputed, because the
 repository is not on disk any more by the time anybody asks.`
+} as const;
+
+export const PluginSnapshotRetryPublicSchema = {
+    properties: {
+        queued: {
+            type: 'integer',
+            title: 'Queued'
+        },
+        skipped_needs_sync: {
+            type: 'integer',
+            title: 'Skipped Needs Sync',
+            default: 0
+        }
+    },
+    type: 'object',
+    required: ['queued'],
+    title: 'PluginSnapshotRetryPublic',
+    description: `How many failed snapshots were queued again.
+
+\`\`skipped_needs_sync\`\`: failed local entries the worker cannot fetch (the
+marketplace is cloned with an SSH key or has no public URL); a sync of the
+marketplace re-takes them.`
 } as const;
 
 export const PluginSourceSchema = {
@@ -36147,7 +36432,7 @@ export const TasksCreateRequestSchema = {
             anyOf: [
                 {
                     type: 'string',
-                    enum: ['backlog', 'ready', 'draft']
+                    enum: ['backlog', 'ready', 'active', 'draft']
                 },
                 {
                     type: 'null'

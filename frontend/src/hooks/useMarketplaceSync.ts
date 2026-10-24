@@ -4,6 +4,13 @@ import { LlmPluginsService } from "@/client"
 import useCustomToast from "@/hooks/useCustomToast"
 
 /**
+ * The entries query family for one marketplace (Plugins tab). Sync and the
+ * tab's Retry invalidate the prefix; filter, search and page ride after it.
+ */
+export const marketplaceEntriesKey = (marketplaceId: string) =>
+  ["marketplace-entries", marketplaceId] as const
+
+/**
  * "Sync this marketplace" — the one mutation, for all three places that offer
  * it.
  *
@@ -24,8 +31,8 @@ import useCustomToast from "@/hooks/useCustomToast"
  *
  * - `["marketplace", id]` — the record itself: status, `last_sync_at`,
  *   `sync_commit_hash`, `plugin_count`.
- * - `["marketplace-plugins", id]` — the entries table. Keyed with a page size
- *   after the id, which prefix-matching covers.
+ * - `["marketplace-entries", id]` — the entries list. Keyed with filter,
+ *   search and page after the id, which prefix-matching covers.
  * - `["marketplaces"]` — the admin list, which prints each marketplace's
  *   status and plugin count.
  */
@@ -41,7 +48,7 @@ export function useMarketplaceSync(marketplaceId: string) {
         queryKey: ["marketplace", marketplaceId],
       })
       queryClient.invalidateQueries({
-        queryKey: ["marketplace-plugins", marketplaceId],
+        queryKey: marketplaceEntriesKey(marketplaceId),
       })
       queryClient.invalidateQueries({ queryKey: ["marketplaces"] })
     },

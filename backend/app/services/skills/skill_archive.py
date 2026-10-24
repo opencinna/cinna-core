@@ -63,6 +63,19 @@ def build_skill_archive(skill_name: str, files: Sequence[tuple[str, Path]]) -> b
     rather than re-sorting. Raises ``ValueError`` for a member that is absolute,
     contains ``..`` or is a symlink.
     """
+    return build_tree_archive(f"skills/{skill_name}", files)
+
+
+def build_tree_archive(prefix: str, files: Sequence[tuple[str, Path]]) -> bytes:
+    """Build the deterministic ``.tar.gz`` of a file list under ``prefix/``.
+
+    The format :func:`build_skill_archive` documents, with any member prefix:
+    marketplace plugin snapshots use ``<plugin-name>``. Same ordering contract
+    and member checks; ``prefix`` itself must be relative and free of ``..``.
+    """
+    pure_prefix = PurePosixPath(prefix)
+    if not prefix or pure_prefix.is_absolute() or ".." in pure_prefix.parts:
+        raise ValueError(f"archive prefix must be a relative path: {prefix!r}")
     rels = [rel for rel, _ in files]
     assert rels == sorted(rels), "skill archive members must be pre-sorted"
 
@@ -73,7 +86,7 @@ def build_skill_archive(skill_name: str, files: Sequence[tuple[str, Path]]) -> b
             fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
             with os.fdopen(fd, "rb") as handle:
                 stat_result = os.fstat(handle.fileno())
-                info = tarfile.TarInfo(name=f"skills/{skill_name}/{rel}")
+                info = tarfile.TarInfo(name=f"{prefix}/{rel}")
                 info.size = stat_result.st_size
                 info.mtime = 0
                 # Two modes only, chosen by whether the source file was

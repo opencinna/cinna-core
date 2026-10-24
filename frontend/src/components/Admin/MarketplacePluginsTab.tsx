@@ -1,333 +1,276 @@
-import { useQuery } from "@tanstack/react-query"
-import { Link } from "@tanstack/react-router"
-import { AlertCircle, FolderCode, Globe, Puzzle, Tag, User } from "lucide-react"
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query"
+import { useNavigate } from "@tanstack/react-router"
+import {
+  AlertCircle,
+  Clock,
+  ListFilter,
+  Loader2,
+  RotateCcw,
+} from "lucide-react"
+import { useMemo, useRef, useState } from "react"
 
-import type {
-  LLMPluginMarketplacePluginPublic,
-  LLMPluginMarketplacePublic,
-} from "@/client"
+import type { LLMPluginMarketplacePublic } from "@/client"
 import { LlmPluginsService } from "@/client"
+import {
+  TableEmptyBlock,
+  UserGroupSearchInput,
+  useDebouncedValue,
+} from "@/components/Admin/UserGroups/UserGroupSearchInput"
+import { DataTable } from "@/components/Common/DataTable"
+import { DEFAULT_PAGE_SIZE } from "@/components/Common/DataTablePagination"
+import { FilterMenu, type FilterOption } from "@/components/Common/FilterMenu"
 import { QueryErrorAlert } from "@/components/Common/QueryErrorAlert"
-import { Badge } from "@/components/ui/badge"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
-import { unsupportedReasonSentence } from "@/utils/marketplace"
+import useCustomToast from "@/hooks/useCustomToast"
+import { marketplaceEntriesKey } from "@/hooks/useMarketplaceSync"
+import { plural } from "@/utils/marketplace"
+import { getMarketplaceEntryColumns } from "./marketplaceEntryColumns"
 
-/**
- * How many discover rows this table pulls before filtering to one marketplace.
- *
- * Large rather than paginated because the endpoint cannot filter by
- * marketplace: any page smaller than the instance's total entry count silently
- * drops rows from this table.
- */
-const DISCOVER_PAGE = 500
+/** How often the list re-reads while any snapshot is still being taken. */
+const PENDING_POLL_MS = 5_000
+
+type EntryFilter = "all" | "pending" | "failed"
+
+// K5 inserts the access options between "All entries" and the snapshot ones.
+const FILTERS: readonly FilterOption<EntryFilter>[] = [
+  { value: "all", label: "All entries", icon: ListFilter },
+  { value: "pending", label: "Snapshot pending", icon: Clock },
+  { value: "failed", label: "Snapshot failed", icon: AlertCircle },
+]
 
 interface MarketplacePluginsTabProps {
   marketplace: LLMPluginMarketplacePublic
   marketplaceId: string
 }
 
-function truncateDescription(
-  description: string | null,
-  maxLength: number = 80,
-): string {
-  if (!description) return "No description"
-  if (description.length <= maxLength) return description
-  return description.substring(0, maxLength) + "..."
-}
-
-/**
- * How many skills this entry ships, when the syncer could tell.
- *
- * Two shapes, because two parsers write them: a `skills`-format entry *is* one
- * skill and carries a `skill_summary`; a **local** Codex entry has its skill
- * folders listed into `config["skills"]` at sync time. Absence means "not
- * known", never "ships no skills" — a Codex `url` / `git-subdir` entry is
- * never cloned at sync, so it has no count either, and a `0` there would be an
- * assertion the syncer never made.
- *
- * Two guards, both against `config` being repository-authored JSON:
- *
- * - An unsupported entry reports nothing. A `skills`-format entry refused as
- *   `no_skill_md` still gets a `config["skill"]` block written for it, so
- *   without this the row would read "Not installable" beside "Skills: 1" — a
- *   skill it has just said has nothing to install.
- * - Only a `codex` entry's `skills` key is read. For a `claude` entry `config`
- *   is the raw `marketplace.json` entry, stored verbatim, so any `skills`
- *   array the catalog's author happened to write would otherwise be rendered
- *   as a syncer-verified count.
- */
-function skillCount(plugin: LLMPluginMarketplacePluginPublic): number | null {
-  if (plugin.supported === false) return null
-  if (plugin.skill_summary) return 1
-  if (plugin.plugin_type !== "codex") return null
-  const config = plugin.config
-  const folders = config && typeof config === "object" ? config.skills : null
-  if (Array.isArray(folders)) return folders.length
-  return null
-}
-
-/**
- * Can this platform install the entry, and if not, why not.
- *
- * A tone-dot plus a label rather than a `Badge`: "supported" and "why not" are
- * two unequal facts, and two chips in one cell would flatten them (§5). The
- * reason is the server's own sentence, keyed off the stable code, so a refusal
- * reads the same here as it does in the Add addon dialog and in the 409 an
- * install answers with.
- */
-function SupportedCell({
-  plugin,
-}: {
-  plugin: LLMPluginMarketplacePluginPublic
-}) {
-  // Optional on the wire (it has a server-side default), so an entry synced
-  // before this column existed reads as supported rather than as broken.
-  const supported = plugin.supported !== false
-
-  if (supported) {
-    return (
-      <div className="flex items-center gap-2">
-        <span className="size-2 shrink-0 rounded-full bg-success" />
-        <span className="text-sm">Supported</span>
-      </div>
-    )
-  }
-
-  const reason = unsupportedReasonSentence(plugin.unsupported_reason)
-
+function PendingEntries() {
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span className="flex w-fit items-center gap-2">
-          <span className="size-2 shrink-0 rounded-full bg-destructive" />
-          {/* The dotted underline is the house's "there is more here on
-              hover" affordance (`Channels/ChannelRow`); the sentence is also
-              `sr-only`, so a reader that never gets the tooltip still gets the
-              reason. */}
-          <span className="cursor-default text-sm underline decoration-dotted underline-offset-2">
-            Not installable
-          </span>
-          <span className="sr-only">{reason}</span>
-        </span>
-      </TooltipTrigger>
-      <TooltipContent side="top" className="max-w-xs text-xs">
-        {reason}
-      </TooltipContent>
-    </Tooltip>
+    <div className="space-y-2">
+      {Array.from({ length: 5 }).map((_, index) => (
+        <Skeleton key={index} className="h-[48px] w-full" />
+      ))}
+    </div>
   )
 }
 
-function PluginRow({ plugin }: { plugin: LLMPluginMarketplacePluginPublic }) {
-  const isRemote = plugin.source_type === "url"
-  const skills = skillCount(plugin)
-
+/** A sentence that names the Configuration tab links to it (§2 Empty state). */
+function OpenConfiguration({ text }: { text: string }) {
+  const navigate = useNavigate()
   return (
-    <TableRow>
-      <TableCell>
-        <Link
-          to="/admin/marketplace/plugin/$pluginId"
-          params={{ pluginId: plugin.id }}
-          className="font-medium text-primary hover:underline"
-        >
-          {plugin.name}
-        </Link>
-        <div className="flex items-center gap-1 mt-1">
-          {plugin.version && (
-            <Badge variant="secondary" className="text-xs">
-              v{plugin.version}
-            </Badge>
-          )}
-          {plugin.category && (
-            <Badge variant="outline" className="text-xs">
-              <Tag className="mr-1 h-3 w-3" />
-              {plugin.category}
-            </Badge>
-          )}
-        </div>
-      </TableCell>
-      <TableCell>
-        <span className="text-sm text-muted-foreground">
-          {truncateDescription(plugin.description)}
-        </span>
-      </TableCell>
-      <TableCell>
-        {plugin.author_name && (
-          <div className="flex items-center gap-1 text-sm text-muted-foreground">
-            <User className="h-3 w-3" />
-            <span>{plugin.author_name}</span>
-          </div>
-        )}
-      </TableCell>
-      <TableCell>
-        <SupportedCell plugin={plugin} />
-      </TableCell>
-      <TableCell>
-        <span
-          className={
-            skills === null ? "text-sm text-muted-foreground" : "text-sm"
-          }
-        >
-          {skills ?? "—"}
-        </span>
-      </TableCell>
-      <TableCell>
-        {isRemote ? (
-          <Badge variant="outline" className="text-xs">
-            <Globe className="mr-1 h-3 w-3" />
-            Remote
-          </Badge>
-        ) : (
-          <Badge variant="outline" className="text-xs text-muted-foreground">
-            <FolderCode className="mr-1 h-3 w-3" />
-            Local
-          </Badge>
-        )}
-      </TableCell>
-    </TableRow>
+    <TableEmptyBlock text={text}>
+      <Button
+        variant="link"
+        size="sm"
+        onClick={() => void navigate({ hash: "configuration" })}
+      >
+        Open Configuration
+      </Button>
+    </TableEmptyBlock>
   )
 }
 
+function useRetrySnapshots(marketplaceId: string, onDone: () => void) {
+  const queryClient = useQueryClient()
+  const { showSuccessToast, showErrorToast } = useCustomToast()
+  return useMutation({
+    mutationFn: () =>
+      LlmPluginsService.retryMarketplaceSnapshots({ marketplaceId }),
+    onSuccess: ({ queued, skipped_needs_sync }) => {
+      const skipped = skipped_needs_sync ?? 0
+      const parts = [
+        queued > 0 ? `Queued ${plural(queued, "snapshot")}` : null,
+        skipped > 0
+          ? `${plural(skipped, "entry", "entries")} need a sync — sync the marketplace on Configuration`
+          : null,
+      ].filter(Boolean)
+      // Both zero only when another admin retried first.
+      showSuccessToast(parts.join(". ") || "No failed fetches to retry")
+      queryClient.invalidateQueries({
+        queryKey: marketplaceEntriesKey(marketplaceId),
+      })
+      onDone()
+    },
+    onError: (error) => {
+      showErrorToast(error.message || "Couldn't queue the failed snapshots")
+    },
+  })
+}
+
+/**
+ * S1 — every entry of this marketplace, searched, filtered and paged on the
+ * server: whether its snapshot is ready, and what it ships. A P9 list, not a
+ * card: it needs search and paging (§2 Card width).
+ */
 export function MarketplacePluginsTab({
   marketplace,
   marketplaceId,
 }: MarketplacePluginsTabProps) {
-  // `/discover` has no `marketplace_id` filter, so this reads a page of the
-  // union of the user's private marketplaces and every public one and keeps
-  // the rows belonging to this one. The explicit limit is load-bearing: the
-  // route defaults to **30** (`llm_plugins.py:227`) and orders unsupported
-  // entries *last*, so the default would truncate away precisely the rows the
-  // Supported column exists to show — and could render "No plugins or skills
-  // found" for a perfectly synced marketplace sitting behind a busier one.
-  // The real fix is a `marketplace_id` filter on the endpoint.
-  const {
-    data: pluginsResponse,
-    isLoading: isLoadingPlugins,
-    isError,
-    error,
-    refetch,
-  } = useQuery({
-    queryKey: ["marketplace-plugins", marketplaceId, DISCOVER_PAGE],
-    queryFn: async () => {
-      const response = await LlmPluginsService.discoverPlugins({
-        limit: DISCOVER_PAGE,
-      })
-      const filtered = response.data.filter(
-        (plugin) => plugin.marketplace_id === marketplaceId,
-      )
-      // `count` is the unfiltered total across every marketplace the page was
-      // drawn from, so a full page means rows may exist that this table never
-      // saw — said out loud rather than left as a silently short list.
-      return {
-        data: filtered,
-        count: filtered.length,
-        truncated: response.data.length >= DISCOVER_PAGE,
-      }
-    },
-    enabled: !!marketplace && marketplace.status === "connected",
+  const navigate = useNavigate()
+  const [search, setSearch] = useState("")
+  const searchRef = useRef<HTMLInputElement>(null)
+  const q = useDebouncedValue(search.trim(), 300)
+  const [filter, setFilter] = useState<EntryFilter>("all")
+  const [pageIndex, setPageIndex] = useState(0)
+  // Back to page 1 when the *settled* search changes, not per keystroke:
+  // resetting on input would fetch the old search at page 1 first. Adjusted
+  // during render (React's "storing information from previous renders"), so
+  // no request goes out with the new query on the old page either.
+  const [pagedQ, setPagedQ] = useState(q)
+  if (pagedQ !== q) {
+    setPagedQ(q)
+    setPageIndex(0)
+  }
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
+  // The Retry button unmounts once nothing is left to retry; focus goes to
+  // the search input rather than falling to the page.
+  const retry = useRetrySnapshots(marketplaceId, () =>
+    searchRef.current?.focus(),
+  )
+  const connected = marketplace.status === "connected"
+
+  const entries = useQuery({
+    queryKey: [
+      ...marketplaceEntriesKey(marketplaceId),
+      filter,
+      q,
+      pageIndex,
+      pageSize,
+    ],
+    queryFn: () =>
+      LlmPluginsService.listMarketplaceEntries({
+        marketplaceId,
+        snapshotStatus: filter === "all" ? undefined : filter,
+        search: q || undefined,
+        skip: pageIndex * pageSize,
+        limit: pageSize,
+      }),
+    placeholderData: keepPreviousData,
+    enabled: connected,
+    // `counts` covers the whole marketplace, so the list keeps re-reading
+    // while any snapshot anywhere in it is still being taken — a filtered
+    // page would otherwise never see the row it is waiting for arrive.
+    refetchInterval: (query) =>
+      (query.state.data?.counts?.pending ?? 0) > 0 ? PENDING_POLL_MS : false,
   })
 
-  const plugins = pluginsResponse?.data || []
+  const columns = useMemo(() => getMarketplaceEntryColumns(), [])
+
+  const changeSearch = (value: string) => setSearch(value)
+  const changeFilter = (next: EntryFilter) => {
+    setFilter(next)
+    setPageIndex(0)
+  }
+  // Both clear controls unmount on click, so focus goes to the input.
+  const clearSearch = () => {
+    changeSearch("")
+    searchRef.current?.focus()
+  }
+  const clearFilters = () => {
+    setFilter("all")
+    clearSearch()
+  }
+
+  // Exactly what the default retry would queue (fetch failures that need no
+  // sync), so the button never shows for content failures it can't fix.
+  const retryable = entries.data?.counts?.retryable ?? 0
+  const narrowed = filter !== "all" || q !== ""
+
+  let body: React.ReactNode
+  if (!connected) {
+    body = (
+      <OpenConfiguration text="This marketplace isn't connected yet. Sync it on the Configuration tab to load its entries." />
+    )
+  } else if (entries.isError && entries.data === undefined) {
+    body = (
+      <QueryErrorAlert
+        error={entries.error}
+        fallback="Couldn't load this marketplace's entries"
+        onRetry={() => entries.refetch()}
+      />
+    )
+  } else if (entries.data === undefined) {
+    body = <PendingEntries />
+  } else if (entries.data.count === 0 && !narrowed) {
+    body = (
+      <OpenConfiguration text="This marketplace has no entries. Sync it on the Configuration tab to fetch them." />
+    )
+  } else {
+    body = (
+      <DataTable
+        columns={columns}
+        data={entries.data.data}
+        getRowId={(entry) => entry.id}
+        tableClassName="table-fixed"
+        itemLabel="entries"
+        serverPagination={{
+          pageIndex,
+          pageSize,
+          total: entries.data.count,
+          onPageChange: setPageIndex,
+          onPageSizeChange: setPageSize,
+        }}
+        emptyState={
+          <TableEmptyBlock text="No entries match.">
+            <Button variant="link" size="sm" onClick={clearFilters}>
+              Clear filters
+            </Button>
+          </TableEmptyBlock>
+        }
+        onRowClick={(entry) =>
+          void navigate({
+            to: "/admin/marketplace/plugin/$pluginId",
+            params: { pluginId: entry.id },
+          })
+        }
+      />
+    )
+  }
 
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center justify-between">
-          <div>
-            <CardTitle className="flex items-center gap-2">
-              <Puzzle className="h-5 w-5" />
-              Plugins and skills
-            </CardTitle>
-            <CardDescription>
-              Plugins and skills published by this marketplace (
-              {marketplace.plugin_count ?? 0} total)
-            </CardDescription>
+    <div className="space-y-4">
+      {connected && (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <UserGroupSearchInput
+            ref={searchRef}
+            value={search}
+            onChange={changeSearch}
+            onClear={clearSearch}
+            placeholder="Search entries"
+            ariaLabel="Search entries by name or description"
+          />
+          <div className="flex items-center gap-2">
+            <FilterMenu
+              options={FILTERS}
+              value={filter}
+              onChange={changeFilter}
+              allValue="all"
+            />
+            {retryable > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                disabled={retry.isPending}
+                onClick={() => retry.mutate()}
+              >
+                {retry.isPending ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RotateCcw className="h-3.5 w-3.5" />
+                )}
+                {retry.isPending ? "Queuing…" : "Retry failed snapshots"}
+              </Button>
+            )}
           </div>
         </div>
-      </CardHeader>
-      <CardContent>
-        {marketplace.status !== "connected" ? (
-          <div className="flex flex-col items-center justify-center py-12 text-center">
-            <AlertCircle className="h-12 w-12 text-muted-foreground mb-4" />
-            <h3 className="text-lg font-semibold">Marketplace not connected</h3>
-            <p className="text-sm text-muted-foreground mt-2">
-              Sync the marketplace in the Configuration tab to load entries
-            </p>
-          </div>
-        ) : isLoadingPlugins ? (
-          <div className="space-y-2">
-            <Skeleton className="h-12 w-full" />
-            <Skeleton className="h-12 w-full" />
-            <Skeleton className="h-12 w-full" />
-          </div>
-        ) : /* A failed read is not an empty marketplace. Without this branch an
-              admin who hits a 500 here reads "No entries found" and goes and
-              re-syncs a repository that was never the problem. Gated on
-              `!pluginsResponse` so a failed background refetch keeps the rows
-              that are already on screen. */
-        isError && !pluginsResponse ? (
-          <QueryErrorAlert
-            error={error}
-            fallback="Couldn't load this marketplace's entries"
-            onRetry={() => refetch()}
-          />
-        ) : plugins.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-12 text-center">
-            <Puzzle className="h-12 w-12 text-muted-foreground mb-4" />
-            <h3 className="text-lg font-semibold">
-              No plugins or skills found
-            </h3>
-            <p className="text-sm text-muted-foreground mt-2">
-              Click "Sync Marketplace" in the Configuration tab to fetch them
-            </p>
-          </div>
-        ) : (
-          <>
-            {pluginsResponse?.truncated && (
-              <p className="mb-3 text-xs text-muted-foreground">
-                Showing the first {DISCOVER_PAGE} entries across all
-                marketplaces — this list may be incomplete.
-              </p>
-            )}
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Description</TableHead>
-                  <TableHead>Author</TableHead>
-                  <TableHead>Supported</TableHead>
-                  <TableHead>Skills</TableHead>
-                  <TableHead>Source</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {plugins.map((plugin) => (
-                  <PluginRow key={plugin.id} plugin={plugin} />
-                ))}
-              </TableBody>
-            </Table>
-          </>
-        )}
-      </CardContent>
-    </Card>
+      )}
+      {body}
+    </div>
   )
 }

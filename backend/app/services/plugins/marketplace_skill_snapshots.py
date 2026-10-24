@@ -10,6 +10,11 @@ on the same file and a resync of an unchanged entry writes nothing. Every
 digest that was ever current is kept until the entry or the marketplace goes,
 so a desktop pin to an older digest keeps resolving.
 
+Plugin entries (``claude`` / ``codex`` formats) share the layout, with the
+whole plugin tree archived under ``<plugin-name>/``; they keep exactly one
+digest, older files being pruned after the row naming the new one commits
+(:meth:`MarketplaceSkillSnapshots.prune_except`).
+
 Archives are first built into ``marketplace-skills/<marketplace_id>/.staging/
 <sync uuid>/`` on the same volume and promoted by ``os.replace`` just before
 the sync commits, so a committed row never names a digest whose file is
@@ -33,7 +38,11 @@ from pathlib import Path
 from app.core.config import settings
 from app.services.agents.skill_manifest import DEFAULT_MAX_TOTAL_BYTES
 from app.services.common.data_dirs import remove_data_subdir
-from app.services.skills.skill_archive import build_skill_archive, walk_skill_tree
+from app.services.skills.skill_archive import (
+    build_skill_archive,
+    build_tree_archive,
+    walk_skill_tree,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +126,45 @@ class MarketplaceSkillSnapshots:
         return StagedArchive(
             path=path, sha256=hashlib.sha256(data).hexdigest(), size=len(data)
         )
+
+    @staticmethod
+    def stage_tree(
+        staging_dir: Path, files: list[tuple[str, Path]], prefix: str
+    ) -> StagedArchive:
+        """Build a plugin tree's archive (members ``<prefix>/<rel>``) into staging.
+
+        ``files`` is the sorted ``(relative_posix, absolute_path)`` list the
+        caller already walked and size-checked.
+        """
+        data = build_tree_archive(prefix, files)
+        path = staging_dir / f"{uuid.uuid4()}.tar.gz"
+        path.write_bytes(data)
+        return StagedArchive(
+            path=path, sha256=hashlib.sha256(data).hexdigest(), size=len(data)
+        )
+
+    @staticmethod
+    def prune_except(
+        marketplace_id: uuid.UUID, plugin_id: uuid.UUID, keep_sha: str | None
+    ) -> None:
+        """Best effort: drop every archive of one entry but ``keep_sha``.
+
+        ``keep_sha=None`` drops them all. Plugin entries only — skills-format
+        entries keep their digest history. Never raises.
+        """
+        entry = MarketplaceSkillSnapshots.entry_dir(marketplace_id, plugin_id)
+        keep = f"{keep_sha}.tar.gz" if keep_sha else None
+        try:
+            children = list(entry.iterdir())
+        except OSError:
+            return
+        for child in children:
+            if child.name == keep or not child.name.endswith(".tar.gz"):
+                continue
+            try:
+                child.unlink()
+            except OSError as e:
+                logger.warning(f"Could not prune snapshot {child}: {e}")
 
     @staticmethod
     def promote(

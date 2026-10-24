@@ -5945,6 +5945,18 @@ export type LLMPluginMarketplaceCreate = {
 export type type = 'claude' | 'codex' | 'skills';
 
 /**
+ * Every entry of one marketplace, for its owner or a superuser.
+ *
+ * ``count`` is the total matching the filters (not the page length);
+ * ``counts`` totals snapshot states over the whole marketplace.
+ */
+export type LLMPluginMarketplaceEntriesPublic = {
+    data: Array<LLMPluginMarketplacePluginPublic>;
+    count: number;
+    counts?: PluginEntryCounts;
+};
+
+/**
  * Public schema for marketplace plugin.
  */
 export type LLMPluginMarketplacePluginPublic = {
@@ -5974,6 +5986,12 @@ export type LLMPluginMarketplacePluginPublic = {
     skill_archive_sha256?: (string | null);
     skill_archive_size?: (number | null);
     skill_summary?: (PluginSkillSummary | null);
+    components?: (PluginComponents | null);
+    archive_sha256?: (string | null);
+    archive_size?: (number | null);
+    snapshot_status?: (string | null);
+    snapshot_reason?: (string | null);
+    runs_code?: (boolean | null);
     marketplace_name?: (string | null);
     marketplace_owner?: (string | null);
     repository_url?: (string | null);
@@ -6832,6 +6850,35 @@ export type PendingToolsResponse = {
 };
 
 /**
+ * What a marketplace entry's snapshot contains (README §3.1 ``components``).
+ */
+export type PluginComponents = {
+    skills?: Array<PluginSkillComponent>;
+    commands?: Array<(string)>;
+    agents?: Array<(string)>;
+    hooks?: (PluginHooksComponent | null);
+    mcp_servers?: Array<PluginMcpServer>;
+    lsp_servers?: Array<(string)>;
+};
+
+/**
+ * Per-state totals over a whole marketplace (filters ignored).
+ */
+export type PluginEntryCounts = {
+    ready?: number;
+    pending?: number;
+    failed?: number;
+    retryable?: number;
+};
+
+/**
+ * The hook events a plugin snapshot registers.
+ */
+export type PluginHooksComponent = {
+    events?: Array<(string)>;
+};
+
+/**
  * Per-plugin result returned by the container install routine.
  *
  * Errors are surfaced as results, not exceptions: a ``failed`` plugin is
@@ -6847,6 +6894,33 @@ export type PluginInstallResult = {
 };
 
 /**
+ * One environment value an MCP server needs from the user.
+ */
+export type PluginMcpEnv = {
+    name: string;
+    secret?: boolean;
+};
+
+/**
+ * One MCP server a plugin snapshot declares.
+ */
+export type PluginMcpServer = {
+    name: string;
+    transport: string;
+    runtime?: (string | null);
+    auth?: string;
+    env?: Array<PluginMcpEnv>;
+};
+
+/**
+ * One skill folder a plugin snapshot ships.
+ */
+export type PluginSkillComponent = {
+    name: string;
+    has_scripts?: boolean;
+};
+
+/**
  * The one skill a marketplace entry ships, when it ships exactly one.
  *
  * A ``skills``-format marketplace publishes one plugin per skill folder, so
@@ -6858,6 +6932,18 @@ export type PluginSkillSummary = {
     name: string;
     description?: string;
     has_scripts?: boolean;
+};
+
+/**
+ * How many failed snapshots were queued again.
+ *
+ * ``skipped_needs_sync``: failed local entries the worker cannot fetch (the
+ * marketplace is cloned with an SSH key or has no public URL); a sync of the
+ * marketplace re-takes them.
+ */
+export type PluginSnapshotRetryPublic = {
+    queued: number;
+    skipped_needs_sync?: number;
 };
 
 /**
@@ -8446,7 +8532,7 @@ export type TasksCreateRequest = {
     title: string;
     description: string;
     priority?: ('low' | 'normal' | 'high' | 'urgent' | null);
-    category?: ('backlog' | 'ready' | 'draft' | null);
+    category?: ('backlog' | 'ready' | 'active' | 'draft' | null);
     parent?: (string | null);
     assignee?: (string | null);
     id?: (string | null);
@@ -12636,6 +12722,26 @@ export type LlmPluginsSyncMarketplaceData = {
 
 export type LlmPluginsSyncMarketplaceResponse = (LLMPluginMarketplacePublic);
 
+export type LlmPluginsListMarketplaceEntriesData = {
+    limit?: number;
+    marketplaceId: string;
+    search?: (string | null);
+    skip?: number;
+    snapshotStatus?: ('pending' | 'ready' | 'failed' | null);
+};
+
+export type LlmPluginsListMarketplaceEntriesResponse = (LLMPluginMarketplaceEntriesPublic);
+
+export type LlmPluginsRetryMarketplaceSnapshotsData = {
+    /**
+     * Also re-take content verdicts
+     */
+    all?: boolean;
+    marketplaceId: string;
+};
+
+export type LlmPluginsRetryMarketplaceSnapshotsResponse = (PluginSnapshotRetryPublic);
+
 export type LlmPluginsDiscoverPluginsData = {
     category?: (string | null);
     limit?: number;
@@ -12659,6 +12765,13 @@ export type LlmPluginsGetPluginSkillArchiveData = {
 };
 
 export type LlmPluginsGetPluginSkillArchiveResponse = (unknown);
+
+export type LlmPluginsGetPluginArchiveData = {
+    pluginId: string;
+    sha256?: (string | null);
+};
+
+export type LlmPluginsGetPluginArchiveResponse = (unknown);
 
 export type LlmPluginsGetPluginsByIdsData = {
     /**

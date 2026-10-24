@@ -23,6 +23,7 @@ from collections.abc import Callable
 from typing import Optional
 
 from fastapi import HTTPException
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from app.core.config import settings
@@ -35,6 +36,9 @@ from app.models.plugins.llm_plugin import (
     LLMPluginMarketplacePublic,
     LLMPluginMarketplacePlugin,
     LLMPluginMarketplacePluginPublic,
+    LLMPluginMarketplaceEntriesPublic,
+    PluginComponents,
+    PluginEntryCounts,
     AgentPluginLink,
     AgentPluginLinkCreate,
     AgentPluginLinkUpdate,
@@ -535,9 +539,46 @@ class LLMPluginService:
                         temp_dir, plugins_data, staging_dir
                     )
 
+                # Plugin formats: local entries are snapshotted now, from the
+                # clone; external ones are queued for the snapshot worker.
+                plugin_format = marketplace.type in ("claude", "codex")
+                old_digests: dict[str, str | None] = {}
+                if plugin_format:
+                    from app.services.plugins.plugin_snapshot_worker import (
+                        PluginSnapshotPlanner,
+                    )
+
+                    existing_rows = {
+                        row.name: row
+                        for row in session.exec(
+                            select(LLMPluginMarketplacePlugin).where(
+                                LLMPluginMarketplacePlugin.marketplace_id
+                                == marketplace.id
+                            )
+                        ).all()
+                    }
+                    old_digests = {
+                        name: row.archive_sha256
+                        for name, row in existing_rows.items()
+                    }
+                    staging_dir = MarketplaceSkillSnapshots.new_staging_dir(
+                        marketplace.id
+                    )
+                    staged = PluginSnapshotPlanner.plan(
+                        clone_dir=temp_dir,
+                        fmt=marketplace.type,
+                        plugins_data=plugins_data,
+                        existing_rows=existing_rows,
+                        staging_dir=staging_dir,
+                        commit_hash=commit_hash,
+                    )
+
+                kept_rows: dict[str, LLMPluginMarketplacePlugin] = {}
+
                 def _promote_staged(
                     rows_by_name: dict[str, LLMPluginMarketplacePlugin],
                 ) -> None:
+                    kept_rows.update(rows_by_name)
                     for name, archive in staged.items():
                         MarketplaceSkillSnapshots.promote(
                             archive, marketplace.id, rows_by_name[name].id
@@ -549,8 +590,30 @@ class LLMPluginService:
                     marketplace=marketplace,
                     plugins_data=plugins_data,
                     commit_hash=commit_hash,
-                    before_commit=_promote_staged if staged else None,
+                    before_commit=_promote_staged
+                    if (staged or plugin_format)
+                    else None,
                 )
+
+                # Plugin entries keep one digest: drop the files the
+                # committed rows no longer name. Under the row lock, against
+                # the digest the row holds *now* (a worker may have moved it
+                # since). Best effort, never raises.
+                if plugin_format:
+                    from contextlib import nullcontext
+
+                    from app.services.plugins.plugin_snapshot_worker import (
+                        prune_to_current,
+                    )
+
+                    for entry in plugins_data:
+                        if "archive_sha256" not in entry:
+                            continue
+                        name = entry["name"]
+                        old = old_digests.get(name)
+                        row = kept_rows.get(name)
+                        if row is not None and old and old != entry["archive_sha256"]:
+                            prune_to_current(lambda: nullcontext(session), row.id)
 
                 # A removed entry's row is gone for good (a returning entry
                 # gets a new id), so nobody can reach its snapshots again.
@@ -591,6 +654,18 @@ class LLMPluginService:
                 session.commit()
 
                 logger.info(f"Successfully synced marketplace '{marketplace.name}' - {len(plugins_data)} plugins")
+
+                if plugin_format:
+                    # External entries are fetched off this request (inline
+                    # under TESTING). Never fails a committed sync.
+                    try:
+                        from app.services.plugins.plugin_snapshot_worker import (
+                            PluginSnapshotWorker,
+                        )
+
+                        PluginSnapshotWorker.kick(session)
+                    except Exception as e:
+                        logger.exception(f"Could not start plugin snapshots: {e}")
 
             finally:
                 # Discard the throwaway clone, and any staged archive that was
@@ -644,6 +719,7 @@ class LLMPluginService:
             plugin["skill_archive_sha256"] = None
             plugin["skill_archive_size"] = None
             if not plugin.get("supported", True):
+                LLMPluginService._set_skill_snapshot_fields(plugin)
                 continue
             skill_dir = Path(clone_dir) / plugin["source_path"]
             # Defence in depth: the parser already skips symlinked children
@@ -654,17 +730,49 @@ class LLMPluginService:
                 or not skill_dir.resolve().is_relative_to(clone_root)
             ):
                 LLMPluginService._mark_unsupported(plugin, "unsafe_path")
+                LLMPluginService._set_skill_snapshot_fields(plugin)
                 continue
             result = MarketplaceSkillSnapshots.stage(
                 staging_dir, skill_dir, plugin["name"]
             )
             if isinstance(result, TooLarge):
                 LLMPluginService._mark_unsupported(plugin, "too_large")
+                LLMPluginService._set_skill_snapshot_fields(plugin)
                 continue
             plugin["skill_archive_sha256"] = result.sha256
             plugin["skill_archive_size"] = result.size
+            LLMPluginService._set_skill_snapshot_fields(plugin)
             staged[plugin["name"]] = result
         return staged
+
+    @staticmethod
+    def _set_skill_snapshot_fields(plugin: dict) -> None:
+        """The format-independent snapshot columns of a skills-format entry.
+
+        Mirrors ``skill_archive_*`` (whose history and route stay as they
+        are): ``ready`` with the archive, else ``failed`` with the entry's
+        ``unsupported_reason``; components are the one skill.
+        """
+        sha = plugin.get("skill_archive_sha256")
+        skill = (plugin.get("config") or {}).get("skill") or {}
+        has_scripts = bool(skill.get("has_scripts"))
+        plugin.update(
+            archive_sha256=sha,
+            archive_size=plugin.get("skill_archive_size"),
+            snapshot_status="ready" if sha else "failed",
+            snapshot_reason=None if sha else plugin.get("unsupported_reason"),
+            snapshot_source_key=f"local:{plugin.get('source_path') or ''}",
+            snapshot_at=datetime.now(UTC).replace(tzinfo=None),
+            components={
+                "skills": [{"name": skill.get("name") or plugin["name"], "has_scripts": has_scripts}],
+                "commands": [],
+                "agents": [],
+                "hooks": None,
+                "mcp_servers": [],
+                "lsp_servers": [],
+            },
+            runs_code=has_scripts,
+        )
 
     @staticmethod
     def _get_parser_for_type(marketplace_type: str):
@@ -1326,6 +1434,7 @@ class LLMPluginService:
                 plugin.unsupported_reason = plugin_data.get("unsupported_reason")
                 plugin.skill_archive_sha256 = plugin_data.get("skill_archive_sha256")
                 plugin.skill_archive_size = plugin_data.get("skill_archive_size")
+                LLMPluginService._copy_snapshot_fields(plugin, plugin_data)
                 plugin.updated_at = datetime.now(UTC)
                 session.add(plugin)
             else:
@@ -1352,6 +1461,7 @@ class LLMPluginService:
                     skill_archive_sha256=plugin_data.get("skill_archive_sha256"),
                     skill_archive_size=plugin_data.get("skill_archive_size"),
                 )
+                LLMPluginService._copy_snapshot_fields(plugin, plugin_data)
                 session.add(plugin)
             rows_by_name[name] = plugin
 
@@ -1368,6 +1478,10 @@ class LLMPluginService:
 
         if before_commit is not None:
             try:
+                # Flush first: the UPDATEs take the row locks, so a worker's
+                # locked prune cannot delete an archive promoted below
+                # before this transaction commits.
+                session.flush()
                 before_commit(rows_by_name)
             except Exception:
                 session.rollback()
@@ -1391,6 +1505,33 @@ class LLMPluginService:
             )
 
         return deleted_ids
+
+    #: Snapshot columns an entry dict may carry (see ``plugin_snapshot_worker``).
+    _SNAPSHOT_FIELDS = (
+        "archive_sha256",
+        "archive_size",
+        "snapshot_status",
+        "snapshot_reason",
+        "snapshot_source_key",
+        "snapshot_commit",
+        "snapshot_ref",
+        "snapshot_at",
+        "snapshot_attempts",
+        "snapshot_claim_id",
+        "snapshot_lease_until",
+        "components",
+        "runs_code",
+    )
+
+    @staticmethod
+    def _copy_snapshot_fields(
+        plugin: LLMPluginMarketplacePlugin, plugin_data: dict
+    ) -> None:
+        """Copy the snapshot columns the entry dict carries, and only those:
+        an entry the planner left alone keeps its snapshot as it is."""
+        for key in LLMPluginService._SNAPSHOT_FIELDS:
+            if key in plugin_data:
+                setattr(plugin, key, plugin_data[key])
 
     @staticmethod
     def _rename_link_snapshots(
@@ -1854,12 +1995,172 @@ class LLMPluginService:
             skill_archive_sha256=plugin.skill_archive_sha256,
             skill_archive_size=plugin.skill_archive_size,
             skill_summary=LLMPluginService._skill_summary(plugin),
+            components=LLMPluginService._components_public(plugin),
+            archive_sha256=plugin.archive_sha256,
+            archive_size=plugin.archive_size,
+            snapshot_status=plugin.snapshot_status,
+            snapshot_reason=plugin.snapshot_reason,
+            runs_code=plugin.runs_code,
             marketplace_name=marketplace_name,
             marketplace_owner=LLMPluginService.marketplace_owner_label(marketplace),
             repository_url=LLMPluginService.plugin_repository_url(
                 plugin, marketplace.url if marketplace else None
             ),
         )
+
+    @staticmethod
+    def _components_public(
+        plugin: LLMPluginMarketplacePlugin,
+    ) -> PluginComponents | None:
+        """The stored component analysis, typed; None when absent or malformed."""
+        if not isinstance(plugin.components, dict):
+            return None
+        try:
+            return PluginComponents.model_validate(plugin.components)
+        except ValueError:
+            logger.warning(f"Malformed components on plugin {plugin.id}")
+            return None
+
+    @staticmethod
+    def list_marketplace_entries(
+        session: Session,
+        marketplace: LLMPluginMarketplace,
+        *,
+        snapshot_status: str | None = None,
+        search: str | None = None,
+        skip: int = 0,
+        limit: int = 50,
+    ) -> LLMPluginMarketplaceEntriesPublic:
+        """Every entry of one marketplace, with its snapshot state.
+
+        ``count`` is the total matching the filters; ``counts`` the per-state
+        totals over the whole marketplace (filters ignored).
+        """
+        model = LLMPluginMarketplacePlugin
+        base = select(model).where(model.marketplace_id == marketplace.id)
+        if snapshot_status:
+            base = base.where(model.snapshot_status == snapshot_status)
+        if search:
+            pattern = f"%{search.strip()}%"
+            base = base.where(
+                model.name.ilike(pattern) | model.description.ilike(pattern)
+            )
+        total = session.exec(
+            select(func.count()).select_from(base.subquery())
+        ).one()
+        rows = session.exec(
+            base.order_by(func.lower(model.name), model.id).offset(skip).limit(limit)
+        ).all()
+        by_state = dict(
+            session.exec(
+                select(model.snapshot_status, func.count())
+                .where(model.marketplace_id == marketplace.id)
+                .where(model.snapshot_status.is_not(None))
+                .group_by(model.snapshot_status)
+            ).all()
+        )
+        return LLMPluginMarketplaceEntriesPublic(
+            data=[
+                LLMPluginService.get_plugin_public(row, marketplace=marketplace)
+                for row in rows
+            ],
+            count=total,
+            counts=PluginEntryCounts(
+                ready=by_state.get("ready", 0),
+                pending=by_state.get("pending", 0),
+                failed=by_state.get("failed", 0),
+                retryable=len(
+                    LLMPluginService._retry_candidates(
+                        session, marketplace, include_all=False, lock=False
+                    )[0]
+                ),
+            ),
+        )
+
+    @staticmethod
+    def _retry_candidates(
+        session: Session,
+        marketplace: LLMPluginMarketplace,
+        *,
+        include_all: bool,
+        lock: bool,
+    ) -> tuple[list[LLMPluginMarketplacePlugin], int]:
+        """The rows a snapshot retry would queue, and how many it must skip.
+
+        The one predicate behind the retry route and ``counts.retryable``.
+        Failed ``claude`` / ``codex`` rows (``fetch_failed`` only unless
+        ``include_all``). The worker fetches a local entry from the marketplace
+        repository over public HTTPS at the row's parsed commit; where it
+        cannot (an SSH-key marketplace, a non-public URL, no commit on record)
+        only a sync can re-take the snapshot, so those rows are skipped.
+        ``lock`` takes ``FOR UPDATE SKIP LOCKED`` (the retry write path).
+        """
+        from app.services.plugins.plugin_snapshot_source import (
+            SnapshotSource,
+            https_url,
+            resolve_source,
+            row_fields,
+        )
+
+        model = LLMPluginMarketplacePlugin
+        statement = (
+            select(model)
+            .where(model.marketplace_id == marketplace.id)
+            .where(model.plugin_type.in_(("claude", "codex")))
+            .where(model.snapshot_status == "failed")
+        )
+        if not include_all:
+            statement = statement.where(model.snapshot_reason == "fetch_failed")
+        if lock:
+            statement = statement.with_for_update(skip_locked=True)
+        worker_can_fetch_local = (
+            marketplace.ssh_key_id is None and https_url(marketplace.url) is not None
+        )
+        rows: list[LLMPluginMarketplacePlugin] = []
+        skipped = 0
+        for row in session.exec(statement).all():
+            src = resolve_source(row_fields(row), row.plugin_type)
+            if (
+                isinstance(src, SnapshotSource)
+                and src.kind == "local"
+                and not (worker_can_fetch_local and row.commit_hash)
+            ):
+                skipped += 1
+                continue
+            rows.append(row)
+        return rows, skipped
+
+    @staticmethod
+    def retry_failed_snapshots(
+        session: Session, marketplace: LLMPluginMarketplace, *, include_all: bool
+    ) -> tuple[int, int]:
+        """Queue failed plugin snapshots again; returns ``(queued, skipped)``.
+
+        ``fetch_failed`` rows only, or every failed row with ``include_all``.
+        Skills-format rows are snapshotted by the sync, never by the worker,
+        so they are never queued.
+        """
+        rows, skipped = LLMPluginService._retry_candidates(
+            session, marketplace, include_all=include_all, lock=True
+        )
+        for row in rows:
+            row.snapshot_status = "pending"
+            row.snapshot_reason = None
+            row.snapshot_attempts = 0
+            row.snapshot_claim_id = None
+            row.snapshot_lease_until = None
+            if include_all:
+                # A content verdict is re-taken from scratch.
+                row.snapshot_commit = None
+            session.add(row)
+        session.commit()
+        if rows:
+            from app.services.plugins.plugin_snapshot_worker import (
+                PluginSnapshotWorker,
+            )
+
+            PluginSnapshotWorker.kick(session)
+        return len(rows), skipped
 
     @staticmethod
     def marketplace_owner_label(

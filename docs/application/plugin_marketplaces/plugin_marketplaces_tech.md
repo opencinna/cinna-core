@@ -8,7 +8,10 @@
 - `backend/app/models/plugins/llm_plugin.py` — `LLMPluginMarketplace`, `LLMPluginMarketplacePlugin`, and all related schemas
 - `backend/app/api/routes/llm_plugins.py` — Marketplace CRUD + sync endpoints
 - `backend/app/services/plugins/llm_plugin_service.py` — `create_marketplace()`, `sync_marketplace()`, `_parse_claude_marketplace()`, `_upsert_plugins()`, `discover_plugins()`
-- `backend/app/services/knowledge/git_operations.py` — Shared git clone/pull utilities used during sync
+- `backend/app/services/knowledge/git_operations.py` — Shared git clone/pull utilities used during sync, plus `fetch_tree` / `ls_remote_commit` for snapshots
+- `backend/app/services/plugins/plugin_snapshot_source.py` — pure source resolution (`resolve_source`, source key)
+- `backend/app/services/plugins/plugin_components.py` — pure tree analyser (`analyse_plugin_tree`)
+- `backend/app/services/plugins/plugin_snapshot_worker.py` — `PluginSnapshotPlanner` (sync-time) and `PluginSnapshotWorker` (background drain)
 
 **Frontend**
 - `frontend/src/routes/_layout/admin/marketplaces.tsx` — Marketplace list page
@@ -56,6 +59,13 @@ Defined via `LLMPluginMarketplacePluginBase`:
 | `unsupported_reason` | **New.** `String(64)`, nullable. One of `npm_source`, `app_connector_only`, `no_skill_md`, `unknown_source`, `unsafe_path`, `too_large` |
 | `skill_archive_sha256` | `String(64)`, nullable. Digest of the entry's current skill snapshot (skills-format marketplaces only). NULL until the first sync after upgrade, for unsupported entries and for other formats. Migration `98e0bd120428` |
 | `skill_archive_size` | `int`, nullable. Compressed bytes of that snapshot |
+| `components` | `JSON`, nullable. Typed on the wire as `PluginComponents` (skills, commands, agents, MCP servers with transport/runtime/env/auth, hooks events, LSP servers). Skills format: `{"skills":[…]}` |
+| `archive_sha256`, `archive_size` | Digest and compressed size of the entry's current snapshot, for every format. Skills rows are backfilled from `skill_archive_*`, which stay |
+| `snapshot_status` | `pending` \| `ready` \| `failed`. Independent of `supported` |
+| `snapshot_reason` | Why `failed`: `no_components`, `unsafe_path`, `too_large`, `fetch_failed`, `unknown_source` |
+| `runs_code` | `bool`, nullable. True when any skill has scripts, hooks exist, or a stdio/LSP server is declared |
+| `snapshot_source_key`, `snapshot_commit`, `snapshot_ref`, `snapshot_at` | Queue/state columns: `local:<path>` or `<canonical https url>#<subdir>`; resolved commit; ref to resolve when no sha; last attempt time |
+| `snapshot_attempts`, `snapshot_claim_id`, `snapshot_lease_until` | Worker bookkeeping: attempt counter, current claim, lease expiry. Partial index `ix_plugin_snapshot_pending` on the lease for `pending` rows. Migration `a2c161d383aa` |
 | `source_path` | Relative path (local plugins) |
 | `source_url`, `source_branch` | External repo details (url plugins) |
 | `source_commit_hash` | Pinned commit from external repo (url plugins) |
@@ -88,9 +98,34 @@ All in `backend/app/api/routes/llm_plugins.py`. Marketplace create is superuser-
 | `GET` | `/api/v1/llm-plugins/discover` | `?search=&category=` | `LLMPluginMarketplacePluginsPublic` | Discover plugins from accessible marketplaces |
 | `GET` | `/api/v1/llm-plugins/plugins/{plugin_id}` | — | `LLMPluginMarketplacePluginPublic` | One entry. Own rule: owner, public marketplace **or superuser**, else 403 (differs from the two routes below) |
 | `GET` | `/api/v1/llm-plugins/plugins/{plugin_id}/skill-archive` | `?sha256=` (64 lowercase hex, pattern-validated) | gzip file, header `X-Archive-Sha256` | Download a skill snapshot. 404 `not_found` (entry gone or not visible), 404 `snapshot_missing` (no file for that digest), 409 `not_a_skill` |
+| `GET` | `/api/v1/llm-plugins/plugins/{plugin_id}/archive` | `?sha256=` | gzip file, header `X-Archive-Sha256` | Snapshot of any format. Same visibility as `skill-archive`. 404 `not_found` / `snapshot_missing`; 409 `snapshot_pending` / `snapshot_failed` (`detail.reason`) only when no digest exists. `skill-archive` is kept as an alias with its own `not_a_skill` gate |
+| `GET` | `/api/v1/llm-plugins/marketplaces/{id}/entries` | `?snapshot_status=&search=&skip=&limit=` | `{data, count, counts}` | Every entry with the snapshot fields. `count` is the filtered total; `counts` is `{ready, pending, failed, retryable}` over the whole marketplace, where `retryable` is what the default retry would queue (same predicate, `_retry_candidates`). Owner or superuser |
+| `POST` | `/api/v1/llm-plugins/marketplaces/{id}/snapshots/retry` | `?all=bool` | `{queued, skipped_needs_sync}` | Re-queue `fetch_failed` rows (all failed rows with `all=true`), attempts reset. Failed local entries of SSH-key or non-public marketplaces are not queued (`skipped_needs_sync`); a sync re-takes them. Owner or superuser |
 | `GET` | `/api/v1/llm-plugins/plugins` | `?ids=a,b,…` (≤100) | `LLMPluginMarketplacePluginsPublic` | Batch lookup in request order, de-duplicated; invisible or unknown ids are omitted. 422 `too_many_ids` / `invalid_id` |
 
 **Visibility for the two snapshot routes** is exactly the `/discover` rule (`LLMPluginService.is_discoverable` plus one SQL clause): the marketplace is the caller's own or has `public_discovery`. There is **no superuser bypass**; a private entry answers `404 not_found`, never 403.
+
+## Snapshots (plugin and skills format)
+
+Every format gets a content-addressed archive per entry plus a component analysis. `supported` / `unsupported_reason` keep their cloud meaning and are never touched by snapshots; Cinna Desktop reads `snapshot_status` / `snapshot_reason`. Cloud installs ignore all of it.
+
+**Planning in the sync** (`PluginSnapshotPlanner.plan`, before `_upsert_plugins`): parser-flagged entries (`unsafe_path`, `unknown_source`, `npm_source`) go straight to `failed` with that reason. Local entries are analysed and staged inside the sync while the clone exists, so they are `ready` in the sync response. External sources (`url`, `git-subdir`, `github`, codex rows) become `pending`; the sync never waits on a clone. An unchanged source key (same key and commit, `ready`, file present) is never re-fetched or re-queued. `_upsert_plugins` copies the snapshot fields only when the entry dict carries them; staged archives are promoted in the `before_commit` hook.
+
+**Source resolution** (`plugin_snapshot_source.resolve_source`, pure): the entry becomes a local path or a git root/subdir at a sha or ref; `npm` and unknown shapes are `unknown_source`. URLs pass `_normalize_public_git_url`, so an ssh and an https spelling of the same repo share one source key.
+
+**Analysis** (`plugin_components.analyse_plugin_tree`, pure): reads the manifest (`.claude-plugin` or `.codex-plugin`) plus components declared inline in the entry, then skills, commands, agents, hooks, MCP servers (transport and runtime inferred, `${VAR}` env marked secret) and LSP servers. No components gives `no_components`; over 16 MB uncompressed gives `too_large`.
+
+**Worker** (`PluginSnapshotWorker`, started in `main.py`, skipped under `TESTING`): the plugin rows are the queue. A tick every `PLUGIN_SNAPSHOT_TICK_SECONDS` (30) and on `kick()` after a sync claims `pending` rows with `FOR UPDATE SKIP LOCKED`, sets a claim id and a lease of `PLUGIN_SNAPSHOT_LEASE_SECONDS` (120), bumps `snapshot_attempts`. Rows of one repo and commit are grouped so it is fetched once; groups run in a `ThreadPoolExecutor` of `PLUGIN_SNAPSHOT_WORKERS` (3). A heartbeat renews in-flight leases every `PLUGIN_SNAPSHOT_HEARTBEAT_SECONDS` (30), so a killed process's rows return within about two minutes. The result is written compare-and-set under `FOR UPDATE` on `(snapshot_claim_id, snapshot_source_key)`; a row re-planned or deleted meanwhile discards the work, and the archive is promoted only once the lock is held. No advisory lock is used. Ref-only sources are resolved with `ls_remote_commit` first and skip the clone when unchanged.
+
+**Failure handling**: fetch errors return the row to `pending` with a backoff of 30 s x attempts, until `PLUGIN_SNAPSHOT_MAX_ATTEMPTS` (5), then `failed` / `fetch_failed`, keeping the previous archive. Content failures (`no_components`, `unsafe_path`, `too_large`) clear the snapshot and are not retried. `drain_inline()` runs the whole queue synchronously under `TESTING`.
+
+**Hardening**: one containment rule for every path (no symlink in any segment, no `..`, the resolved path stays inside the root). `fetch_tree` (`git_operations.py`) validates sha and ref, follows no redirects, and caps the fetch at `FETCH_TREE_MAX_BYTES` (16 MB) with a watchdog that kills git; external sources are public HTTPS, no SSH keys.
+
+**Storage**: unchanged layout `<SKILL_STORAGE_DIR>/marketplace-skills/<mid>/<pid>/<sha>.tar.gz`, staging in `…/<mid>/.staging/<uuid>/`. `build_tree_archive(prefix, files)` in `skill_archive.py` is the shared builder (`build_skill_archive` is the `skills/<name>` case, byte-identical). A plugin entry keeps **one** digest: older files are pruned after commit under the row lock (`prune_except`). Skills-format entries keep their history.
+
+**Admin UI**: the Plugins tab lists entries from the `/entries` route, shows each entry's snapshot state and components, offers a retry action, and refetches while rows are pending; the plugin detail page shows the full component lists and digest.
+
+Live reference (`claude-plugins-official`, 315 entries): sync 4 to 6 s, external drain about 2 minutes.
 
 ## Services & Key Methods
 
@@ -213,5 +248,5 @@ All three sync call sites (the Configuration tab's button, the detail page's hea
 - All marketplace mutation endpoints (`POST`, `PUT`, `DELETE`, `sync`) are guarded by `get_current_active_superuser` dependency — non-admin users cannot create or modify marketplaces
 - `GET /marketplaces` and `GET /discover` filter by ownership or `public_discovery=true` so users only see their own or explicitly shared marketplaces
 - SSH key IDs reference the `user_ssh_keys` table; private key material is never included in API responses
-- No plugin files are ever stored on the backend filesystem — only git coordinates in Postgres
+- Only snapshot archives (never a checkout) are stored on the backend filesystem under `marketplace-skills/`; everything else is git coordinates in Postgres. The archive routes serve content on the discover rule with no superuser bypass
 - **SSH URLs for public hosts are auto-normalized**: A marketplace (or an external `url`-type plugin) may be registered with an SSH-form Git URL (e.g. `git@github.com:org/repo.git`). When the git coordinates are later resolved for the plugin manifest, `LLMPluginService._normalize_public_git_url` rewrites such URLs for `github.com`, `gitlab.com`, and `bitbucket.org` to their HTTPS equivalents so the agent-env container (which has no SSH key for these hosts) can clone public repos without authentication. URLs for unrecognized or private hosts are left unchanged.

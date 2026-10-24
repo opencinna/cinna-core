@@ -207,6 +207,10 @@ from app.services.routing.routing_trace_scheduler import (
     start_scheduler as start_routing_trace_scheduler,
     shutdown_scheduler as shutdown_routing_trace_scheduler,
 )
+from app.services.plugins.plugin_snapshot_worker import (
+    start_scheduler as start_plugin_snapshot_worker,
+    shutdown_scheduler as shutdown_plugin_snapshot_worker,
+)
 from app.services.system.status_repair_scheduler import (
     start_scheduler as start_status_repair_scheduler,
     shutdown_scheduler as shutdown_status_repair_scheduler,
@@ -248,6 +252,7 @@ async def lifespan(app: FastAPI):
         start_oauth_refresh_scheduler()
         start_routing_trace_scheduler()
         start_status_repair_scheduler()
+        start_plugin_snapshot_worker()
 
     # Register backend event handlers
     from app.models.events.event import EventType
@@ -474,6 +479,7 @@ async def lifespan(app: FastAPI):
         shutdown_oauth_refresh_scheduler()
         shutdown_routing_trace_scheduler()
         shutdown_status_repair_scheduler()
+        shutdown_plugin_snapshot_worker()
     event_service.shutdown()
     logger.info("Application shutdown complete")
 

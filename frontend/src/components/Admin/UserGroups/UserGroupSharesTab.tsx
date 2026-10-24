@@ -16,9 +16,9 @@ import {
   type UserGroupSharePublic,
 } from "@/client"
 import {
-  CatalogFilterMenu,
-  type CatalogFilterOption,
-} from "@/components/Catalog/CatalogFilterMenu"
+  FilterMenu,
+  type FilterOption,
+} from "@/components/Common/FilterMenu"
 import { DataTable } from "@/components/Common/DataTable"
 import { QueryErrorAlert } from "@/components/Common/QueryErrorAlert"
 import { Button } from "@/components/ui/button"
@@ -34,7 +34,7 @@ import { getShareColumns } from "./shareColumns"
 import { TableEmptyBlock, UserGroupSearchInput } from "./UserGroupSearchInput"
 import { userGroupKeys } from "./userGroupQueries"
 
-const FAMILY_FILTERS: readonly CatalogFilterOption<UserGroupShareFamily>[] = [
+const FAMILY_FILTERS: readonly FilterOption<UserGroupShareFamily>[] = [
   { value: "all", label: "All", icon: Layers },
   { value: "catalog", label: "Catalog", icon: Library },
   { value: "credential", label: "Credentials", icon: KeyRound },
@@ -153,7 +153,7 @@ export function UserGroupSharesTab({ group }: { group: UserGroupPublic }) {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <CatalogFilterMenu
+        <FilterMenu
           options={FAMILY_FILTERS}
           value={family}
           onChange={setFamily}

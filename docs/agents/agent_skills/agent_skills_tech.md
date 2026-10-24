@@ -1322,7 +1322,7 @@ fetches `.../download`:
 
 | # | Surface | New files (per the spec) |
 |---|---------|--------------------------|
-| S6 | `/catalog/skills` route + `CatalogSectionTabs` (Agents · Skills segmented control on both catalog routes, beside the `Filters` menu in one toolbar row; `AppSidebar` `isActive` widened to `startsWith("/catalog")`) | `routes/_layout/catalog/skills.tsx`, `Catalog/SkillCatalogCard.tsx`, `SkillCatalogGrid.tsx`, `SkillCatalogFilters.tsx`, `CatalogFilterMenu.tsx`, `CatalogSectionTabs.tsx` |
+| S6 | `/catalog/skills` route + `CatalogSectionTabs` (Agents · Skills segmented control on both catalog routes, beside the `Filters` menu in one toolbar row; `AppSidebar` `isActive` widened to `startsWith("/catalog")`) | `routes/_layout/catalog/skills.tsx`, `Catalog/SkillCatalogCard.tsx`, `SkillCatalogGrid.tsx`, `SkillCatalogFilters.tsx`, `Common/FilterMenu.tsx` (was `Catalog/CatalogFilterMenu.tsx`), `CatalogSectionTabs.tsx` |
 | S7 | Package detail route — Package card (its Version fact opens the revisions Sheet) + `SKILL.md` card | `routes/_layout/catalog/skills/$packageId.tsx`, `Catalog/SkillPackageCard.tsx`, `SkillRevisionRow.tsx`, `AllSkillRevisionsSheet.tsx`, `SkillSource.tsx` |
 | S8 | Edit package details dialog | (in the detail route) |
 | S9 | Publish skill dialog, opened from the S1 row `⋯` only | `Agents/PublishSkillDialog.tsx` |

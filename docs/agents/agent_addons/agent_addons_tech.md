@@ -491,6 +491,8 @@ answers a refused install with its own sentence.
 
 ### Refusals on the install path
 
+Cloud installs ignore the marketplace snapshots entirely (`snapshot_*`, `archive_*`, `components`): they still resolve git coordinates from the row, and `supported` / `unsupported_reason` keep their cloud meaning. Snapshots serve Cinna Desktop only; see [plugin_marketplaces_tech](../../application/plugin_marketplaces/plugin_marketplaces_tech.md#snapshots-plugin-and-skills-format).
+
 - `install_plugin_for_agent` → **409** `{code: "plugin_unsupported", message,
   reason}` when `plugin.supported` is false, checked **before** the
   already-installed guard.

@@ -11,14 +11,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 
-export interface CatalogFilterOption<T extends string> {
+export interface FilterOption<T extends string> {
   value: T
   label: string
   icon: LucideIcon
 }
 
-interface CatalogFilterMenuProps<T extends string> {
-  options: readonly CatalogFilterOption<T>[]
+interface FilterMenuProps<T extends string> {
+  options: readonly FilterOption<T>[]
   value: T
   onChange: (next: T) => void
   /** The option that means "everything" — the trigger stays plain on it. */
@@ -26,7 +26,9 @@ interface CatalogFilterMenuProps<T extends string> {
 }
 
 /**
- * The subset filter for a catalog grid, as **one** button that opens a menu.
+ * The subset filter for a list or grid, as **one** button that opens a menu
+ * (§2 Page toolbars). Moved here from `Catalog/` at its marketplace-entries
+ * consumer; the history below is the catalog grid's.
  *
  * It used to be a row of four pills directly under the section tabs — and
  * those tabs are also a row of pills, built to the same skeleton on purpose. So
@@ -37,15 +39,14 @@ interface CatalogFilterMenuProps<T extends string> {
  * on the toolbar that looks like a choice of place.
  *
  * The active subset rides on the trigger, so a narrowed grid always says why it
- * is short without the menu being open. `CatalogItemFilters` is its option
- * list and nothing else.
+ * is short without the menu being open. Callers own only their option list.
  */
-export function CatalogFilterMenu<T extends string>({
+export function FilterMenu<T extends string>({
   options,
   value,
   onChange,
   allValue,
-}: CatalogFilterMenuProps<T>) {
+}: FilterMenuProps<T>) {
   const active = options.find((option) => option.value === value)
   const isNarrowed = value !== allValue
 
