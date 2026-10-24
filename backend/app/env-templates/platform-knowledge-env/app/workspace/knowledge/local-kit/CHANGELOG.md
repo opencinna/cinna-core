@@ -16,6 +16,50 @@ folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
 
+## 1.17.0 — plugins and MCP servers in the manifest
+
+Additive. Every 1.x folder stays valid and needs no change, and a tool built
+against an earlier 1.x keeps operating a 1.17.0 folder, because the majors match.
+
+A host can now give an agent a whole plugin from one of the platform's plugin
+marketplaces, and an agent can say which MCP servers it needs, so a shared agent
+arrives with its connectors listed as needing setup rather than silently missing.
+
+### Added
+
+- **`marketplace_plugins[]` in `cinna-agent.json`.** Each pin carries
+  `entry_uuid`, `marketplace_uuid`, `marketplace_name`, `name` and
+  `archive_sha256`, and optionally `version` and `commit_hash` (both string or
+  null, display only) and `disabled: {hooks, mcp_servers, skills}`, the
+  components the user turned off. The host writes a pin when someone adds a
+  marketplace plugin, downloads the pinned snapshot and checks it against
+  `archive_sha256`, keeps the files outside the agent folder, and delivers the
+  plugin's skills, MCP servers and hooks to the engine, less whatever
+  `disabled` names. Unknown keys on a pin are preserved. `kit.py validate`
+  reports a malformed field, a duplicate `entry_uuid` and a duplicate `name`.
+- **`mcp_servers[]` in `cinna-agent.json`.** Each entry is a requirement, never
+  a secret: `name` and `transport` (`stdio`, `http` or `sse`), `ref`
+  (`{source, id}` of the directory entry, or null for a custom server), `url`
+  for http and sse or `command` and `args[]` for stdio, `auth` (`none`,
+  `oauth`, `bearer` or `env`) and `env: [{name, secret?}]`, names only. Values
+  stay per user, per computer: the host asks each user for what `auth` and
+  `env` name and keeps the answers outside the agent folder. `kit.py validate`
+  reports a duplicate `name`, a `url` or `command` on the wrong transport, a
+  missing one on the right transport, and any `env` item that carries a
+  `value`.
+  A `name` may carry dots (`io.github.owner.server`, `context7.com`). A `url`
+  is kept as written, so `${VAR}` placeholders pass. An explicit null on
+  `url`, `command`, `args` or `auth`, and an empty `args`, mean the same as
+  the key being absent. A secret never goes in a `url` query string, in
+  `args` or in an extra key; it is an `env` value, entered per user, per
+  computer.
+- Five conformance cases: `marketplace-plugins-valid`,
+  `marketplace-plugins-malformed`, `mcp-servers-valid`, `mcp-servers-malformed`
+  and `mcp-servers-with-secret-value`.
+
+Cloud import ignores both arrays for now; they travel unchanged in the copied
+manifest.
+
 ## Scripts readable without running them
 
 Documentation update, with no schema-shape or contract-version change.

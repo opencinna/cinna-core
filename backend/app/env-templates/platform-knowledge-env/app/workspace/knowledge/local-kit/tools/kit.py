@@ -1591,6 +1591,8 @@ def validate_manifest(manifest: dict, report: Report) -> None:
     _validate_handovers(manifest.get("handovers", []), manifest.get("slug"), report)
     _validate_catalog_skills(manifest.get("catalog_skills"), report)
     _validate_marketplace_skills(manifest, report)
+    _validate_marketplace_plugins(manifest, report)
+    _validate_mcp_servers(manifest, report)
     _validate_manifest_ledger_keys(manifest, report)
 
     features = manifest.get("features", {})
@@ -3203,6 +3205,239 @@ def _validate_marketplace_skills(manifest: dict, report: Report) -> None:
             value = pin.get(key)
             if value is not None and not isinstance(value, str):
                 report.error(f"{MANIFEST_NAME}: `{label}.{key}` must be a string or null.")
+
+
+def _canonical_uuid(value: object) -> str | None:
+    """`value` as a canonical UUID string, or None when it is not one."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return str(uuid.UUID(value))
+    except ValueError:
+        return None
+
+
+def _manifest_array(manifest: dict, key: str, report: Report) -> list | None:
+    """The manifest's optional array `key`, or None (reported) when it is not one."""
+    value = manifest.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        report.error(f"{MANIFEST_NAME}: `{key}` must be an array.")
+        return None
+    return value
+
+
+def _is_string_list(value: object) -> bool:
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
+def _validate_marketplace_plugins(manifest: dict, report: Report) -> None:
+    """The manifest's `marketplace_plugins[]` pins (contract 1.17.0), field by field.
+
+    One pin per marketplace entry and one per plugin name. A plugin's skills are
+    the plugin's own, so its name is not checked against the skill namespace.
+    """
+    pins = _manifest_array(manifest, "marketplace_plugins", report)
+    if pins is None:
+        return
+    seen_entries: set[str] = set()
+    seen_names: set[str] = set()
+    for index, pin in enumerate(pins):
+        label = f"marketplace_plugins[{index}]"
+        if not isinstance(pin, dict):
+            report.error(f"{MANIFEST_NAME}: `{label}` must be an object.")
+            continue
+        for key, what in (("entry_uuid", "marketplace entry"), ("marketplace_uuid", "marketplace")):
+            canonical = _canonical_uuid(pin.get(key))
+            if canonical is None:
+                report.error(f"{MANIFEST_NAME}: `{label}.{key}` must be the {what}'s UUID.")
+            elif key == "entry_uuid":
+                if canonical in seen_entries:
+                    report.error(
+                        f"{MANIFEST_NAME}: `{label}.entry_uuid` pins the same marketplace "
+                        "plugin twice."
+                    )
+                seen_entries.add(canonical)
+        if not isinstance(pin.get("marketplace_name"), str):
+            report.error(f"{MANIFEST_NAME}: `{label}.marketplace_name` must be a string.")
+        name = pin.get("name")
+        if (
+            not isinstance(name, str)
+            or len(name) > SKILL_MAX_NAME_LENGTH
+            or not SKILL_NAME_RE.match(name)
+        ):
+            report.error(
+                f"{MANIFEST_NAME}: `{label}.name` must be the plugin's name: lowercase words "
+                "joined by single hyphens, at most 64 characters."
+            )
+        else:
+            if name in seen_names:
+                report.error(
+                    f"{MANIFEST_NAME}: `{label}.name` pins a second marketplace plugin named "
+                    f"'{name}'; an agent holds one plugin per name."
+                )
+            seen_names.add(name)
+        archive_sha256 = pin.get("archive_sha256")
+        if not isinstance(archive_sha256, str) or not SHA256_HEX_RE.match(archive_sha256):
+            report.error(
+                f"{MANIFEST_NAME}: `{label}.archive_sha256` must be 64 lowercase hex characters."
+            )
+        for key in ("commit_hash", "version"):
+            value = pin.get(key)
+            if value is not None and not isinstance(value, str):
+                report.error(f"{MANIFEST_NAME}: `{label}.{key}` must be a string or null.")
+        disabled = pin.get("disabled")
+        if disabled is None:
+            continue
+        if not isinstance(disabled, dict):
+            report.error(f"{MANIFEST_NAME}: `{label}.disabled` must be an object.")
+            continue
+        if "hooks" in disabled and not isinstance(disabled["hooks"], bool):
+            report.error(f"{MANIFEST_NAME}: `{label}.disabled.hooks` must be true or false.")
+        for key in ("mcp_servers", "skills"):
+            if key in disabled and not _is_string_list(disabled[key]):
+                report.error(
+                    f"{MANIFEST_NAME}: `{label}.disabled.{key}` must be an array of names."
+                )
+
+
+MCP_TRANSPORTS = ("stdio", "http", "sse")
+MCP_AUTH_KINDS = ("none", "oauth", "bearer", "env")
+MCP_SERVER_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+MCP_SERVER_NAME_MAX_LENGTH = 64
+ENV_VAR_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _validate_mcp_servers(manifest: dict, report: Report) -> None:
+    """The manifest's `mcp_servers[]` requirements (contract 1.17.0), field by field.
+
+    An entry says what a server needs, never a secret: an `env` item that
+    carries a `value` is an error, whatever the value. `url` belongs to http and
+    sse, `command` and `args` to stdio, and each transport needs its own.
+    """
+    servers = _manifest_array(manifest, "mcp_servers", report)
+    if servers is None:
+        return
+    seen_names: set[str] = set()
+    for index, server in enumerate(servers):
+        label = f"mcp_servers[{index}]"
+        if not isinstance(server, dict):
+            report.error(f"{MANIFEST_NAME}: `{label}` must be an object.")
+            continue
+        name = server.get("name")
+        if (
+            not isinstance(name, str)
+            or len(name) > MCP_SERVER_NAME_MAX_LENGTH
+            or not MCP_SERVER_NAME_RE.match(name)
+        ):
+            report.error(
+                f"{MANIFEST_NAME}: `{label}.name` must be the server's name: letters, digits, "
+                "dots, _ and -, starting with a letter or digit, at most 64 characters."
+            )
+        else:
+            if name in seen_names:
+                report.error(
+                    f"{MANIFEST_NAME}: `{label}.name` is a second MCP server named '{name}'; "
+                    "an agent holds one server per name."
+                )
+            seen_names.add(name)
+
+        ref = server.get("ref")
+        if ref is not None:
+            if not isinstance(ref, dict):
+                report.error(
+                    f"{MANIFEST_NAME}: `{label}.ref` must be an object with a source and an id, "
+                    "or null for a custom server."
+                )
+            else:
+                for key in ("source", "id"):
+                    value = ref.get(key)
+                    if not isinstance(value, str) or not value:
+                        report.error(
+                            f"{MANIFEST_NAME}: `{label}.ref.{key}` must be a non-empty string."
+                        )
+
+        transport = server.get("transport")
+        if transport not in MCP_TRANSPORTS:
+            report.error(
+                f"{MANIFEST_NAME}: `{label}.transport` must be one of "
+                f"{', '.join(MCP_TRANSPORTS)}."
+            )
+        # An explicit null, and an empty `args`, are the same as the key being absent.
+        url = server.get("url")
+        command = server.get("command")
+        args = server.get("args")
+        has_url = url is not None
+        has_command = command is not None
+        has_args = args is not None and args != []
+        if has_url and (not isinstance(url, str) or not url):
+            report.error(f"{MANIFEST_NAME}: `{label}.url` must be a non-empty string or null.")
+        if has_command and (not isinstance(command, str) or not command):
+            report.error(f"{MANIFEST_NAME}: `{label}.command` must be a non-empty string or null.")
+        if has_args and not _is_string_list(args):
+            report.error(f"{MANIFEST_NAME}: `{label}.args` must be an array of strings or null.")
+        if transport == "stdio":
+            if not has_command:
+                report.error(
+                    f"{MANIFEST_NAME}: `{label}.command` is required: a stdio server is "
+                    "started locally."
+                )
+            if has_url:
+                report.error(
+                    f"{MANIFEST_NAME}: `{label}.url` belongs to an http or sse server; a stdio "
+                    "server has a command instead."
+                )
+        elif transport in ("http", "sse"):
+            if not has_url:
+                report.error(
+                    f"{MANIFEST_NAME}: `{label}.url` is required: an {transport} server is "
+                    "reached over the network."
+                )
+            for key, present in (("command", has_command), ("args", has_args)):
+                if present:
+                    report.error(
+                        f"{MANIFEST_NAME}: `{label}.{key}` belongs to a stdio server; an "
+                        f"{transport} server has a url instead."
+                    )
+
+        auth = server.get("auth")
+        if auth is not None and auth not in MCP_AUTH_KINDS:
+            report.error(
+                f"{MANIFEST_NAME}: `{label}.auth` must be one of {', '.join(MCP_AUTH_KINDS)}."
+            )
+
+        env = server.get("env")
+        if env is None:
+            continue
+        if not isinstance(env, list):
+            report.error(f"{MANIFEST_NAME}: `{label}.env` must be an array.")
+            continue
+        seen_env: set[str] = set()
+        for env_index, item in enumerate(env):
+            env_label = f"{label}.env[{env_index}]"
+            if not isinstance(item, dict):
+                report.error(f"{MANIFEST_NAME}: `{env_label}` must be an object with a name.")
+                continue
+            if "value" in item:
+                report.error(
+                    f"{MANIFEST_NAME}: `{env_label}.value` must not be written: an MCP server "
+                    "entry names what it needs and never carries a value. Remove it; each "
+                    "user enters the value on their own computer."
+                )
+            env_name = item.get("name")
+            if not isinstance(env_name, str) or not ENV_VAR_NAME_RE.match(env_name):
+                report.error(
+                    f"{MANIFEST_NAME}: `{env_label}.name` must be an environment variable name."
+                )
+            elif env_name in seen_env:
+                report.error(
+                    f"{MANIFEST_NAME}: `{env_label}.name` names '{env_name}' twice."
+                )
+            else:
+                seen_env.add(env_name)
+            if "secret" in item and not isinstance(item["secret"], bool):
+                report.error(f"{MANIFEST_NAME}: `{env_label}.secret` must be true or false.")
 
 
 def _validate_skills(agent_dir: Path, manifest: dict, report: Report) -> None:

@@ -411,6 +411,195 @@
         }
       }
     },
+    "marketplace_plugins": {
+      "description": "Plugins from the platform's plugin marketplaces (claude or codex format) that this agent uses, pinned by reference (contract 1.17.0). The host installs these from a marketplace the user can discover; nobody writes them by hand. A host downloads the pinned snapshot, checks it against archive_sha256, keeps the files outside the agent folder and delivers the plugin's components (skills, MCP servers, hooks) to the engine, less whatever `disabled` turns off.",
+      "type": "array",
+      "x-scope": "portable",
+      "x-import": "ignored (logged) on cloud import",
+      "items": {
+        "type": "object",
+        "required": ["entry_uuid", "marketplace_uuid", "marketplace_name", "name", "archive_sha256"],
+        "additionalProperties": true,
+        "properties": {
+          "entry_uuid": {
+            "description": "The marketplace entry's (plugin's) id on the instance it came from.",
+            "type": "string",
+            "format": "uuid",
+            "x-scope": "portable",
+            "x-import": "ignored"
+          },
+          "marketplace_uuid": {
+            "description": "The marketplace's id on the instance it came from.",
+            "type": "string",
+            "format": "uuid",
+            "x-scope": "portable",
+            "x-import": "ignored"
+          },
+          "marketplace_name": {
+            "description": "The marketplace's name when the pin was written, for display only.",
+            "type": "string",
+            "x-scope": "portable",
+            "x-import": "ignored"
+          },
+          "name": {
+            "description": "The plugin's name in its marketplace. One pin per name.",
+            "type": "string",
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+            "maxLength": 64,
+            "x-scope": "portable",
+            "x-import": "ignored"
+          },
+          "archive_sha256": {
+            "description": "SHA-256 of the pinned snapshot's downloaded archive, lowercase hex. A host refuses a download that does not match.",
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "x-scope": "portable",
+            "x-import": "ignored"
+          },
+          "version": {
+            "description": "The entry's version label when the pin was written, for display only.",
+            "type": ["string", "null"],
+            "x-scope": "portable",
+            "x-import": "ignored"
+          },
+          "commit_hash": {
+            "description": "The marketplace repository commit the snapshot was taken from, for display only.",
+            "type": ["string", "null"],
+            "x-scope": "portable",
+            "x-import": "ignored"
+          },
+          "disabled": {
+            "description": "Components of the plugin the user turned off. Absent means everything is on.",
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "hooks": {
+                "description": "true turns off every hook the plugin ships.",
+                "type": "boolean"
+              },
+              "mcp_servers": {
+                "description": "Names of the plugin's MCP servers that are not started.",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "skills": {
+                "description": "Names of the plugin's skills that are not given to the engine.",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "x-scope": "portable",
+            "x-import": "ignored"
+          }
+        }
+      }
+    },
+    "mcp_servers": {
+      "description": "MCP servers this agent needs (contract 1.17.0). Each entry is a requirement, never a secret; values stay per user, per computer. A host lists an entry it cannot start yet as needing setup, asks the user for what `auth` and `env` name, and keeps the answers outside the agent folder. A secret must never be put in a `url` query string, in `args` or in an extra key; it goes in an `env` value, entered per user, per computer.",
+      "type": "array",
+      "x-scope": "portable",
+      "x-import": "ignored (logged) on cloud import",
+      "items": {
+        "type": "object",
+        "required": ["name", "transport"],
+        "additionalProperties": true,
+        "properties": {
+          "name": {
+            "description": "The server's name, the key the engine knows it by. One entry per name.",
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "maxLength": 64,
+            "x-scope": "portable",
+            "x-import": "ignored"
+          },
+          "ref": {
+            "description": "The directory entry the server came from, or null for a custom server.",
+            "type": ["object", "null"],
+            "required": ["source", "id"],
+            "additionalProperties": true,
+            "properties": {
+              "source": {
+                "description": "The directory that lists the entry.",
+                "type": "string",
+                "minLength": 1
+              },
+              "id": {
+                "description": "The entry's id in that directory.",
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "x-scope": "portable",
+            "x-import": "ignored"
+          },
+          "transport": {
+            "description": "How the host talks to the server: `stdio` starts `command` locally; `http` and `sse` connect to `url`.",
+            "type": "string",
+            "enum": ["stdio", "http", "sse"],
+            "x-scope": "portable",
+            "x-import": "ignored"
+          },
+          "url": {
+            "description": "The server's URL, as written (it may carry ${VAR} placeholders a host fills in). Required for http and sse; absent or null for stdio.",
+            "type": ["string", "null"],
+            "minLength": 1,
+            "x-scope": "portable",
+            "x-import": "ignored"
+          },
+          "command": {
+            "description": "The executable to start. Required for stdio; absent or null for http and sse.",
+            "type": ["string", "null"],
+            "minLength": 1,
+            "x-scope": "portable",
+            "x-import": "ignored"
+          },
+          "args": {
+            "description": "Arguments for `command` (stdio only). Null or an empty array is the same as absent.",
+            "type": ["array", "null"],
+            "items": {
+              "type": "string"
+            },
+            "x-scope": "portable",
+            "x-import": "ignored"
+          },
+          "auth": {
+            "description": "What the server needs from the user: nothing, an OAuth sign-in, a bearer token, or the values named in `env`. Absent or null means none.",
+            "type": ["string", "null"],
+            "enum": ["none", "oauth", "bearer", "env", null],
+            "x-scope": "portable",
+            "x-import": "ignored"
+          },
+          "env": {
+            "description": "Environment variables the server needs, by name only. A value is never written here.",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["name"],
+              "additionalProperties": true,
+              "not": {
+                "required": ["value"]
+              },
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                },
+                "secret": {
+                  "description": "true when the value is a secret a host must store as one.",
+                  "type": "boolean"
+                }
+              }
+            },
+            "x-scope": "portable",
+            "x-import": "ignored"
+          }
+        }
+      }
+    },
     "features": {
       "description": "Cloud-only capabilities the agent expects once imported. Ignored locally.",
       "type": "object",

@@ -1,0 +1,61 @@
+{
+  "description": "A marketplace plugin pin with every field malformed (bad uuids, bad sha, bad name, non-string marketplace_name, commit_hash and version, a disabled block of the wrong types), then a second pin repeating the first one's entry_uuid and name: each is an error of its own (contract 1.17.0).",
+  "manifest": {
+    "contract_version": "1.17.0",
+    "id": "0f6d2c1e-8a4b-4c3d-9e2f-1a2b3c4d5e6f",
+    "name": "Conformance Agent",
+    "slug": "conformance-agent",
+    "description": "Answers questions about invoices.",
+    "example_prompts": [
+      "Which invoices are overdue?"
+    ],
+    "marketplace_plugins": [
+      {
+        "entry_uuid": "nope",
+        "marketplace_uuid": "also-nope",
+        "marketplace_name": 42,
+        "name": "Not_A_Name",
+        "archive_sha256": "xyz",
+        "commit_hash": 7,
+        "version": 3,
+        "disabled": {
+          "hooks": "yes",
+          "mcp_servers": "all",
+          "skills": [
+            1
+          ]
+        }
+      },
+      {
+        "entry_uuid": "7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+        "marketplace_uuid": "9b8c7d6e-5f4a-4b3c-8d2e-1f0a9b8c7d6e",
+        "marketplace_name": "Team plugins",
+        "name": "carbone-skill",
+        "archive_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "disabled": []
+      },
+      {
+        "entry_uuid": "7A1B2C3D-4E5F-4A6B-8C7D-9E0F1A2B3C4D",
+        "marketplace_uuid": "9b8c7d6e-5f4a-4b3c-8d2e-1f0a9b8c7d6e",
+        "marketplace_name": "Team plugins",
+        "name": "carbone-skill",
+        "archive_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    ]
+  },
+  "expect": {
+    "errors": [
+      "marketplace_plugins.entry_uuid",
+      "marketplace_plugins.marketplace_uuid",
+      "marketplace_plugins.marketplace_name",
+      "marketplace_plugins.name",
+      "marketplace_plugins.archive_sha256",
+      "marketplace_plugins.commit_hash",
+      "marketplace_plugins.version",
+      "marketplace_plugins.disabled",
+      "marketplace_plugins.disabled.hooks",
+      "marketplace_plugins.disabled.mcp_servers",
+      "marketplace_plugins.disabled.skills"
+    ]
+  }
+}

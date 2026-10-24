@@ -1,0 +1,67 @@
+{
+  "description": "MCP server requirements that break each rule (contract 1.17.0): a bad name, ref, transport and auth; a stdio server with a url and no command; an http server with a command and args and no url; a repeated name; a malformed env item. Each is an error of its own.",
+  "manifest": {
+    "contract_version": "1.17.0",
+    "id": "0f6d2c1e-8a4b-4c3d-9e2f-1a2b3c4d5e6f",
+    "name": "Conformance Agent",
+    "slug": "conformance-agent",
+    "description": "Answers questions about invoices.",
+    "example_prompts": [
+      "Which invoices are overdue?"
+    ],
+    "mcp_servers": [
+      {
+        "name": "-bad name",
+        "ref": {
+          "source": "",
+          "id": 5
+        },
+        "transport": "websocket",
+        "auth": "password",
+        "env": [
+          {
+            "name": "1BAD",
+            "secret": "yes"
+          }
+        ]
+      },
+      {
+        "name": "local-tool",
+        "ref": "core:local-tool",
+        "transport": "stdio",
+        "url": "https://example.com/mcp",
+        "args": "--fast"
+      },
+      {
+        "name": "remote-tool",
+        "transport": "http",
+        "command": "npx",
+        "args": [
+          "remote-tool"
+        ],
+        "env": "TOKEN"
+      },
+      {
+        "name": "remote-tool",
+        "transport": "sse",
+        "url": "https://example.com/sse"
+      }
+    ]
+  },
+  "expect": {
+    "errors": [
+      "mcp_servers.name",
+      "mcp_servers.ref",
+      "mcp_servers.ref.source",
+      "mcp_servers.ref.id",
+      "mcp_servers.transport",
+      "mcp_servers.url",
+      "mcp_servers.command",
+      "mcp_servers.args",
+      "mcp_servers.auth",
+      "mcp_servers.env",
+      "mcp_servers.env.name",
+      "mcp_servers.env.secret"
+    ]
+  }
+}

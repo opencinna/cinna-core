@@ -117,6 +117,39 @@ def test_kit_py_satisfies_the_conformance_case(kit_module, case_file: Path) -> N
         assert path not in warnings, f"unexpected warning for {path}\n{detail}"
 
 
+CONTRACT_1_17_CASES = (
+    "marketplace-plugins-valid",
+    "marketplace-plugins-malformed",
+    "mcp-servers-valid",
+    "mcp-servers-malformed",
+    "mcp-servers-with-secret-value",
+)
+
+
+def test_the_contract_1_17_cases_are_in_the_set() -> None:
+    stems = {p.stem for p in CASE_FILES}
+    assert set(CONTRACT_1_17_CASES) <= stems, sorted(set(CONTRACT_1_17_CASES) - stems)
+
+
+def test_agent_schema_registers_plugins_and_mcp_servers() -> None:
+    props = _load("schema/cinna-agent.schema.json")["properties"]
+    plugins = props["marketplace_plugins"]
+    assert plugins["x-scope"] == "portable"
+    assert plugins["x-import"] == "ignored (logged) on cloud import"
+    assert set(plugins["items"]["required"]) == {
+        "entry_uuid", "marketplace_uuid", "marketplace_name", "name", "archive_sha256",
+    }
+    servers = props["mcp_servers"]
+    assert servers["x-import"] == "ignored (logged) on cloud import"
+    item = servers["items"]
+    assert set(item["required"]) == {"name", "transport"}
+    assert item["properties"]["transport"]["enum"] == ["stdio", "http", "sse"]
+    assert item["properties"]["auth"]["enum"] == ["none", "oauth", "bearer", "env", None]
+    assert "format" not in item["properties"]["url"]
+    assert item["properties"]["name"]["pattern"] == "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    assert item["properties"]["env"]["items"]["not"] == {"required": ["value"]}
+
+
 def test_the_matching_rule_drops_indices_and_ignores_non_paths() -> None:
     assert reported_paths(["x: `handovers[0].target_kind` must be a string."]) == {"handovers.target_kind"}
     assert reported_paths(["`runtime.engine` 'x' is unknown; see `kit.py validate`."]) == {"runtime.engine"}
@@ -132,12 +165,13 @@ def _load(rel: str):
 def test_contract_version_is_coherent_across_the_four_carriers() -> None:
     # LocalAgentKitService 503s the contract when these disagree.
     file_version = (KIT_DIR / "CONTRACT_VERSION").read_text(encoding="utf-8").strip()
-    assert file_version == "1.16.0"
+    assert file_version == "1.17.0"
     assert _load("kit.json")["contract_version"] == file_version
     assert _load("layout.json")["contract_version"] == file_version
     changelog = (KIT_DIR / "CHANGELOG.md").read_text(encoding="utf-8")
     assert f"## {file_version} — " in changelog
     assert "## 1.8.0 — shared agents" in changelog
+    assert "## 1.17.0 — plugins and MCP servers in the manifest" in changelog
     assert "## 1.16.0 — a conversation can own its task" in changelog
     assert "## 1.15.0 — marketplace skills on desktop" in changelog
     assert "## 1.14.0 — Google OAuth credentials on desktop" in changelog

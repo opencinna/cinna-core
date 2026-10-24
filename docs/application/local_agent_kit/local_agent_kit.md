@@ -152,6 +152,7 @@ agent into it with one command.
     and `runtime.permissions` stay local.
   - `handovers[].target_kind` is registered to Cinna Desktop (its coordinator
     handback pair); other hosts preserve it and ignore it.
+- **Plugins and MCP servers in the manifest (contract 1.17.0).** `marketplace_plugins[]` pins a whole plugin from a claude- or codex-format marketplace by entry id and archive digest, with a `disabled` block for the hooks, MCP servers and skills the user turned off; the host delivers the rest to the engine. `mcp_servers[]` lists the MCP servers the agent needs as requirements only (`name`, `ref` to a directory entry or null, `transport`, `url` or `command`/`args`, `auth` kind, `env` names), never values, so a shared agent arrives with its connectors marked as needing setup and each user fills them in on their own computer. `kit.py validate` refuses an `env` item that carries a `value`. Cloud import ignores both arrays.
 - **Marketplace skill pins (contract 1.15.0).** `marketplace_skills[]` in `cinna-agent.json` pins a skill from a skills-format marketplace by plugin id and archive digest; it shares the one skill namespace (a clash with a catalog pin is invalid). See guide 08 and the [marketplace snapshots](../plugin_marketplaces/plugin_marketplaces_tech.md).
 - **Google OAuth slots on a desktop host (contract 1.14.0).** The eight Google OAuth credential
   types can now fill a slot locally: Core keeps the refresh token and Desktop gets an access token
