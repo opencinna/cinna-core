@@ -215,6 +215,23 @@ class ServerConfig(SQLModel, table=True):
         default=0, sa_type=BigInteger, nullable=False, sa_column_kwargs={"server_default": "0"}
     )
 
+    # Addons policy (``GET /addons/directory`` -> ``policy``): what Cinna
+    # Desktop may do beyond the core directory. Default true = the behaviour
+    # that shipped before the flags existed; a change bumps the directory
+    # version.
+    addons_external_directories: bool = Field(
+        default=True, nullable=False, sa_column_kwargs={"server_default": "true"}
+    )
+    addons_custom_mcp: bool = Field(
+        default=True, nullable=False, sa_column_kwargs={"server_default": "true"}
+    )
+    addons_plugin_hooks: bool = Field(
+        default=True, nullable=False, sa_column_kwargs={"server_default": "true"}
+    )
+    addons_stdio_mcp: bool = Field(
+        default=True, nullable=False, sa_column_kwargs={"server_default": "true"}
+    )
+
     # Audit
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_by_id: uuid.UUID | None = Field(
@@ -254,6 +271,11 @@ class ServerConfigUpdate(SQLModel):
     google_auto_register: bool | None = None
     default_user_role: str | None = None
     invite_include_desktop_default: bool | None = None
+    # Addons policy flags (see ``ServerConfig``).
+    addons_external_directories: bool | None = None
+    addons_custom_mcp: bool | None = None
+    addons_plugin_hooks: bool | None = None
+    addons_stdio_mcp: bool | None = None
 
     @field_validator("landing_markdown")
     @classmethod

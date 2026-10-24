@@ -37,6 +37,7 @@ def create_marketplace(
     url: str = "https://example.com/plugins.git",
     public_discovery: bool = True,
     marketplace_type: str | None = None,
+    access_mode: str | None = "allow_all",
     expected_status: int = 200,
 ) -> dict:
     """Register a plugin marketplace. Superuser-only route.
@@ -44,12 +45,16 @@ def create_marketplace(
     ``marketplace_type`` is the repository format (``claude`` | ``codex`` |
     ``skills``). Omitted, the route's own default (``claude``) applies, so an
     unknown value can be passed deliberately to assert the 422.
+    ``access_mode`` (``allow_all`` | ``allowlist``) is required by the route;
+    pass ``None`` to omit it and assert the 422.
     """
     payload: dict = {
         "url": url,
         "git_branch": "main",
         "public_discovery": public_discovery,
     }
+    if access_mode is not None:
+        payload["access_mode"] = access_mode
     if marketplace_type is not None:
         payload["type"] = marketplace_type
     r = client.post(

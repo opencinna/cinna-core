@@ -91,6 +91,27 @@ This means marketplace sync is now purely a metadata operation — fast, statele
 - **Failures**: a fetch error is retried with a growing delay up to a limit, then `fetch_failed` (the previous archive stays downloadable). Content failures are final until the source changes. Admins can retry failed entries from the Plugins tab, which shows each entry's snapshot state and components.
 - **Download** follows discovery visibility (own or public marketplace); a download answers "pending" or "failed" only when no digest exists yet. Sources are public HTTPS only; unsafe paths, symlinks, redirects and oversize trees are refused.
 
+## Access modes, allow and ban
+
+Who may see a marketplace at all is still the owner / `public_discovery` rule. On top of it each marketplace has an **access mode**, chosen by the admin when adding it (required, no default) and changeable later:
+
+- **Allow all** (`allow_all`): every entry is visible except the ones an admin has banned.
+- **Allowlist** (`allowlist`): only entries an admin has explicitly allowed are visible. New entries arriving in a sync wait ("Waiting for approval") until allowed.
+
+Each entry has a verdict: `default`, `allowed` or `banned` (with an optional reason, who and when). Marketplaces that existed before this feature are `allow_all`, so nothing changed for them.
+
+- **Where a hidden entry is gone.** Discover, the batch lookup, the single-entry `GET /plugins/{id}` (superusers still get it), both archive downloads (404 `not_found`) and the [addons directory](../addons_directory/addons_directory.md), for every caller including the owner and superusers on those routes. The marketplace's `plugin_count` for a non-superuser is the visible count. Admins see every entry, with its verdict, in the marketplace's entries list, which has an access filter and a "Waiting for approval" filter.
+- **Snapshots still run for hidden entries**, so an admin can judge an entry by its components before allowing it.
+- **Survival rules.** The verdict belongs to the entry name within the marketplace, not to a plugin row or a version. It survives a resync, a new snapshot, an entry removed from the repository and re-added later (new row id), and a rename-and-back. Resetting an entry to `default` keeps an audit row. Deleting the marketplace deletes its verdicts.
+- **Switching mode** keeps every verdict. A **dry run** answers what users would see before and after (`visible_before`, `visible_after`) and changes nothing; the real switch answers the same counts. Moving `allow_all` to `allowlist` shows only the entries already allowed, usually none, so the admin UI shows the counts and asks first.
+- **Bulk allow** takes up to 500 entries of one marketplace; an id from another marketplace rejects the whole call.
+- **What a ban does not do.** It does not gate cloud installs or uninstall anything: existing agent plugin links keep working and listing. It only stops new discovery and downloads.
+- **Cinna Desktop pins.** A pinned entry that becomes hidden keeps being delivered from cache, but shows as no longer available, and Update and re-add are refused.
+- Every verdict, mode or policy change bumps the directory version, so the directory ETag changes at once.
+- MCP directory entries have no mode (they take only a ban), and catalog skills keep their own access model.
+
+**Admin UI.** The Add dialog asks for the mode ("Allow all plugins by default" or "Only plugins I allow"). The marketplace page has an Access card with the mode switch (with the before / after counts), and the entries list has per-row Allow / Ban, a bulk Allow, and the "Waiting for approval" filter.
+
 ## Marketplace formats
 
 Chosen at create time from a **Format** select, and validated as a closed set.
@@ -168,5 +189,6 @@ Entries of every marketplace the caller may discover (owner or public discovery)
 
 ## Changelog
 
+- 2026-10-24: Marketplace access mode (`allow_all` / `allowlist`) and per-entry allow / ban; hidden entries leave discover, batch, archives and the directory.
 - 2026-10-24: Plugin-format (claude/codex) entries are snapshotted too, local ones in the sync and external ones by a background worker; entries carry a component analysis; new `archive`, `entries` and `snapshots/retry` routes.
 - 2026-10-18: Skills-format marketplaces snapshot every supported entry at sync; `skill-archive` and batch `plugins?ids=` routes let Cinna Desktop install marketplace skills.

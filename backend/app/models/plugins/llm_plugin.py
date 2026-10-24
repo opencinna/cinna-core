@@ -32,6 +32,17 @@ from app.models.skills.schemas import SkillCredentialProvisionPublic
 #: is what reports the problem (``status=error``).
 MarketplaceType = Literal["claude", "codex", "skills"]
 
+#: Which of a marketplace's entries users see (K5). ``allow_all``: every entry
+#: except the banned ones; ``allowlist``: only entries an admin allowed, so new
+#: entries from a sync wait for approval. Stored as a plain string.
+MarketplaceAccessMode = Literal["allow_all", "allowlist"]
+MARKETPLACE_ACCESS_MODES: tuple[str, ...] = ("allow_all", "allowlist")
+
+#: An admin's verdict on one entry, kept by entry name (survives resync and
+#: removal / re-add). ``default`` = no verdict: what it means depends on the
+#: marketplace's :data:`MarketplaceAccessMode`.
+EntryAccess = Literal["default", "allowed", "banned"]
+
 
 class MarketplaceStatus(str, Enum):
     """Status of a plugin marketplace."""
@@ -79,6 +90,14 @@ class LLMPluginMarketplace(LLMPluginMarketplaceBase, table=True):
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     user_id: uuid.UUID = Field(foreign_key="user.id", ondelete="CASCADE", index=True)
+    #: :data:`MarketplaceAccessMode`; changed only through
+    #: ``PluginAccessService.set_mode`` (which reports the visible counts).
+    access_mode: str = Field(
+        default="allow_all",
+        max_length=16,
+        nullable=False,
+        sa_column_kwargs={"server_default": "allow_all"},
+    )
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -107,6 +126,7 @@ class LLMPluginMarketplacePublic(SQLModel):
     last_sync_at: Optional[datetime]
     sync_commit_hash: Optional[str]
     user_id: uuid.UUID
+    access_mode: str = "allow_all"
     created_at: datetime
     updated_at: datetime
     plugin_count: int = 0
@@ -127,6 +147,9 @@ class LLMPluginMarketplaceCreate(SQLModel):
     #: Repository format — see :data:`MarketplaceType`. An unknown value is a
     #: 422 here, never a marketplace that syncs with the wrong parser.
     type: MarketplaceType = "claude"
+    #: Required: the admin decides up front whether new entries appear at once
+    #: (``allow_all``) or wait for approval (``allowlist``).
+    access_mode: MarketplaceAccessMode
 
 
 class LLMPluginMarketplaceUpdate(SQLModel):
@@ -274,7 +297,8 @@ class LLMPluginMarketplacePlugin(LLMPluginMarketplacePluginBase, table=True):
     snapshot_lease_until: Optional[datetime] = Field(default=None)
     #: :class:`PluginComponents` as JSON, from the snapshot analysis.
     components: Optional[dict] = Field(default=None, sa_column=Column(JSON))
-    #: Scripts, hooks, a stdio MCP server or an LSP server in the snapshot.
+    #: Scripts, hooks, a stdio MCP server, an LSP server, or a command / agent
+    #: that runs shell (`!` or a Bash tool grant) in the snapshot.
     runs_code: Optional[bool] = Field(default=None)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -411,6 +435,12 @@ class LLMPluginMarketplacePluginPublic(SQLModel):
     #: ``url``-sourced entry's repository, else the marketplace repository
     #: (SSH form rewritten to HTTPS for the public hosts, dropped otherwise).
     repository_url: Optional[str] = None
+    #: :data:`EntryAccess`. User-facing lists only ever return visible rows
+    #: (``default`` / ``allowed``); the reason and timestamp are filled for
+    #: superusers only.
+    access: str = "default"
+    access_reason: Optional[str] = None
+    access_changed_at: Optional[datetime] = None
 
 
 class LLMPluginMarketplacePluginsPublic(SQLModel):
@@ -429,6 +459,14 @@ class PluginEntryCounts(SQLModel):
     #: Rows the default retry (``all=false``) would queue: ``fetch_failed``
     #: rows minus those only a sync can fix (``skipped_needs_sync``).
     retryable: int = 0
+    #: Access totals (K5). ``default`` = entries with no verdict; ``waiting``
+    #: = ``default`` entries of an ``allowlist`` marketplace (0 under
+    #: ``allow_all``); ``visible`` = what users see under the current mode.
+    allowed: int = 0
+    banned: int = 0
+    default: int = 0
+    waiting: int = 0
+    visible: int = 0
 
 
 class LLMPluginMarketplaceEntriesPublic(SQLModel):
@@ -441,6 +479,90 @@ class LLMPluginMarketplaceEntriesPublic(SQLModel):
     data: list[LLMPluginMarketplacePluginPublic]
     count: int
     counts: PluginEntryCounts = Field(default_factory=PluginEntryCounts)
+
+
+# =============================================================================
+# Entry access (K5)
+# =============================================================================
+
+
+class LLMPluginEntryAccess(SQLModel, table=True):
+    """An admin's allow / ban verdict on one marketplace entry.
+
+    Keyed by ``(marketplace_id, entry_name)``, not by the plugin row: a sync
+    deletes the row of an entry removed from the repository and a returning
+    entry gets a new id, so only a name-keyed row survives "removed and
+    re-added". No row means ``default``.
+    """
+
+    __tablename__ = "llm_plugin_entry_access"
+    __table_args__ = (
+        Index(
+            "uq_llm_plugin_entry_access_entry",
+            "marketplace_id",
+            "entry_name",
+            unique=True,
+        ),
+    )
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    marketplace_id: uuid.UUID = Field(
+        foreign_key="llm_plugin_marketplace.id", ondelete="CASCADE", nullable=False
+    )
+    entry_name: str = Field(max_length=255, nullable=False)
+    access: str = Field(default="default", max_length=8, nullable=False)
+    reason: Optional[str] = Field(default=None, sa_type=sa.Text)
+    changed_by_id: Optional[uuid.UUID] = Field(
+        default=None, foreign_key="user.id", ondelete="SET NULL"
+    )
+    changed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class PluginAccessUpdate(SQLModel):
+    """``PUT /plugins/{id}/access``."""
+
+    access: EntryAccess
+    reason: Optional[str] = Field(default=None, max_length=1000)
+
+
+#: Most ids one bulk access write accepts.
+MAX_BULK_ACCESS_IDS = 500
+
+
+class PluginAccessBulkUpdate(SQLModel):
+    """``PUT /marketplaces/{id}/entries/access``: one verdict for many entries."""
+
+    ids: list[uuid.UUID] = Field(min_length=1, max_length=MAX_BULK_ACCESS_IDS)
+    access: EntryAccess
+    reason: Optional[str] = Field(default=None, max_length=1000)
+
+
+class PluginAccessBulkResult(SQLModel):
+    """Distinct entries written, and what users see afterwards."""
+
+    updated: int
+    visible: int
+
+
+class MarketplaceAccessModeUpdate(SQLModel):
+    """``PUT /marketplaces/{id}/access-mode``; ``dry_run`` changes nothing."""
+
+    access_mode: MarketplaceAccessMode
+    dry_run: bool = False
+
+
+class MarketplaceAccessModeResult(SQLModel):
+    """Visible-entry counts under the previous and the requested mode.
+
+    ``access_mode`` is the requested mode; ``previous_mode`` the stored one
+    before the call. ``applied`` is false for a dry run (nothing changed).
+    """
+
+    access_mode: str
+    previous_mode: str
+    visible_before: int
+    visible_after: int
+    applied: bool
 
 
 class PluginSnapshotRetryPublic(SQLModel):

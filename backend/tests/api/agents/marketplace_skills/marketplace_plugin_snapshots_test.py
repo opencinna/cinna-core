@@ -205,7 +205,8 @@ def test_fetch_error_backs_off_then_fails_and_retry_recovers(
             failed = _row(client, h, m["id"], "flaky")
             assert failed["snapshot_status"] == "failed"
             assert failed["snapshot_reason"] == "fetch_failed"
-            assert list_marketplace_entries(client, h, m["id"])["counts"] == {
+            counts = list_marketplace_entries(client, h, m["id"])["counts"]
+            assert {k: counts[k] for k in ("ready", "pending", "failed", "retryable")} == {
                 "ready": 0, "pending": 0, "failed": 1, "retryable": 1,
             }, "a fetch_failed external row is what the default retry queues"
 
@@ -397,7 +398,8 @@ def test_entries_route_filters_counts_and_access(
     m = _new_market(client, h, claude_repo(entries, files))
 
     allrows = list_marketplace_entries(client, h, m["id"])
-    assert allrows["count"] == 3 and allrows["counts"] == {
+    assert allrows["count"] == 3
+    assert {k: allrows["counts"][k] for k in ("ready", "pending", "failed", "retryable")} == {
         "ready": 2, "pending": 0, "failed": 1, "retryable": 0,  # a content verdict is not retryable
     }
     assert [r["name"] for r in allrows["data"]] == ["alpha", "beta", "gamma"]

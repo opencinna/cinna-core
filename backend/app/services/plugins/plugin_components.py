@@ -194,20 +194,60 @@ def _skill(skill_dir: Path, fallback_name: str) -> dict[str, Any]:
     return {"name": name, "has_scripts": _has_scripts(skill_dir)}
 
 
-def _md_names(base: Path, *, recursive: bool) -> list[str]:
-    """``*.md`` under ``base`` as names; nested ones as ``sub:stem``."""
+def _md_files(base: Path, *, recursive: bool) -> list[tuple[str, Path]]:
+    """``*.md`` under ``base`` as ``(name, path)``; nested names as ``sub:stem``."""
     if base.is_file():
-        return [base.stem] if base.suffix == ".md" else []
+        return [(base.stem, base)] if base.suffix == ".md" else []
     if not base.is_dir():
         return []
     pattern = "**/*.md" if recursive else "*.md"
-    names = []
+    found = []
     for path in sorted(base.glob(pattern)):
         if not path.is_file():
             continue
         rel = PurePosixPath(path.relative_to(base).as_posix())
-        names.append(":".join([*rel.parent.parts, rel.stem]))
-    return names
+        found.append((":".join([*rel.parent.parts, rel.stem]), path))
+    return found
+
+
+#: Claude command shell injection: inline "!`cmd`", or a line that starts
+#: with ``!`` (a markdown image ``![...]`` excepted).
+_SHELL_INLINE_RE = re.compile(r"!`")
+_SHELL_LINE_RE = re.compile(r"^[ \t]*!(?!\[)", re.MULTILINE)
+#: Frontmatter keys that grant tools: ``allowed-tools`` (commands), ``tools`` (agents).
+_TOOL_KEYS = ("allowed-tools", "allowed_tools", "tools")
+_BASH_RE = re.compile(r"\bbash\b", re.IGNORECASE)
+
+
+def _grants_bash(value: Any) -> bool:
+    values = value if isinstance(value, list) else [value]
+    return any(
+        isinstance(v, str) and (_BASH_RE.search(v) is not None or v.strip() == "*")
+        for v in values
+    )
+
+
+def md_runs_shell(path: Path) -> bool:
+    """Whether a command / agent markdown file can run shell.
+
+    True on a ``!`` shell invocation or a frontmatter tool grant that names
+    Bash. Conservative: an unreadable, oversized or unparseable file is True.
+    """
+    try:
+        if path.stat().st_size > MAX_JSON_BYTES:
+            return True
+        text = path.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        return True
+    if _SHELL_INLINE_RE.search(text) or _SHELL_LINE_RE.search(text):
+        return True
+    if not text.startswith("---"):
+        return False
+    try:
+        frontmatter, _ = parse_frontmatter(text)
+    except ValueError:
+        return _BASH_RE.search(text) is not None
+    return any(_grants_bash(frontmatter.get(key)) for key in _TOOL_KEYS)
 
 
 def _unique(values: list[Any]) -> list[Any]:
@@ -250,14 +290,14 @@ def _skills(root: Path, declared: list[Any], name: str) -> list[dict[str, Any]]:
 
 def _md_component(
     root: Path, default_dir: str, declared: list[Any], name: str, *, recursive: bool
-) -> list[str]:
-    names = _md_names(root / default_dir, recursive=recursive)
+) -> list[tuple[str, Path]]:
+    found = _md_files(root / default_dir, recursive=recursive)
     for value in declared:
         for raw in _declared_paths(value):
             base = _inside(root, raw, name)
             if base is not None:
-                names.extend(_md_names(base, recursive=recursive))
-    return sorted(set(names))
+                found.extend(_md_files(base, recursive=recursive))
+    return found
 
 
 def _hook_events(value: Any) -> list[str]:
@@ -439,12 +479,14 @@ def analyse_plugin_tree(
         }
         components = empty_components()
         components["skills"] = _skills(root, declared["skills"], name)
-        components["commands"] = _md_component(
+        command_files = _md_component(
             root, "commands", declared["commands"], name, recursive=True
         )
-        components["agents"] = _md_component(
+        agent_files = _md_component(
             root, "agents", declared["agents"], name, recursive=False
         )
+        components["commands"] = sorted({n for n, _ in command_files})
+        components["agents"] = sorted({n for n, _ in agent_files})
         components["hooks"] = _hooks(root, declared["hooks"], name)
         mcp = _collect_servers(root, ".mcp.json", declared["mcpServers"], name)
         components["mcp_servers"] = [
@@ -459,6 +501,7 @@ def analyse_plugin_tree(
 
     runs_code = (
         any(s["has_scripts"] for s in components["skills"])
+        or any(md_runs_shell(path) for _, path in [*command_files, *agent_files])
         or components["hooks"] is not None
         or any(s["transport"] == "stdio" for s in components["mcp_servers"])
         or bool(components["lsp_servers"])

@@ -8,7 +8,7 @@
 - Services: `backend/app/services/addons/addon_directory_service.py`, `backend/app/services/addons/directory_version.py`, `backend/app/services/addons/summary.py`, `backend/app/services/mcp/mcp_directory_service.py`
 - Config: `MCP_DIRECTORY_INDEX_URL` in `backend/app/core/config.py` (default `https://opencinna.io/.well-known/mcp_registry/index.json`)
 - Frontend: `frontend/src/routes/_layout/admin/mcp-directory.tsx`, `frontend/src/components/Admin/McpDirectory/`, entry in `frontend/src/components/Sidebar/AdminMenu.tsx`
-- Tests: `backend/tests/api/addons/` (`addons_directory_test.py`, `mcp_directory_test.py`, `README.md`), helpers `backend/tests/utils/addons.py`
+- Tests: `backend/tests/api/addons/` (`addons_directory_test.py`, `mcp_directory_test.py`, `marketplace_access_test.py`, `README.md`), helpers `backend/tests/utils/addons.py`
 
 ## API
 
@@ -30,7 +30,7 @@ MCP directory errors are `detail = {code, message}`: 404 `entry_not_found`, 409 
 - `directory(session, user, DirectoryQuery)`: index, filter, rank, page, policy, ETag.
 - `build_index`: `_catalog_entries` (`SkillCatalogService.list_catalog`, drops unlisted unless `can_manage`, digest `sha256:<content_hash>`, archive path `/skills/packages/{id}/revisions/{n}/download`), `_marketplace_entries` (join with `LLMPluginMarketplace` under `LLMPluginService._discoverable_clause`, archive path `/llm-plugins/plugins/{id}/archive?sha256=`), MCP rows from `McpDirectoryService.visible_entries`.
 - `index_for`: cache `{(user_id, version): (built_at, entries)}`, TTL 60 s (`CACHE_TTL_SECONDS`), 256 entries LRU; `clear_cache()` for tests.
-- `apply_filters`, `match_tier`, `rank`, `policy_for` (returns defaults, all true), `etag_of` (`"` + first 32 hex of sha256 of the sorted-key JSON of data, count, policy + `"`).
+- `apply_filters`, `match_tier`, `rank`, `policy_for` (reads the four `ServerConfig.addons_*` flags), `etag_of` (`"` + first 32 hex of sha256 of the sorted-key JSON of data, count, policy + `"`).
 - Catalog `runs_code` is cached per immutable revision id; a missing snapshot on disk is not cached.
 
 `AddonsDirectoryVersion.bump(session)` increments the column inside the caller's transaction without committing (a bare `UPDATE`); `current(session)` reads it. Callers: `LLMPluginService` (marketplace create/update/delete, sync, a status path), `plugin_snapshot_worker` (batches that changed a row), `SkillCatalogService` (publish, update, delist, grants), and every write in `McpDirectoryService`.
@@ -46,3 +46,7 @@ MCP directory errors are `detail = {code, message}`: 404 `entry_not_found`, 409 
 The admin MCP Directory page lists entries, offers an add wizard, edit, ban/unban, delete and an import dialog; it uses the generated client services for the `mcp-directory` tag.
 
 The add wizard and the edit Sheet share one controlled draft model and validator (`components/Admin/McpDirectory/mcpEntryDraft.ts`) instead of react-hook-form: the form's shape changes with the transport and the env list is a repeating group, both surfaces render the same field components, and the edit Sheet's dirty tracking and partial update (only changed fields are sent, never `null` on a required one) are computed by comparing wire bodies. The validator mirrors the service's rules and caps so most refusals appear beside the field. The ban dialog (`components/Admin/Addons/BanEntryDialog.tsx`) is generic so the marketplace entries list can reuse it.
+
+## Hidden marketplace entries
+
+`_marketplace_entries` joins `PluginAccessService.entry_visible_clause()`, so entries hidden by the marketplace access mode or a ban never reach the index. See [plugin marketplaces tech](../plugin_marketplaces/plugin_marketplaces_tech.md).

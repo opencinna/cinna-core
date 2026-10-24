@@ -49,6 +49,10 @@ Auto-generated from OpenAPI spec. Tag: `server-config`
   - `google_auto_register`: boolean | null
   - `default_user_role`: string | null
   - `invite_include_desktop_default`: boolean | null
+  - `addons_external_directories`: boolean | null
+  - `addons_custom_mcp`: boolean | null
+  - `addons_plugin_hooks`: boolean | null
+  - `addons_stdio_mcp`: boolean | null
 
 **Response:** `ServerConfig`
 

@@ -23,13 +23,14 @@ from collections.abc import Callable
 from typing import Optional
 
 from fastapi import HTTPException
-from sqlalchemy import func
+from sqlalchemy import false as sa_false, func
 from sqlmodel import Session, select
 
 from app.core.config import settings
 from app.models.agents.agent import Agent
 from app.models.users.user import User
 from app.models.plugins.llm_plugin import (
+    LLMPluginEntryAccess,
     LLMPluginMarketplace,
     LLMPluginMarketplaceCreate,
     LLMPluginMarketplaceUpdate,
@@ -60,6 +61,7 @@ from app.services.knowledge.git_operations import (
     GitOperationError,
 )
 from app.services.addons.directory_version import AddonsDirectoryVersion
+from app.services.plugins.plugin_access_service import PluginAccessService
 from app.services.agents.skill_manifest import parse_skill_dir
 from app.services.plugins.marketplace_skill_snapshots import (
     MarketplaceSkillSnapshots,
@@ -210,6 +212,7 @@ class LLMPluginService:
             ssh_key_id=data.ssh_key_id,
             public_discovery=data.public_discovery,
             type=data.type,
+            access_mode=data.access_mode,
             user_id=user_id,
             status=MarketplaceStatus.pending,
         )
@@ -404,24 +407,27 @@ class LLMPluginService:
     @staticmethod
     def get_marketplace_public(
         session: Session,
-        marketplace: LLMPluginMarketplace
+        marketplace: LLMPluginMarketplace,
+        *,
+        is_superuser: bool = False,
     ) -> LLMPluginMarketplacePublic:
         """
         Convert marketplace to public schema with plugin count.
 
-        Args:
-            session: Database session
-            marketplace: Marketplace model
-
-        Returns:
-            Public schema with plugin count
+        ``plugin_count`` is every entry for a superuser, and only the entries
+        users can see under the access mode for anyone else, so an allowlist
+        marketplace never reveals how many entries wait for approval.
         """
-        # Count plugins
-        statement = select(LLMPluginMarketplacePlugin).where(
-            LLMPluginMarketplacePlugin.marketplace_id == marketplace.id
-        )
-        plugins = session.exec(statement).all()
-        plugin_count = len(plugins)
+        if is_superuser:
+            plugin_count = session.exec(
+                select(func.count())
+                .select_from(LLMPluginMarketplacePlugin)
+                .where(LLMPluginMarketplacePlugin.marketplace_id == marketplace.id)
+            ).one()
+        else:
+            plugin_count = PluginAccessService.visible_count(
+                session, marketplace, marketplace.access_mode
+            )
 
         return LLMPluginMarketplacePublic(
             id=marketplace.id,
@@ -439,6 +445,7 @@ class LLMPluginService:
             last_sync_at=marketplace.last_sync_at,
             sync_commit_hash=marketplace.sync_commit_hash,
             user_id=marketplace.user_id,
+            access_mode=marketplace.access_mode,
             created_at=marketplace.created_at,
             updated_at=marketplace.updated_at,
             plugin_count=plugin_count,
@@ -1810,13 +1817,12 @@ class LLMPluginService:
                 not, so the two disagree about it). No shipped client sends the
                 filter: the Add Addon dialog lists every format in one result
                 set and labels each row from the format it comes back with.
-            marketplace_id: Optional scope to one marketplace — the admin
-                marketplace detail page lists exactly that marketplace's
-                entries and their ``supported`` verdict, a question the
-                server-wide list can only answer by paging through everything
-                else. A marketplace this caller cannot see (or that does not
-                exist) is an empty page, not an error: discovery never reports
-                on the existence of a private marketplace.
+            marketplace_id: Optional scope to one marketplace's visible
+                entries (the admin detail page reads the entries route
+                instead, which also lists hidden entries). A marketplace this
+                caller cannot see (or that does not exist) is an empty page,
+                not an error: discovery never reports on the existence of a
+                private marketplace.
             skip: Number of items to skip (pagination offset)
             limit: Maximum number of items to return
 
@@ -1837,9 +1843,17 @@ class LLMPluginService:
                 return [], 0
             marketplace_ids = [marketplace_id]
 
-        # Query plugins from accessible marketplaces
-        statement = select(LLMPluginMarketplacePlugin).where(
-            LLMPluginMarketplacePlugin.marketplace_id.in_(marketplace_ids)
+        # Query visible plugins from accessible marketplaces (the K5 access
+        # rule hides banned / not-allowed entries for every caller).
+        statement = (
+            select(LLMPluginMarketplacePlugin, LLMPluginEntryAccess)
+            .join(
+                LLMPluginMarketplace,
+                LLMPluginMarketplace.id == LLMPluginMarketplacePlugin.marketplace_id,
+            )
+            .outerjoin(LLMPluginEntryAccess, PluginAccessService.join_condition())
+            .where(LLMPluginMarketplacePlugin.marketplace_id.in_(marketplace_ids))
+            .where(PluginAccessService.entry_visible_clause())
         )
 
         if category:
@@ -1849,7 +1863,9 @@ class LLMPluginService:
                 LLMPluginMarketplacePlugin.plugin_type == plugin_type
             )
 
-        plugins = list(session.exec(statement).all())
+        rows = list(session.exec(statement).all())
+        access_rows = {p.id: a for p, a in rows}
+        plugins = [p for p, _ in rows]
 
         # Filter by search term if provided (searches name, description, author, category)
         if search:
@@ -1879,6 +1895,7 @@ class LLMPluginService:
                 p,
                 marketplace_name=marketplace_names.get(p.marketplace_id),
                 marketplace=marketplace_rows.get(p.marketplace_id),
+                access_row=access_rows.get(p.id),
             )
             for p in plugins
         ]
@@ -1895,8 +1912,9 @@ class LLMPluginService:
     # --------------------------------------------------------------------------
     # Discover visibility — the one rule ``/discover``, the skill-archive
     # download and the batch lookup share: the caller owns the marketplace, or
-    # it is publicly discoverable. Deliberately NO superuser bypass: a user may
-    # download exactly what discovery shows them, nothing more.
+    # it is publicly discoverable, AND the entry passes the marketplace's
+    # access mode (``PluginAccessService``). Deliberately NO superuser bypass:
+    # a user may download exactly what discovery shows them, nothing more.
     # --------------------------------------------------------------------------
 
     @staticmethod
@@ -1917,8 +1935,9 @@ class LLMPluginService:
     ) -> tuple[LLMPluginMarketplacePlugin, LLMPluginMarketplace] | None:
         """The plugin and its marketplace when the caller may discover it.
 
-        None for an unknown id and for an invisible one alike, so callers can
-        answer both the same way and never confirm a private entry exists.
+        None for an unknown id and for an invisible one alike (private
+        marketplace, banned or not-allowed entry), so callers can answer all
+        the same way and never confirm a hidden entry exists.
         """
         plugin = session.get(LLMPluginMarketplacePlugin, plugin_id)
         if plugin is None:
@@ -1926,6 +1945,10 @@ class LLMPluginService:
         marketplace = session.get(LLMPluginMarketplace, plugin.marketplace_id)
         if marketplace is None or not LLMPluginService.is_discoverable(
             marketplace, user_id
+        ):
+            return None
+        if not PluginAccessService.is_entry_visible(
+            marketplace, PluginAccessService.access_row_for(session, plugin)
         ):
             return None
         return plugin, marketplace
@@ -1942,19 +1965,23 @@ class LLMPluginService:
         if not plugin_ids:
             return []
         statement = (
-            select(LLMPluginMarketplacePlugin, LLMPluginMarketplace)
+            select(
+                LLMPluginMarketplacePlugin, LLMPluginMarketplace, LLMPluginEntryAccess
+            )
             .join(
                 LLMPluginMarketplace,
                 LLMPluginMarketplace.id == LLMPluginMarketplacePlugin.marketplace_id,
             )
+            .outerjoin(LLMPluginEntryAccess, PluginAccessService.join_condition())
             .where(LLMPluginMarketplacePlugin.id.in_(plugin_ids))
             .where(LLMPluginService._discoverable_clause(user_id))
+            .where(PluginAccessService.entry_visible_clause())
         )
         found = {
             plugin.id: LLMPluginService.get_plugin_public(
-                plugin, marketplace=marketplace
+                plugin, marketplace=marketplace, access_row=access_row
             )
-            for plugin, marketplace in session.exec(statement).all()
+            for plugin, marketplace, access_row in session.exec(statement).all()
         }
         return [found[pid] for pid in plugin_ids if pid in found]
 
@@ -1963,6 +1990,8 @@ class LLMPluginService:
         plugin: LLMPluginMarketplacePlugin,
         marketplace_name: str | None = None,
         marketplace: LLMPluginMarketplace | None = None,
+        access_row: LLMPluginEntryAccess | None = None,
+        include_access_detail: bool = False,
     ) -> LLMPluginMarketplacePluginPublic:
         """Project a marketplace plugin to its public schema.
 
@@ -1970,6 +1999,8 @@ class LLMPluginService:
         ``marketplace_name`` is omitted it is read from the plugin's marketplace
         relationship; ``marketplace`` lets a list caller pass the row it already
         holds so the owner and repository fields do not lazy-load per plugin.
+        ``access_row`` is the entry's access verdict (None = ``default``);
+        ``include_access_detail`` adds its reason and timestamp (superusers).
         """
         if marketplace is None:
             marketplace = plugin.marketplace
@@ -2011,6 +2042,17 @@ class LLMPluginService:
             repository_url=LLMPluginService.plugin_repository_url(
                 plugin, marketplace.url if marketplace else None
             ),
+            access=access_row.access if access_row is not None else "default",
+            access_reason=(
+                access_row.reason
+                if include_access_detail and access_row is not None
+                else None
+            ),
+            access_changed_at=(
+                access_row.changed_at
+                if include_access_detail and access_row is not None
+                else None
+            ),
         )
 
     @staticmethod
@@ -2033,29 +2075,61 @@ class LLMPluginService:
         *,
         snapshot_status: str | None = None,
         search: str | None = None,
+        access: str | None = None,
+        waiting: bool = False,
+        include_access_detail: bool = False,
         skip: int = 0,
         limit: int = 50,
     ) -> LLMPluginMarketplaceEntriesPublic:
-        """Every entry of one marketplace, with its snapshot state.
+        """Every entry of one marketplace, with its snapshot and access state.
 
-        ``count`` is the total matching the filters; ``counts`` the per-state
-        totals over the whole marketplace (filters ignored).
+        Hidden entries are included (this is the admin's review list).
+        ``access`` filters on the verdict (``default`` = no verdict);
+        ``waiting`` keeps the ``default`` entries of an ``allowlist``
+        marketplace (nothing under ``allow_all``). ``count`` is the total
+        matching the filters; ``counts`` the per-state totals over the whole
+        marketplace (filters ignored).
         """
         model = LLMPluginMarketplacePlugin
-        base = select(model).where(model.marketplace_id == marketplace.id)
+        access_expr = func.coalesce(LLMPluginEntryAccess.access, "default")
+        filters = [model.marketplace_id == marketplace.id]
         if snapshot_status:
-            base = base.where(model.snapshot_status == snapshot_status)
+            filters.append(model.snapshot_status == snapshot_status)
         if search:
             pattern = f"%{search.strip()}%"
-            base = base.where(
+            filters.append(
                 model.name.ilike(pattern) | model.description.ilike(pattern)
             )
+        if access:
+            filters.append(access_expr == access)
+        if waiting:
+            if marketplace.access_mode != "allowlist":
+                filters.append(sa_false())
+            filters.append(access_expr == "default")
+        join_on = PluginAccessService.join_condition()
         total = session.exec(
-            select(func.count()).select_from(base.subquery())
+            select(func.count())
+            .select_from(model)
+            .outerjoin(LLMPluginEntryAccess, join_on)
+            .where(*filters)
         ).one()
         rows = session.exec(
-            base.order_by(func.lower(model.name), model.id).offset(skip).limit(limit)
+            select(model, LLMPluginEntryAccess)
+            .outerjoin(LLMPluginEntryAccess, join_on)
+            .where(*filters)
+            .order_by(func.lower(model.name), model.id)
+            .offset(skip)
+            .limit(limit)
         ).all()
+        by_access = dict(
+            session.exec(
+                select(access_expr, func.count())
+                .select_from(model)
+                .outerjoin(LLMPluginEntryAccess, join_on)
+                .where(model.marketplace_id == marketplace.id)
+                .group_by(access_expr)
+            ).all()
+        )
         by_state = dict(
             session.exec(
                 select(model.snapshot_status, func.count())
@@ -2066,8 +2140,13 @@ class LLMPluginService:
         )
         return LLMPluginMarketplaceEntriesPublic(
             data=[
-                LLMPluginService.get_plugin_public(row, marketplace=marketplace)
-                for row in rows
+                LLMPluginService.get_plugin_public(
+                    row,
+                    marketplace=marketplace,
+                    access_row=access_row,
+                    include_access_detail=include_access_detail,
+                )
+                for row, access_row in rows
             ],
             count=total,
             counts=PluginEntryCounts(
@@ -2078,6 +2157,17 @@ class LLMPluginService:
                     LLMPluginService._retry_candidates(
                         session, marketplace, include_all=False, lock=False
                     )[0]
+                ),
+                allowed=by_access.get("allowed", 0),
+                banned=by_access.get("banned", 0),
+                default=by_access.get("default", 0),
+                waiting=(
+                    by_access.get("default", 0)
+                    if marketplace.access_mode == "allowlist"
+                    else 0
+                ),
+                visible=PluginAccessService.visible_count(
+                    session, marketplace, marketplace.access_mode
                 ),
             ),
         )

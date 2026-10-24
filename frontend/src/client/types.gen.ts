@@ -6019,9 +6019,12 @@ export type LLMPluginMarketplaceCreate = {
     ssh_key_id?: (string | null);
     public_discovery?: boolean;
     type?: 'claude' | 'codex' | 'skills';
+    access_mode: 'allow_all' | 'allowlist';
 };
 
 export type type = 'claude' | 'codex' | 'skills';
+
+export type access_mode = 'allow_all' | 'allowlist';
 
 /**
  * Every entry of one marketplace, for its owner or a superuser.
@@ -6074,6 +6077,9 @@ export type LLMPluginMarketplacePluginPublic = {
     marketplace_name?: (string | null);
     marketplace_owner?: (string | null);
     repository_url?: (string | null);
+    access?: string;
+    access_reason?: (string | null);
+    access_changed_at?: (string | null);
 };
 
 /**
@@ -6103,6 +6109,7 @@ export type LLMPluginMarketplacePublic = {
     last_sync_at: (string | null);
     sync_commit_hash: (string | null);
     user_id: string;
+    access_mode?: string;
     created_at: string;
     updated_at: string;
     plugin_count?: number;
@@ -6427,6 +6434,28 @@ export type ManagedReconcileBlock = {
 export type ManagedReconcileSkip = {
     user_id: string;
     reason: string;
+};
+
+/**
+ * Visible-entry counts under the previous and the requested mode.
+ *
+ * ``access_mode`` is the requested mode; ``previous_mode`` the stored one
+ * before the call. ``applied`` is false for a dry run (nothing changed).
+ */
+export type MarketplaceAccessModeResult = {
+    access_mode: string;
+    previous_mode: string;
+    visible_before: number;
+    visible_after: number;
+    applied: boolean;
+};
+
+/**
+ * ``PUT /marketplaces/{id}/access-mode``; ``dry_run`` changes nothing.
+ */
+export type MarketplaceAccessModeUpdate = {
+    access_mode: 'allow_all' | 'allowlist';
+    dry_run?: boolean;
 };
 
 /**
@@ -7058,6 +7087,33 @@ export type PendingToolsResponse = {
 };
 
 /**
+ * Distinct entries written, and what users see afterwards.
+ */
+export type PluginAccessBulkResult = {
+    updated: number;
+    visible: number;
+};
+
+/**
+ * ``PUT /marketplaces/{id}/entries/access``: one verdict for many entries.
+ */
+export type PluginAccessBulkUpdate = {
+    ids: Array<(string)>;
+    access: 'default' | 'allowed' | 'banned';
+    reason?: (string | null);
+};
+
+export type access3 = 'default' | 'allowed' | 'banned';
+
+/**
+ * ``PUT /plugins/{id}/access``.
+ */
+export type PluginAccessUpdate = {
+    access: 'default' | 'allowed' | 'banned';
+    reason?: (string | null);
+};
+
+/**
  * What a marketplace entry's snapshot contains (README §3.1 ``components``).
  */
 export type PluginComponents = {
@@ -7077,6 +7133,11 @@ export type PluginEntryCounts = {
     pending?: number;
     failed?: number;
     retryable?: number;
+    allowed?: number;
+    banned?: number;
+    default?: number;
+    waiting?: number;
+    visible?: number;
 };
 
 /**
@@ -7878,6 +7939,10 @@ export type ServerConfig = {
     default_user_role?: string;
     invite_include_desktop_default?: boolean;
     addons_directory_version?: number;
+    addons_external_directories?: boolean;
+    addons_custom_mcp?: boolean;
+    addons_plugin_hooks?: boolean;
+    addons_stdio_mcp?: boolean;
     updated_at?: string;
     updated_by_id?: (string | null);
 };
@@ -7898,6 +7963,10 @@ export type ServerConfigUpdate = {
     google_auto_register?: (boolean | null);
     default_user_role?: (string | null);
     invite_include_desktop_default?: (boolean | null);
+    addons_external_directories?: (boolean | null);
+    addons_custom_mcp?: (boolean | null);
+    addons_plugin_hooks?: (boolean | null);
+    addons_stdio_mcp?: (boolean | null);
 };
 
 export type SessionCommandPublic = {
@@ -12945,14 +13014,30 @@ export type LlmPluginsSyncMarketplaceData = {
 export type LlmPluginsSyncMarketplaceResponse = (LLMPluginMarketplacePublic);
 
 export type LlmPluginsListMarketplaceEntriesData = {
+    access?: ('default' | 'allowed' | 'banned' | null);
     limit?: number;
     marketplaceId: string;
     search?: (string | null);
     skip?: number;
     snapshotStatus?: ('pending' | 'ready' | 'failed' | null);
+    waiting?: boolean;
 };
 
 export type LlmPluginsListMarketplaceEntriesResponse = (LLMPluginMarketplaceEntriesPublic);
+
+export type LlmPluginsSetMarketplaceEntriesAccessData = {
+    marketplaceId: string;
+    requestBody: PluginAccessBulkUpdate;
+};
+
+export type LlmPluginsSetMarketplaceEntriesAccessResponse = (PluginAccessBulkResult);
+
+export type LlmPluginsSetMarketplaceAccessModeData = {
+    marketplaceId: string;
+    requestBody: MarketplaceAccessModeUpdate;
+};
+
+export type LlmPluginsSetMarketplaceAccessModeResponse = (MarketplaceAccessModeResult);
 
 export type LlmPluginsRetryMarketplaceSnapshotsData = {
     /**
@@ -12980,6 +13065,13 @@ export type LlmPluginsGetPluginData = {
 };
 
 export type LlmPluginsGetPluginResponse = (LLMPluginMarketplacePluginPublic);
+
+export type LlmPluginsSetPluginAccessData = {
+    pluginId: string;
+    requestBody: PluginAccessUpdate;
+};
+
+export type LlmPluginsSetPluginAccessResponse = (LLMPluginMarketplacePluginPublic);
 
 export type LlmPluginsGetPluginSkillArchiveData = {
     pluginId: string;

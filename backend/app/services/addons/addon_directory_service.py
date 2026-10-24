@@ -38,6 +38,7 @@ from app.models.addons.directory import (
     DirectoryRequires,
 )
 from app.models.plugins.llm_plugin import (
+    LLMPluginEntryAccess,
     LLMPluginMarketplace,
     LLMPluginMarketplacePlugin,
 )
@@ -51,6 +52,8 @@ from app.services.credentials.desktop_credential_service import (
 from app.services.addons.summary import summary_line
 from app.services.mcp.mcp_directory_service import McpDirectoryService
 from app.services.plugins.llm_plugin_service import LLMPluginService
+from app.services.plugins.plugin_access_service import PluginAccessService
+from app.services.server_config.server_config_service import ServerConfigService
 from app.services.skills.skill_catalog_service import SkillCatalogService
 
 CACHE_TTL_SECONDS = 60.0
@@ -117,8 +120,15 @@ class AddonDirectoryService:
 
     @staticmethod
     def policy_for(session: Session, user: User) -> AddonsPolicy:
-        """What this caller's desktop may do. Everything, until admin controls exist."""
-        return AddonsPolicy()
+        """What this caller's desktop may do: the platform-wide flags an admin
+        sets in the server configuration (same answer for every user)."""
+        config = ServerConfigService.get_or_create(session)
+        return AddonsPolicy(
+            external_directories=config.addons_external_directories,
+            custom_mcp=config.addons_custom_mcp,
+            plugin_hooks=config.addons_plugin_hooks,
+            stdio_mcp=config.addons_stdio_mcp,
+        )
 
     @staticmethod
     def etag_of(data: list[DirectoryEntry], count: int, policy: AddonsPolicy) -> str:
@@ -271,7 +281,9 @@ class AddonDirectoryService:
                 LLMPluginMarketplace,
                 LLMPluginMarketplace.id == LLMPluginMarketplacePlugin.marketplace_id,
             )
+            .outerjoin(LLMPluginEntryAccess, PluginAccessService.join_condition())
             .where(LLMPluginService._discoverable_clause(user.id))
+            .where(PluginAccessService.entry_visible_clause())
         )
         return [
             _Indexed(

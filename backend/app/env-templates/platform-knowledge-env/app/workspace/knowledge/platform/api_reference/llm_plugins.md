@@ -11,6 +11,7 @@ Auto-generated from OpenAPI spec. Tag: `llm-plugins`
   - `ssh_key_id`: string | null
   - `public_discovery`: boolean
   - `type`: "claude" | "codex" | "skills"
+  - `access_mode`: "allow_all" | "allowlist" (required)
 
 **Response:** `LLMPluginMarketplacePublic`
 
@@ -86,10 +87,41 @@ Auto-generated from OpenAPI spec. Tag: `llm-plugins`
 **Query parameters:**
 - `snapshot_status`: string | null
 - `search`: string | null
+- `access`: string | null
+- `waiting`: boolean, default: `False`
 - `skip`: integer, default: `0`
 - `limit`: integer, default: `50`
 
 **Response:** `LLMPluginMarketplaceEntriesPublic`
+
+---
+
+## PUT `/api/v1/llm-plugins/marketplaces/{marketplace_id}/entries/access`
+**Set Marketplace Entries Access**
+
+**Path parameters:**
+- `marketplace_id`: uuid
+
+**Request body** (`PluginAccessBulkUpdate`):
+  - `ids`: uuid[] (required)
+  - `access`: "default" | "allowed" | "banned" (required)
+  - `reason`: string | null
+
+**Response:** `PluginAccessBulkResult`
+
+---
+
+## PUT `/api/v1/llm-plugins/marketplaces/{marketplace_id}/access-mode`
+**Set Marketplace Access Mode**
+
+**Path parameters:**
+- `marketplace_id`: uuid
+
+**Request body** (`MarketplaceAccessModeUpdate`):
+  - `access_mode`: "allow_all" | "allowlist" (required)
+  - `dry_run`: boolean
+
+**Response:** `MarketplaceAccessModeResult`
 
 ---
 
@@ -126,6 +158,20 @@ Auto-generated from OpenAPI spec. Tag: `llm-plugins`
 
 **Path parameters:**
 - `plugin_id`: uuid
+
+**Response:** `LLMPluginMarketplacePluginPublic`
+
+---
+
+## PUT `/api/v1/llm-plugins/plugins/{plugin_id}/access`
+**Set Plugin Access**
+
+**Path parameters:**
+- `plugin_id`: uuid
+
+**Request body** (`PluginAccessUpdate`):
+  - `access`: "default" | "allowed" | "banned" (required)
+  - `reason`: string | null
 
 **Response:** `LLMPluginMarketplacePluginPublic`
 

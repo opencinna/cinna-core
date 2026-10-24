@@ -89,7 +89,12 @@ def _create_marketplace(
     r = client.post(
         f"{_PLUGINS_BASE}/marketplaces",
         headers=headers,
-        json={"url": url, "git_branch": "main", "public_discovery": public_discovery},
+        json={
+            "url": url,
+            "git_branch": "main",
+            "public_discovery": public_discovery,
+            "access_mode": "allow_all",
+        },
     )
     assert r.status_code == 200, r.text
     return r.json()

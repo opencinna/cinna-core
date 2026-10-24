@@ -17,7 +17,7 @@ Cinna Desktop's Add picker needs one searchable list of everything a user can ad
 | Source (`ref.source`) | Kind | Visible to |
 |---|---|---|
 | `core-catalog` | `skill` | Whoever the [catalog](../catalog/catalog.md) access model lets see the package. Delisted packages appear only for someone who can manage them. |
-| `core-marketplace` | `skill` (skills-format marketplace) or `plugin` | The marketplace owner, or anyone when the marketplace is public for discovery. No superuser bypass. See [plugin marketplaces](../plugin_marketplaces/plugin_marketplaces.md). |
+| `core-marketplace` | `skill` (skills-format marketplace) or `plugin` | The marketplace owner, or anyone when the marketplace is public for discovery, and only entries the marketplace's access mode and an admin's allow / ban leave visible (hidden entries are absent for everyone). No superuser bypass. See [plugin marketplaces](../plugin_marketplaces/plugin_marketplaces.md). |
 | `core-mcp-directory` | `mcp` | Everyone, except entries an admin has banned. |
 
 A private marketplace or a catalog package the caller cannot see never appears, for any query.
@@ -47,7 +47,7 @@ The counter is bumped by: marketplace create/update/delete and sync, snapshot wo
 
 ## Policy
 
-The response includes `policy`, four booleans the desktop must honour: `external_directories`, `custom_mcp`, `plugin_hooks`, `stdio_mcp`. All are `true` for now; they are not editable yet (an admin control is planned, and will let operators tighten them without a desktop release).
+The response includes `policy`, four booleans for Cinna Desktop: `external_directories`, `custom_mcp`, `plugin_hooks`, `stdio_mcp`. All default to `true`; a superuser edits them on the Server configuration page ([server configuration](../server_configuration/server_configuration.md#addons-policy)). They are advisory: core does not enforce them, the desktop does. Changing one bumps the directory version, so the ETag changes.
 
 ## MCP directory
 
@@ -67,4 +67,5 @@ An admin-curated list of MCP servers, served through the directory as `kind=mcp`
 
 ## Changelog
 
+- 2026-10-24: policy flags became editable; marketplace entries hidden by access mode or ban are left out.
 - Directory endpoint, policy and MCP directory with opencinna import added.

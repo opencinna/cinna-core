@@ -11,10 +11,10 @@ import uuid
 import logging
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 
-from app.api.deps import CurrentUser, SessionDep
+from app.api.deps import CurrentUser, SessionDep, get_current_active_superuser
 from app.models import (
     Message,
 )
@@ -26,6 +26,11 @@ from app.models.plugins.llm_plugin import (
     LLMPluginMarketplacePluginPublic,
     LLMPluginMarketplacePluginsPublic,
     LLMPluginMarketplaceEntriesPublic,
+    MarketplaceAccessModeResult,
+    MarketplaceAccessModeUpdate,
+    PluginAccessBulkResult,
+    PluginAccessBulkUpdate,
+    PluginAccessUpdate,
     PluginSnapshotRetryPublic,
     AgentPluginLinkCreate,
     AgentPluginLinkUpdate,
@@ -41,6 +46,7 @@ from app.services.plugins.llm_plugin_service import (
 from app.services.plugins.marketplace_skill_snapshots import (
     MarketplaceSkillSnapshots,
 )
+from app.services.plugins.plugin_access_service import PluginAccessService
 from app.services.skills.exceptions import SkillCatalogError, http_error_for
 
 logger = logging.getLogger(__name__)
@@ -74,7 +80,9 @@ def create_marketplace(
             data=data,
             user_id=current_user.id,
         )
-        return LLMPluginService.get_marketplace_public(session, marketplace)
+        return LLMPluginService.get_marketplace_public(
+            session, marketplace, is_superuser=current_user.is_superuser
+        )
     except Exception as e:
         logger.error(f"Failed to create marketplace: {e}")
         raise HTTPException(status_code=400, detail=str(e))
@@ -98,7 +106,9 @@ def list_marketplaces(
         include_public=include_public,
     )
     public_marketplaces = [
-        LLMPluginService.get_marketplace_public(session, m)
+        LLMPluginService.get_marketplace_public(
+            session, m, is_superuser=current_user.is_superuser
+        )
         for m in marketplaces
     ]
     return LLMPluginMarketplacesPublic(data=public_marketplaces, count=len(public_marketplaces))
@@ -120,7 +130,9 @@ def get_marketplace(
     marketplace = LLMPluginService.get_marketplace_with_access_check(
         session, marketplace_id, current_user
     )
-    return LLMPluginService.get_marketplace_public(session, marketplace)
+    return LLMPluginService.get_marketplace_public(
+            session, marketplace, is_superuser=current_user.is_superuser
+        )
 
 
 @router.put("/marketplaces/{marketplace_id}", response_model=LLMPluginMarketplacePublic)
@@ -149,7 +161,9 @@ def update_marketplace(
     if not updated:
         raise HTTPException(status_code=404, detail="Marketplace not found")
 
-    return LLMPluginService.get_marketplace_public(session, updated)
+    return LLMPluginService.get_marketplace_public(
+            session, updated, is_superuser=current_user.is_superuser
+        )
 
 
 @router.delete("/marketplaces/{marketplace_id}")
@@ -199,7 +213,9 @@ def sync_marketplace(
             marketplace_id=marketplace_id,
             user_id=marketplace.user_id,  # Use marketplace owner for SSH key access
         )
-        return LLMPluginService.get_marketplace_public(session, synced)
+        return LLMPluginService.get_marketplace_public(
+            session, synced, is_superuser=current_user.is_superuser
+        )
     except MarketplaceFormatError as e:
         # Nothing was read: either the marketplace declares a format this
         # platform has no parser for, or the repository's catalog is missing /
@@ -229,16 +245,22 @@ def list_marketplace_entries(
     marketplace_id: uuid.UUID,
     snapshot_status: Literal["pending", "ready", "failed"] | None = None,
     search: str | None = None,
+    access: Literal["default", "allowed", "banned"] | None = None,
+    waiting: bool = False,
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=500),
 ) -> Any:
     """
-    Every entry of one marketplace with its snapshot state and components.
+    Every entry of one marketplace with its snapshot state, access state and
+    components, hidden entries included.
 
     Owner or superuser only (403 otherwise, 404 unknown marketplace). `count`
     is the total matching the filters; `counts` totals `ready` / `pending` /
-    `failed` over the whole marketplace, ignoring `snapshot_status`.
-    `search` matches name or description, case-insensitive.
+    `failed` / `retryable` and `allowed` / `banned` / `default` / `waiting` /
+    `visible` over the whole marketplace, ignoring the filters.
+    `search` matches name or description, case-insensitive; `access` filters
+    on the verdict; `waiting=true` keeps entries awaiting approval (the
+    `default` entries of an `allowlist` marketplace).
     """
     marketplace = LLMPluginService.get_marketplace_with_access_check(
         session, marketplace_id, current_user, require_write=True
@@ -248,8 +270,72 @@ def list_marketplace_entries(
         marketplace,
         snapshot_status=snapshot_status,
         search=search,
+        access=access,
+        waiting=waiting,
+        include_access_detail=current_user.is_superuser,
         skip=skip,
         limit=limit,
+    )
+
+
+@router.put(
+    "/marketplaces/{marketplace_id}/entries/access",
+    response_model=PluginAccessBulkResult,
+    dependencies=[Depends(get_current_active_superuser)],
+)
+def set_marketplace_entries_access(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    marketplace_id: uuid.UUID,
+    data: PluginAccessBulkUpdate,
+) -> Any:
+    """
+    Give many entries of one marketplace the same access (superuser only).
+
+    At most 500 ids. All or nothing: an id that is unknown or belongs to
+    another marketplace is a 422 `foreign_ids` (`detail.ids` lists at most 50
+    of them) and nothing is written. `updated` counts distinct entries; `visible` is what users see
+    afterwards under the current mode.
+    """
+    marketplace = LLMPluginService.get_marketplace(session, marketplace_id)
+    if marketplace is None:
+        raise HTTPException(status_code=404, detail={"code": "not_found"})
+    updated = PluginAccessService.set_access_bulk(
+        session, marketplace, data.ids, data.access, data.reason, current_user
+    )
+    return PluginAccessBulkResult(
+        updated=updated,
+        visible=PluginAccessService.visible_count(
+            session, marketplace, marketplace.access_mode
+        ),
+    )
+
+
+@router.put(
+    "/marketplaces/{marketplace_id}/access-mode",
+    response_model=MarketplaceAccessModeResult,
+    dependencies=[Depends(get_current_active_superuser)],
+)
+def set_marketplace_access_mode(
+    *,
+    session: SessionDep,
+    marketplace_id: uuid.UUID,
+    data: MarketplaceAccessModeUpdate,
+) -> Any:
+    """
+    Switch a marketplace between `allow_all` and `allowlist` (superuser only).
+
+    Entry verdicts are kept. The answer carries the visible-entry count under
+    the previous mode (`visible_before`) and the requested one
+    (`visible_after`); with `dry_run=true` nothing changes (`applied=false`).
+    404 `not_found` for an unknown marketplace.
+    """
+    marketplace = LLMPluginService.get_marketplace(session, marketplace_id)
+    if marketplace is None:
+        raise HTTPException(status_code=404, detail={"code": "not_found"})
+    return PluginAccessService.set_mode(
+        session, marketplace, data.access_mode, dry_run=data.dry_run
     )
 
 
@@ -354,8 +440,48 @@ def get_plugin(
     LLMPluginService.get_marketplace_with_access_check(
         session, marketplace.id, current_user
     )
+    # A banned / not-allowed entry does not exist for a non-superuser.
+    access_row = PluginAccessService.access_row_for(session, plugin)
+    if not current_user.is_superuser and not PluginAccessService.is_entry_visible(
+        marketplace, access_row
+    ):
+        raise HTTPException(status_code=404, detail="Plugin not found")
 
-    return LLMPluginService.get_plugin_public(plugin, marketplace_name=marketplace.name)
+    return LLMPluginService.get_plugin_public(
+        plugin,
+        marketplace_name=marketplace.name,
+        access_row=access_row,
+        include_access_detail=current_user.is_superuser,
+    )
+
+
+@router.put(
+    "/plugins/{plugin_id}/access",
+    response_model=LLMPluginMarketplacePluginPublic,
+    dependencies=[Depends(get_current_active_superuser)],
+)
+def set_plugin_access(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    plugin_id: uuid.UUID,
+    data: PluginAccessUpdate,
+) -> Any:
+    """
+    Allow, ban or reset (`default`) one marketplace entry (superuser only).
+
+    The verdict is kept by entry name, so it survives resyncs and an entry
+    removed from the repository and re-added. Hidden entries disappear from
+    discover, batch, archive and the addons directory for everyone; cloud
+    installs and existing agent links are not affected. 404 `not_found` for
+    an unknown id. Answers the entry with its new access state.
+    """
+    plugin, access_row = PluginAccessService.set_access(
+        session, plugin_id, data.access, data.reason, current_user
+    )
+    return LLMPluginService.get_plugin_public(
+        plugin, access_row=access_row, include_access_detail=True
+    )
 
 
 #: Most ids one batch lookup accepts.

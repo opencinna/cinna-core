@@ -3,7 +3,9 @@ import {
   flexRender,
   getCoreRowModel,
   getPaginationRowModel,
+  type OnChangeFn,
   type RowData,
+  type RowSelectionState,
   useReactTable,
 } from "@tanstack/react-table"
 import { type MouseEvent, useEffect } from "react"
@@ -98,6 +100,14 @@ interface DataTableProps<TData, TValue> {
    * readers still announce each cell's column.
    */
   hideHeader?: boolean
+  /**
+   * Controlled row selection, keyed by `getRowId` — pass both to make rows
+   * selectable (add a `selectColumn()` for the checkboxes). Controlled so a
+   * server-paged list keeps a selection across pages: the ids outlive the
+   * rows of the page that held them.
+   */
+  rowSelection?: RowSelectionState
+  onRowSelectionChange?: OnChangeFn<RowSelectionState>
 }
 
 /**
@@ -125,8 +135,12 @@ export function DataTable<TData, TValue>({
   itemLabel,
   autoResetPageIndex,
   hideHeader = false,
+  rowSelection,
+  onRowSelectionChange,
 }: DataTableProps<TData, TValue>) {
   const manual = serverPagination !== undefined
+  const selectable =
+    rowSelection !== undefined && onRowSelectionChange !== undefined
   const table = useReactTable({
     data,
     columns,
@@ -136,6 +150,9 @@ export function DataTable<TData, TValue>({
     // renders, and `getPaginationRowModel` is a no-op once `manualPagination`
     // tells the table the slicing has already happened.
     getPaginationRowModel: getPaginationRowModel(),
+    // Spread in only when selectable, for the reason given below for the
+    // paging options.
+    ...(selectable ? { enableRowSelection: true, onRowSelectionChange } : {}),
     // The server-paging options are spread in only when they apply. The table
     // merges options over its defaults with a plain spread, so an explicit
     // `onPaginationChange: undefined` replaces the built-in state updater and
@@ -152,6 +169,7 @@ export function DataTable<TData, TValue>({
               pageIndex: serverPagination.pageIndex,
               pageSize: serverPagination.pageSize,
             },
+            ...(selectable ? { rowSelection } : {}),
           },
           onPaginationChange: (updater) => {
             const current = {
@@ -178,6 +196,7 @@ export function DataTable<TData, TValue>({
           // Spread in only when given: an explicit `undefined` would replace
           // the library's default, as with `onPaginationChange` above.
           ...(autoResetPageIndex !== undefined ? { autoResetPageIndex } : {}),
+          ...(selectable ? { state: { rowSelection } } : {}),
           initialState: {
             pagination: { pageIndex: 0, pageSize: DEFAULT_PAGE_SIZE },
           },
@@ -270,6 +289,7 @@ export function DataTable<TData, TValue>({
                   // destructive action (§2 Row actions):
                   // `opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100`.
                   className={cn("group/row", onRowClick && "cursor-pointer")}
+                  data-state={row.getIsSelected() ? "selected" : undefined}
                   onClick={
                     onRowClick
                       ? (event) => {

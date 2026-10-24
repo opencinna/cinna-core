@@ -254,3 +254,72 @@ def test_runs_code_truth_table(tmp_path: Path, files: dict, expected: bool) -> N
     a = analyse_plugin_tree(tmp_path, {"name": "p"}, "claude")
     assert a.reason is None
     assert a.runs_code is expected
+
+
+_PLAIN_FM = "---\ndescription: d\n---\n"
+
+
+@pytest.mark.parametrize(
+    "files,expected",
+    [
+        ({"commands/s.md": "Status:\n!`git status`\n"}, True),
+        ({"commands/s.md": "Run this first:\n!git log -5\n"}, True),
+        ({"commands/s.md": "---\nallowed-tools: Bash(git:*)\n---\nCommit.\n"}, True),
+        ({"commands/s.md": "---\nallowed-tools: [Read, \"Bash(npm test)\"]\n---\nx\n"}, True),
+        ({"agents/a.md": "---\nname: a\ntools: Read, Grep, Bash\n---\nYou review.\n"}, True),
+        ({"commands/nested/s.md": "!`ls`"}, True),
+        ({"commands/s.md": _PLAIN_FM + "Summarise ![diagram](d.png) the diff.\n"}, False),
+        ({"commands/s.md": "---\nallowed-tools: Read, Grep\n---\nWow! Great.\n"}, False),
+        ({"agents/a.md": "---\nname: a\ntools: Read\n---\nYou review.\n"}, False),
+    ],
+    ids=[
+        "inline-bang", "line-bang", "allowed-tools-bash", "allowed-tools-list-bash",
+        "agent-tools-bash", "nested-command", "plain-command-image",
+        "allowed-tools-no-bash", "agent-no-bash",
+    ],
+)
+def test_runs_code_commands_and_agents_running_shell(
+    tmp_path: Path, files: dict, expected: bool
+) -> None:
+    """A command / agent that runs shell makes runs_code true; components unchanged."""
+    _put(tmp_path, files)
+    a = analyse_plugin_tree(tmp_path, {"name": "p"}, "claude")
+    assert a.reason is None
+    assert a.runs_code is expected
+
+
+def test_runs_code_from_declared_command_path(tmp_path: Path) -> None:
+    _put(
+        tmp_path,
+        {
+            ".claude-plugin/plugin.json": {"name": "p", "commands": "./cmds"},
+            "cmds/go.md": "!`make`",
+        },
+    )
+    a = analyse_plugin_tree(tmp_path, {"name": "p"}, "claude")
+    assert a.components["commands"] == ["go"]
+    assert a.runs_code is True
+
+
+def _archive(tmp_path: Path, files: dict) -> Path:
+    from app.services.skills.skill_archive import build_tree_archive
+
+    tree = _put(tmp_path / "tree", files)
+    members = sorted(
+        (p.relative_to(tree).as_posix(), p) for p in tree.rglob("*") if p.is_file()
+    )
+    out = tmp_path / "a.tar.gz"
+    out.write_bytes(build_tree_archive("p", members))
+    return out
+
+
+def test_backfill_reanalyses_the_stored_archive(tmp_path: Path) -> None:
+    from app.services.plugins.plugin_runs_code_backfill import runs_code_from_archive
+
+    shell = _archive(tmp_path / "s", {"commands/s.md": "!`git status`"})
+    plain = _archive(tmp_path / "p", {"commands/s.md": "Summarise."})
+    assert runs_code_from_archive(shell, "p", None, "claude") is True
+    assert runs_code_from_archive(plain, "p", {"strict": True}, "claude") is False
+    assert runs_code_from_archive(tmp_path / "missing.tar.gz", "p", None, "claude") is None
+    # An archive whose tree no longer analyses (wrong prefix) is left alone.
+    assert runs_code_from_archive(shell, "other", None, "claude") is None

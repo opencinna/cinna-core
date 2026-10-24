@@ -15,7 +15,9 @@ import type {
   LLMPluginMarketplacePluginPublic,
   PluginComponents,
 } from "@/client"
+import { formatRelativeTimestamp } from "@/components/Common/RelativeTime"
 import { StatusDot } from "@/components/Common/StatusDot"
+import { selectColumn } from "@/components/Common/selectColumn"
 import { Badge } from "@/components/ui/badge"
 import {
   Tooltip,
@@ -23,12 +25,18 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import {
+  entryAccessLabel,
+  type MarketplaceAccessMode,
   mcpTransportLabel,
   plural,
   snapshotReasonSentence,
   snapshotStatusMeta,
   unsupportedReasonSentence,
 } from "@/utils/marketplace"
+import {
+  type MarketplaceEntryActions,
+  MarketplaceEntryActionsMenu,
+} from "./MarketplaceEntryActionsMenu"
 
 type Entry = LLMPluginMarketplacePluginPublic
 
@@ -175,6 +183,37 @@ function SnapshotCell({ entry }: { entry: Entry }) {
 }
 
 /**
+ * Who sees the entry, as the user experiences it (S7 label table) — the wire
+ * word `default` is never printed. A ban carries its reason and when it was
+ * set in the dot's tooltip.
+ */
+function AccessCell({
+  entry,
+  mode,
+}: {
+  entry: Entry
+  mode: MarketplaceAccessMode
+}) {
+  const { label, tone } = entryAccessLabel(entry.access, mode)
+  let reason: string | null = null
+  if (entry.access === "banned") {
+    const changed = entry.access_changed_at
+      ? formatRelativeTimestamp(entry.access_changed_at)
+      : null
+    reason =
+      [entry.access_reason || null, changed ? `Changed ${changed}` : null]
+        .filter(Boolean)
+        .join(" · ") || null
+  }
+  return <StatusDot tone={tone} label={label} reason={reason} />
+}
+
+/** The row's title link carries this id: focus lands on it after a write. */
+export function entryNameId(entryId: string): string {
+  return `marketplace-entry-${entryId}`
+}
+
+/**
  * Can the cloud platform install the entry (the column was "Supported",
  * renamed so it cannot be read as the snapshot). Optional on the wire, so an
  * entry synced before the flag existed reads as supported.
@@ -196,8 +235,15 @@ function CloudInstallCell({ entry }: { entry: Entry }) {
  * The marketplace entries list (S1). Column order is final from K1: K5
  * inserts select first, Access after Snapshot and ⋯ last.
  */
-export function getMarketplaceEntryColumns(): ColumnDef<Entry>[] {
+export function getMarketplaceEntryColumns({
+  mode,
+  actions,
+}: {
+  mode: MarketplaceAccessMode
+  actions: MarketplaceEntryActions
+}): ColumnDef<Entry>[] {
   return [
+    selectColumn<Entry>({ rowLabel: (entry) => entry.name }),
     {
       id: "name",
       header: "Name",
@@ -210,6 +256,7 @@ export function getMarketplaceEntryColumns(): ColumnDef<Entry>[] {
           <div className="min-w-0">
             <div className="flex min-w-0 items-center gap-2">
               <Link
+                id={entryNameId(entry.id)}
                 to="/admin/marketplace/plugin/$pluginId"
                 params={{ pluginId: entry.id }}
                 className="truncate text-sm font-medium hover:underline"
@@ -249,6 +296,12 @@ export function getMarketplaceEntryColumns(): ColumnDef<Entry>[] {
       cell: ({ row }) => <SnapshotCell entry={row.original} />,
     },
     {
+      id: "access",
+      header: "Access",
+      meta: { className: "w-44" },
+      cell: ({ row }) => <AccessCell entry={row.original} mode={mode} />,
+    },
+    {
       id: "cloud",
       header: "Cloud install",
       meta: { className: "hidden xl:table-cell w-40" },
@@ -262,6 +315,14 @@ export function getMarketplaceEntryColumns(): ColumnDef<Entry>[] {
         <span className="block truncate text-sm text-muted-foreground">
           {row.original.author_name || ""}
         </span>
+      ),
+    },
+    {
+      id: "actions",
+      header: () => <span className="sr-only">Actions</span>,
+      meta: { className: "w-10" },
+      cell: ({ row }) => (
+        <MarketplaceEntryActionsMenu entry={row.original} actions={actions} />
       ),
     },
   ]

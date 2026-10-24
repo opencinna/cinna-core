@@ -9,6 +9,7 @@
 - `backend/app/api/routes/llm_plugins.py` — Marketplace CRUD + sync endpoints
 - `backend/app/services/plugins/llm_plugin_service.py` — `create_marketplace()`, `sync_marketplace()`, `_parse_claude_marketplace()`, `_upsert_plugins()`, `discover_plugins()`
 - `backend/app/services/knowledge/git_operations.py` — Shared git clone/pull utilities used during sync, plus `fetch_tree` / `ls_remote_commit` for snapshots
+- `backend/app/services/plugins/plugin_access_service.py` — `PluginAccessService`: `entry_visible_clause()` (the SQL clause joined into discover, batch, archives, `GET /plugins/{id}`, directory and `visible_count`), `is_entry_visible`, `set_access`, `set_access_bulk`, `set_mode` (dry-run counts); each write bumps `AddonsDirectoryVersion`. Visible means `allow_all` and not banned, or `allowlist` and allowed. `LLMPluginService` keeps thin wrappers
 - `backend/app/services/plugins/plugin_snapshot_source.py` — pure source resolution (`resolve_source`, source key)
 - `backend/app/services/plugins/plugin_components.py` — pure tree analyser (`analyse_plugin_tree`)
 - `backend/app/services/plugins/plugin_snapshot_worker.py` — `PluginSnapshotPlanner` (sync-time) and `PluginSnapshotWorker` (background drain)
@@ -21,6 +22,7 @@
 - `frontend/src/components/Admin/MarketplaceActionsMenu.tsx` — Row-level actions (view, sync, delete) in the list table
 - `frontend/src/components/Admin/MarketplaceConfigurationTab.tsx` — Configuration tab on the detail page
 - `frontend/src/components/Admin/MarketplacePluginsTab.tsx` — Plugins tab on the detail page
+- Access UI: `MarketplaceAccessModeField.tsx` (mode choice), `MarketplaceEntryActionsMenu.tsx`, `marketplaceEntryAccess.ts` (Allow / Ban, bulk, waiting filter)
 - `frontend/src/client/sdk.gen.ts` — Auto-generated `LlmPluginsService`
 
 ## Database Schema
@@ -42,7 +44,10 @@ Defined via `LLMPluginMarketplaceBase`:
 | `type` | Marketplace format: `claude` (default) \| `codex` \| `skills`. Stored as a plain string; typed as a `Literal` on create/update, so an unknown value is a **422** |
 | `name`, `description` | Extracted from `marketplace.json` during sync |
 | `owner_name`, `owner_email` | Extracted from the top-level `owner` object in `marketplace.json` (the Claude Code schema's key — the official marketplace uses it), falling back to the older `author` spelling; a bare string under either is a name. **Rows synced before this fallback existed hold `NULL` until their next sync** |
-| `plugin_count` | Cached count of plugins (updated on sync) |
+| `plugin_count` | Cached count of plugins (updated on sync); `GET /marketplaces` reports the *visible* count to non-superusers |
+| `access_mode` | `allow_all` \| `allowlist`. Required on create (422 if omitted), changed only through the `access-mode` route, not the generic update. Migration `48c3eee7b6cd_marketplace_access.py` sets existing rows to `allow_all` |
+
+**Table: `llm_plugin_entry_access`** (`LLMPluginEntryAccess`): `marketplace_id` (FK, `ON DELETE CASCADE`), `entry_name` (String 255), `access` (`default` \| `allowed` \| `banned`), `reason`, `changed_by_id` (FK user, SET NULL), `changed_at`. Unique on `(marketplace_id, entry_name)`; no row means `default`. Keyed by name, not by plugin id, so it survives sync deletes and re-adds. Reset to `default` keeps the row for audit.
 
 **Table: `llm_plugin_marketplace_plugin`** (`LLMPluginMarketplacePlugin`)
 
@@ -63,7 +68,7 @@ Defined via `LLMPluginMarketplacePluginBase`:
 | `archive_sha256`, `archive_size` | Digest and compressed size of the entry's current snapshot, for every format. Skills rows are backfilled from `skill_archive_*`, which stay |
 | `snapshot_status` | `pending` \| `ready` \| `failed`. Independent of `supported` |
 | `snapshot_reason` | Why `failed`: `no_components`, `unsafe_path`, `too_large`, `fetch_failed`, `unknown_source` |
-| `runs_code` | `bool`, nullable. True when any skill has scripts, hooks exist, or a stdio/LSP server is declared |
+| `runs_code` | `bool`, nullable. True when any skill has scripts, hooks exist, a stdio/LSP server is declared, or a command / agent runs shell (a `` !`cmd` `` or line-leading `!` invocation, or an `allowed-tools` / `tools` frontmatter grant naming Bash); rows analysed before that last rule were corrected from their stored archives by migration `5b7e2f9c1a3d` (`plugin_runs_code_backfill.py`) |
 | `snapshot_source_key`, `snapshot_commit`, `snapshot_ref`, `snapshot_at` | Queue/state columns: `local:<path>` or `<canonical https url>#<subdir>`; resolved commit; ref to resolve when no sha; last attempt time |
 | `snapshot_attempts`, `snapshot_claim_id`, `snapshot_lease_until` | Worker bookkeeping: attempt counter, current claim, lease expiry. Partial index `ix_plugin_snapshot_pending` on the lease for `pending` rows. Migration `a2c161d383aa` |
 | `source_path` | Relative path (local plugins) |
@@ -102,6 +107,16 @@ All in `backend/app/api/routes/llm_plugins.py`. Marketplace create is superuser-
 | `GET` | `/api/v1/llm-plugins/marketplaces/{id}/entries` | `?snapshot_status=&search=&skip=&limit=` | `{data, count, counts}` | Every entry with the snapshot fields. `count` is the filtered total; `counts` is `{ready, pending, failed, retryable}` over the whole marketplace, where `retryable` is what the default retry would queue (same predicate, `_retry_candidates`). Owner or superuser |
 | `POST` | `/api/v1/llm-plugins/marketplaces/{id}/snapshots/retry` | `?all=bool` | `{queued, skipped_needs_sync}` | Re-queue `fetch_failed` rows (all failed rows with `all=true`), attempts reset. Failed local entries of SSH-key or non-public marketplaces are not queued (`skipped_needs_sync`); a sync re-takes them. Owner or superuser |
 | `GET` | `/api/v1/llm-plugins/plugins` | `?ids=a,b,…` (≤100) | `LLMPluginMarketplacePluginsPublic` | Batch lookup in request order, de-duplicated; invisible or unknown ids are omitted. 422 `too_many_ids` / `invalid_id` |
+
+Access routes (K5), all superuser-only (403 otherwise):
+
+| Method | Path | Request | Response |
+|--------|------|---------|----------|
+| `PUT` | `/api/v1/llm-plugins/marketplaces/{id}/access-mode` | `{access_mode, dry_run}` | `{access_mode, previous_mode, visible_before, visible_after, applied}` (`applied` false for a dry run) |
+| `PUT` | `/api/v1/llm-plugins/plugins/{id}/access` | `{access, reason?}` | the entry |
+| `PUT` | `/api/v1/llm-plugins/marketplaces/{id}/entries/access` | `{ids (1..500), access, reason?}` | `{updated, visible}`; 422 `foreign_ids` (lists at most 50 ids) when any id is not in the marketplace, nothing written |
+
+`GET /marketplaces/{id}/entries` also takes `?access=default|allowed|banned&waiting=true` and its `counts` gains `allowed`, `banned`, `default`, `waiting`, `visible` (over the whole marketplace, ignoring filters). Entries carry `access` and its audit fields.
 
 **Visibility for the two snapshot routes** is exactly the `/discover` rule (`LLMPluginService.is_discoverable` plus one SQL clause): the marketplace is the caller's own or has `public_discovery`. There is **no superuser bypass**; a private entry answers `404 not_found`, never 403.
 

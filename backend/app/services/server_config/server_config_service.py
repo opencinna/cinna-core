@@ -11,9 +11,19 @@ from app.models.server_config.server_config import (
     ServerConfigUpdate,
 )
 from app.models.users.user import User
+from app.services.addons.directory_version import AddonsDirectoryVersion
 from app.services.users.access_policy_service import AccessPolicyService
 
 logger = logging.getLogger(__name__)
+
+#: ``ServerConfig`` columns projected into the addons directory ``policy``;
+#: changing one bumps the directory version.
+ADDONS_POLICY_FIELDS = (
+    "addons_external_directories",
+    "addons_custom_mcp",
+    "addons_plugin_hooks",
+    "addons_stdio_mcp",
+)
 
 
 class ServerConfigService:
@@ -130,7 +140,14 @@ class ServerConfigService:
             and update_dict["disclaimer_display_mode"] != config.disclaimer_display_mode
         )
 
+        addons_policy_changed = any(
+            key in update_dict and update_dict[key] != getattr(config, key)
+            for key in ADDONS_POLICY_FIELDS
+        )
+
         config.sqlmodel_update(update_dict)
+        if addons_policy_changed:
+            AddonsDirectoryVersion.bump(session)
         if content_changed:
             config.disclaimer_version += 1
         config.updated_at = datetime.now(UTC)

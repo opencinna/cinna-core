@@ -82,6 +82,48 @@ export const MARKETPLACE_FORMAT_VALUES = [
 export const MARKETPLACE_FORMATS: MarketplaceFormatOption[] =
   MARKETPLACE_FORMAT_VALUES.map((value) => ({ value, ...FORMAT_COPY[value] }))
 
+/**
+ * Who sees a marketplace's entries, from the generated create union: a mode
+ * added on the server is a missing key in `ACCESS_MODE_COPY` and fails to
+ * compile.
+ */
+export type MarketplaceAccessMode = LLMPluginMarketplaceCreate["access_mode"]
+
+/** The two modes in the order the field offers them (S9, S11). */
+export const MARKETPLACE_ACCESS_MODE_VALUES = [
+  "allow_all",
+  "allowlist",
+] as const satisfies readonly MarketplaceAccessMode[]
+
+const ACCESS_MODE_COPY: Record<
+  MarketplaceAccessMode,
+  { label: string; help: string }
+> = {
+  allow_all: {
+    label: "Allow all plugins by default",
+    help: "Every plugin and skill appears to users as soon as it syncs; you can ban any of them.",
+  },
+  allowlist: {
+    label: "Only plugins I allow",
+    help: "New plugins and skills stay hidden until you allow them on the Plugins tab.",
+  },
+}
+
+/**
+ * The stored mode, narrowed. The read path is a bare `string` on the wire;
+ * a row from before the column existed (or an unknown value) reads as
+ * `allow_all`, which is what every marketplace was before modes existed.
+ */
+export function marketplaceAccessMode(
+  value: string | null | undefined,
+): MarketplaceAccessMode {
+  return value === "allowlist" ? "allowlist" : "allow_all"
+}
+
+export function accessModeCopy(mode: MarketplaceAccessMode) {
+  return ACCESS_MODE_COPY[mode]
+}
+
 /** What the chosen format expects to find in the repository. */
 export function marketplaceFormatHelp(value: MarketplaceFormat): string {
   return FORMAT_COPY[value].help

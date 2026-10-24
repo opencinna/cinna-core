@@ -10,6 +10,7 @@ import {
   LlmPluginsService,
   SshKeysService,
 } from "@/client"
+import { AdvancedDisclosure } from "@/components/Common/AdvancedDisclosure"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -42,10 +43,12 @@ import {
 import useCustomToast from "@/hooks/useCustomToast"
 import { handleError } from "@/utils"
 import {
+  MARKETPLACE_ACCESS_MODE_VALUES,
   MARKETPLACE_FORMAT_VALUES,
   MARKETPLACE_FORMATS,
   marketplaceFormatHelp,
 } from "@/utils/marketplace"
+import { MarketplaceAccessModeField } from "./MarketplaceAccessModeField"
 
 // Validates both HTTPS and SSH git URLs
 const gitUrlPattern = /^(https?:\/\/.+|git@[^:]+:.+)$/
@@ -59,10 +62,26 @@ const formSchema = z.object({
   // unknown value is a 422 on the server rather than a silent fallback to the
   // Claude parser.
   type: z.enum(MARKETPLACE_FORMAT_VALUES),
+  // Required with no default (S9): whether entries reach users on sync is a
+  // decision, not something to inherit from a preselected tile.
+  access_mode: z
+    .enum(MARKETPLACE_ACCESS_MODE_VALUES)
+    .optional()
+    .transform((value, ctx) => {
+      if (value === undefined) {
+        ctx.addIssue({
+          code: "custom",
+          message: "Choose who sees this marketplace's plugins.",
+        })
+        return z.NEVER
+      }
+      return value
+    }),
   ssh_key_id: z.string().optional(),
 })
 
-type FormData = z.infer<typeof formSchema>
+type FormValues = z.input<typeof formSchema>
+type FormData = z.output<typeof formSchema>
 
 const AddMarketplace = () => {
   const [isOpen, setIsOpen] = useState(false)
@@ -75,13 +94,14 @@ const AddMarketplace = () => {
     enabled: isOpen,
   })
 
-  const form = useForm<FormData>({
+  const form = useForm<FormValues, unknown, FormData>({
     resolver: zodResolver(formSchema),
     mode: "onBlur",
     criteriaMode: "all",
     defaultValues: {
       url: "",
       type: "claude",
+      access_mode: undefined,
       ssh_key_id: undefined,
     },
   })
@@ -106,6 +126,7 @@ const AddMarketplace = () => {
     const submitData: LLMPluginMarketplaceCreate = {
       url: data.url,
       type: data.type,
+      access_mode: data.access_mode,
       ssh_key_id: data.ssh_key_id === "none" ? undefined : data.ssh_key_id,
     }
     mutation.mutate(submitData)
@@ -119,7 +140,16 @@ const AddMarketplace = () => {
           Add marketplace
         </Button>
       </DialogTrigger>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent
+        className="sm:max-w-lg"
+        // A create in flight is not abandoned by a stray Escape (§6).
+        onEscapeKeyDown={(e) => {
+          if (mutation.isPending) e.preventDefault()
+        }}
+        onInteractOutside={(e) => {
+          if (mutation.isPending) e.preventDefault()
+        }}
+      >
         <DialogHeader>
           <DialogTitle>Add addon marketplace</DialogTitle>
           <DialogDescription>
@@ -191,32 +221,62 @@ const AddMarketplace = () => {
 
               <FormField
                 control={form.control}
-                name="ssh_key_id"
-                render={({ field }) => (
+                name="access_mode"
+                render={({ field, fieldState }) => (
                   <FormItem>
-                    <FormLabel>SSH Key (for private repos)</FormLabel>
-                    <Select
-                      onValueChange={field.onChange}
-                      value={field.value || "none"}
-                    >
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder="None (for public repos)" />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        <SelectItem value="none">None (public repo)</SelectItem>
-                        {sshKeys?.data?.map((key) => (
-                          <SelectItem key={key.id} value={key.id}>
-                            {key.name} ({key.fingerprint.substring(0, 16)}...)
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <FormMessage />
+                    <FormLabel id="marketplace-access-mode-label">
+                      Plugin access <span className="text-destructive">*</span>
+                    </FormLabel>
+                    <MarketplaceAccessModeField
+                      value={field.value}
+                      onChange={(mode) => {
+                        field.onChange(mode)
+                        void form.trigger("access_mode")
+                      }}
+                      labelledBy="marketplace-access-mode-label"
+                      describedBy={
+                        fieldState.error
+                          ? "marketplace-access-mode-error"
+                          : undefined
+                      }
+                    />
+                    <FormMessage id="marketplace-access-mode-error" />
                   </FormItem>
                 )}
               />
+
+              <AdvancedDisclosure>
+                <FormField
+                  control={form.control}
+                  name="ssh_key_id"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>SSH Key (for private repos)</FormLabel>
+                      <Select
+                        onValueChange={field.onChange}
+                        value={field.value || "none"}
+                      >
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="None (for public repos)" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          <SelectItem value="none">
+                            None (public repo)
+                          </SelectItem>
+                          {sshKeys?.data?.map((key) => (
+                            <SelectItem key={key.id} value={key.id}>
+                              {key.name} ({key.fingerprint.substring(0, 16)}...)
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </AdvancedDisclosure>
             </div>
 
             <DialogFooter>

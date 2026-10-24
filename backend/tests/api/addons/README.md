@@ -7,6 +7,10 @@ Covers the unified addons core (`docs/plans/unified_addons_plan.md`, K3 + K4):
   visibility per caller, ranking, filters, ETag / 304, policy.
 - `mcp_directory_test.py` — `/api/v1/mcp-directory/*`: superuser-only CRUD,
   validation, ban / unban, and the opencinna import.
+- `marketplace_access_test.py` — K5: marketplace access mode, per-entry
+  allow / ban, visibility across discover, batch, archives and the directory,
+  mode-switch counts, bulk allow. Related: `tests/api/server_config/addons_policy_test.py`
+  (the four policy flags) and `tests/migrations/marketplace_access_test.py`.
 
 ## Conventions
 

@@ -25423,10 +25423,15 @@ export const LLMPluginMarketplaceCreateSchema = {
             enum: ['claude', 'codex', 'skills'],
             title: 'Type',
             default: 'claude'
+        },
+        access_mode: {
+            type: 'string',
+            enum: ['allow_all', 'allowlist'],
+            title: 'Access Mode'
         }
     },
     type: 'object',
-    required: ['url'],
+    required: ['url', 'access_mode'],
     title: 'LLMPluginMarketplaceCreate',
     description: `Schema for creating a plugin marketplace.
 
@@ -25758,6 +25763,34 @@ export const LLMPluginMarketplacePluginPublicSchema = {
                 }
             ],
             title: 'Repository Url'
+        },
+        access: {
+            type: 'string',
+            title: 'Access',
+            default: 'default'
+        },
+        access_reason: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Access Reason'
+        },
+        access_changed_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Access Changed At'
         }
     },
     type: 'object',
@@ -25899,6 +25932,11 @@ export const LLMPluginMarketplacePublicSchema = {
             type: 'string',
             format: 'uuid',
             title: 'User Id'
+        },
+        access_mode: {
+            type: 'string',
+            title: 'Access Mode',
+            default: 'allow_all'
         },
         created_at: {
             type: 'string',
@@ -27954,6 +27992,57 @@ export const ManagedReconcileSkipSchema = {
     description: 'A target user skipped during reconcile (unknown/inactive).'
 } as const;
 
+export const MarketplaceAccessModeResultSchema = {
+    properties: {
+        access_mode: {
+            type: 'string',
+            title: 'Access Mode'
+        },
+        previous_mode: {
+            type: 'string',
+            title: 'Previous Mode'
+        },
+        visible_before: {
+            type: 'integer',
+            title: 'Visible Before'
+        },
+        visible_after: {
+            type: 'integer',
+            title: 'Visible After'
+        },
+        applied: {
+            type: 'boolean',
+            title: 'Applied'
+        }
+    },
+    type: 'object',
+    required: ['access_mode', 'previous_mode', 'visible_before', 'visible_after', 'applied'],
+    title: 'MarketplaceAccessModeResult',
+    description: `Visible-entry counts under the previous and the requested mode.
+
+\`\`access_mode\`\` is the requested mode; \`\`previous_mode\`\` the stored one
+before the call. \`\`applied\`\` is false for a dry run (nothing changed).`
+} as const;
+
+export const MarketplaceAccessModeUpdateSchema = {
+    properties: {
+        access_mode: {
+            type: 'string',
+            enum: ['allow_all', 'allowlist'],
+            title: 'Access Mode'
+        },
+        dry_run: {
+            type: 'boolean',
+            title: 'Dry Run',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['access_mode'],
+    title: 'MarketplaceAccessModeUpdate',
+    description: `\`\`PUT /marketplaces/{id}/access-mode\`\`; \`\`dry_run\`\` changes nothing.`
+} as const;
+
 export const MarketplaceStatusSchema = {
     type: 'string',
     enum: ['pending', 'connected', 'error', 'disconnected'],
@@ -29661,6 +29750,85 @@ export const PendingToolsResponseSchema = {
     description: 'Response for pending tools endpoint'
 } as const;
 
+export const PluginAccessBulkResultSchema = {
+    properties: {
+        updated: {
+            type: 'integer',
+            title: 'Updated'
+        },
+        visible: {
+            type: 'integer',
+            title: 'Visible'
+        }
+    },
+    type: 'object',
+    required: ['updated', 'visible'],
+    title: 'PluginAccessBulkResult',
+    description: 'Distinct entries written, and what users see afterwards.'
+} as const;
+
+export const PluginAccessBulkUpdateSchema = {
+    properties: {
+        ids: {
+            items: {
+                type: 'string',
+                format: 'uuid'
+            },
+            type: 'array',
+            maxItems: 500,
+            minItems: 1,
+            title: 'Ids'
+        },
+        access: {
+            type: 'string',
+            enum: ['default', 'allowed', 'banned'],
+            title: 'Access'
+        },
+        reason: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 1000
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Reason'
+        }
+    },
+    type: 'object',
+    required: ['ids', 'access'],
+    title: 'PluginAccessBulkUpdate',
+    description: `\`\`PUT /marketplaces/{id}/entries/access\`\`: one verdict for many entries.`
+} as const;
+
+export const PluginAccessUpdateSchema = {
+    properties: {
+        access: {
+            type: 'string',
+            enum: ['default', 'allowed', 'banned'],
+            title: 'Access'
+        },
+        reason: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 1000
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Reason'
+        }
+    },
+    type: 'object',
+    required: ['access'],
+    title: 'PluginAccessUpdate',
+    description: `\`\`PUT /plugins/{id}/access\`\`.`
+} as const;
+
 export const PluginComponentsSchema = {
     properties: {
         skills: {
@@ -29734,6 +29902,31 @@ export const PluginEntryCountsSchema = {
         retryable: {
             type: 'integer',
             title: 'Retryable',
+            default: 0
+        },
+        allowed: {
+            type: 'integer',
+            title: 'Allowed',
+            default: 0
+        },
+        banned: {
+            type: 'integer',
+            title: 'Banned',
+            default: 0
+        },
+        default: {
+            type: 'integer',
+            title: 'Default',
+            default: 0
+        },
+        waiting: {
+            type: 'integer',
+            title: 'Waiting',
+            default: 0
+        },
+        visible: {
+            type: 'integer',
+            title: 'Visible',
             default: 0
         }
     },
@@ -33052,6 +33245,26 @@ export const ServerConfigSchema = {
             title: 'Addons Directory Version',
             default: 0
         },
+        addons_external_directories: {
+            type: 'boolean',
+            title: 'Addons External Directories',
+            default: true
+        },
+        addons_custom_mcp: {
+            type: 'boolean',
+            title: 'Addons Custom Mcp',
+            default: true
+        },
+        addons_plugin_hooks: {
+            type: 'boolean',
+            title: 'Addons Plugin Hooks',
+            default: true
+        },
+        addons_stdio_mcp: {
+            type: 'boolean',
+            title: 'Addons Stdio Mcp',
+            default: true
+        },
         updated_at: {
             type: 'string',
             format: 'date-time',
@@ -33202,6 +33415,50 @@ export const ServerConfigUpdateSchema = {
                 }
             ],
             title: 'Invite Include Desktop Default'
+        },
+        addons_external_directories: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Addons External Directories'
+        },
+        addons_custom_mcp: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Addons Custom Mcp'
+        },
+        addons_plugin_hooks: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Addons Plugin Hooks'
+        },
+        addons_stdio_mcp: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Addons Stdio Mcp'
         }
     },
     type: 'object',

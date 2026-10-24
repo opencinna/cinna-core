@@ -1,7 +1,4 @@
-import { ChevronDown, ChevronRight } from "lucide-react"
-import { type ReactNode, useState } from "react"
-
-import { Button } from "@/components/ui/button"
+import { AdvancedDisclosure } from "@/components/Common/AdvancedDisclosure"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
@@ -175,38 +172,6 @@ export function McpEntryListingFields({
           {optional}
         </AdvancedDisclosure>
       )}
-    </div>
-  )
-}
-
-function AdvancedDisclosure({
-  children,
-  forceOpen,
-}: {
-  children: ReactNode
-  forceOpen: boolean
-}) {
-  // Starts closed on every open: the dialog unmounts its body on close.
-  const [toggled, setOpen] = useState(false)
-  const open = toggled || forceOpen
-  return (
-    <div>
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        className="px-0 text-muted-foreground"
-        onClick={() => setOpen((prev) => !prev)}
-        aria-expanded={open}
-      >
-        {open ? (
-          <ChevronDown className="h-4 w-4" />
-        ) : (
-          <ChevronRight className="h-4 w-4" />
-        )}
-        Advanced
-      </Button>
-      {open && <div className="pt-2">{children}</div>}
     </div>
   )
 }

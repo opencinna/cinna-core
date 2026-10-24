@@ -1,6 +1,7 @@
 import { createFileRoute, redirect } from "@tanstack/react-router"
 import { useEffect } from "react"
 
+import { AddonsPolicyCard } from "@/components/Admin/AddonsPolicyCard"
 import { CompanyAiCredentialsCard } from "@/components/Admin/AccessPolicy/CompanyAiCredentialsCard"
 import { NewUserDefaultsCard } from "@/components/Admin/AccessPolicy/NewUserDefaultsCard"
 import { RegistrationCard } from "@/components/Admin/AccessPolicy/RegistrationCard"
@@ -90,6 +91,7 @@ function AdminServerConfiguration() {
           <SignInMethodsCard />
           <NewUserDefaultsCard />
           <CompanyAiCredentialsCard />
+          <AddonsPolicyCard />
           <LandingPageCard />
         </div>
       ),
