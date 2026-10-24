@@ -59,6 +59,7 @@ from app.services.knowledge.git_operations import (
     create_ssh_key_file,
     GitOperationError,
 )
+from app.services.addons.directory_version import AddonsDirectoryVersion
 from app.services.agents.skill_manifest import parse_skill_dir
 from app.services.plugins.marketplace_skill_snapshots import (
     MarketplaceSkillSnapshots,
@@ -213,6 +214,7 @@ class LLMPluginService:
             status=MarketplaceStatus.pending,
         )
         session.add(marketplace)
+        AddonsDirectoryVersion.bump(session)
         session.commit()
         session.refresh(marketplace)
 
@@ -248,6 +250,7 @@ class LLMPluginService:
 
         marketplace.updated_at = datetime.now(UTC)
         session.add(marketplace)
+        AddonsDirectoryVersion.bump(session)
         session.commit()
         session.refresh(marketplace)
 
@@ -282,6 +285,7 @@ class LLMPluginService:
             return False
 
         session.delete(marketplace)
+        AddonsDirectoryVersion.bump(session)
         session.commit()
 
         # The sync clone is throwaway, but skills-format entries keep
@@ -651,6 +655,7 @@ class LLMPluginService:
                 marketplace.last_sync_at = datetime.now(UTC)
                 marketplace.sync_commit_hash = commit_hash
                 session.add(marketplace)
+                AddonsDirectoryVersion.bump(session)
                 session.commit()
 
                 logger.info(f"Successfully synced marketplace '{marketplace.name}' - {len(plugins_data)} plugins")
@@ -2153,6 +2158,8 @@ class LLMPluginService:
                 # A content verdict is re-taken from scratch.
                 row.snapshot_commit = None
             session.add(row)
+        if rows:
+            AddonsDirectoryVersion.bump(session)
         session.commit()
         if rows:
             from app.services.plugins.plugin_snapshot_worker import (

@@ -144,6 +144,7 @@ row. It replaces the former admin team library page.
 - [Local Agent Kit](../local_agent_kit/local_agent_kit.md): the desktop-side contract that reports local installs and pins catalog skills.
 - [Event Bus](../realtime_events/event_bus_system.md): `catalog.updated`, `catalog.granted`.
 - [User Roles](../user_roles/user_roles.md): role principals in grants.
+- [Addons Directory](../addons_directory/addons_directory.md): catalog skills the caller may see are listed there for Cinna Desktop; publish, delist and grant changes refresh it.
 
 
 

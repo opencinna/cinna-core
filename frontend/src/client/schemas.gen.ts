@@ -4420,6 +4420,63 @@ export const AddonPublicSchema = {
     description: 'One row of the addons list — a plugin, or a skill, never both.'
 } as const;
 
+export const AddonsDirectoryPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/DirectoryEntry'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        },
+        policy: {
+            '$ref': '#/components/schemas/AddonsPolicy'
+        },
+        etag: {
+            type: 'string',
+            title: 'Etag'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count', 'policy', 'etag'],
+    title: 'AddonsDirectoryPublic'
+} as const;
+
+export const AddonsPolicySchema = {
+    properties: {
+        external_directories: {
+            type: 'boolean',
+            title: 'External Directories',
+            default: true
+        },
+        custom_mcp: {
+            type: 'boolean',
+            title: 'Custom Mcp',
+            default: true
+        },
+        plugin_hooks: {
+            type: 'boolean',
+            title: 'Plugin Hooks',
+            default: true
+        },
+        stdio_mcp: {
+            type: 'boolean',
+            title: 'Stdio Mcp',
+            default: true
+        }
+    },
+    type: 'object',
+    title: 'AddonsPolicy',
+    description: `What this caller's desktop may do beyond the core directory.
+
+Every flag defaults to the behaviour that shipped before it existed
+(everything allowed), so an admin control can only tighten.`
+} as const;
+
 export const AdminAIKeyKindSchema = {
     type: 'string',
     enum: ['per_user', 'shared'],
@@ -20214,6 +20271,273 @@ export const DeviceLoginStartResponseSchema = {
     description: 'Backend → CLI: device + user codes and the verification URLs (RFC 8628).'
 } as const;
 
+export const DirectoryArchiveInstallSchema = {
+    properties: {
+        archive_path: {
+            type: 'string',
+            title: 'Archive Path'
+        }
+    },
+    type: 'object',
+    required: ['archive_path'],
+    title: 'DirectoryArchiveInstall'
+} as const;
+
+export const DirectoryEntrySchema = {
+    properties: {
+        ref: {
+            '$ref': '#/components/schemas/DirectoryRef'
+        },
+        kind: {
+            type: 'string',
+            enum: ['skill', 'plugin', 'mcp'],
+            title: 'Kind'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        title: {
+            type: 'string',
+            title: 'Title'
+        },
+        summary: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Summary'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        category: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Category'
+        },
+        tags: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Tags'
+        },
+        icon_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Icon Url'
+        },
+        publisher: {
+            '$ref': '#/components/schemas/DirectoryPublisher'
+        },
+        origin: {
+            '$ref': '#/components/schemas/DirectoryOrigin'
+        },
+        version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Version'
+        },
+        digest: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Digest'
+        },
+        components: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/PluginComponents'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        requires: {
+            '$ref': '#/components/schemas/DirectoryRequires'
+        },
+        runs_code: {
+            type: 'boolean',
+            title: 'Runs Code',
+            default: false
+        },
+        status: {
+            type: 'string',
+            enum: ['ready', 'pending', 'unsupported'],
+            title: 'Status'
+        },
+        unsupported_reason: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Unsupported Reason'
+        },
+        install: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/DirectoryArchiveInstall'
+                },
+                {
+                    '$ref': '#/components/schemas/DirectoryMcpInstall'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Install'
+        }
+    },
+    type: 'object',
+    required: ['ref', 'kind', 'name', 'title', 'publisher', 'origin', 'status'],
+    title: 'DirectoryEntry'
+} as const;
+
+export const DirectoryMcpInstallSchema = {
+    properties: {
+        mcp: {
+            '$ref': '#/components/schemas/McpConnectDescriptor'
+        }
+    },
+    type: 'object',
+    required: ['mcp'],
+    title: 'DirectoryMcpInstall'
+} as const;
+
+export const DirectoryOriginSchema = {
+    properties: {
+        label: {
+            type: 'string',
+            title: 'Label'
+        },
+        kind: {
+            type: 'string',
+            enum: ['marketplace', 'catalog', 'directory'],
+            title: 'Kind'
+        },
+        repository_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Repository Url'
+        },
+        homepage: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Homepage'
+        }
+    },
+    type: 'object',
+    required: ['label', 'kind'],
+    title: 'DirectoryOrigin'
+} as const;
+
+export const DirectoryPublisherSchema = {
+    properties: {
+        name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Name'
+        },
+        verified: {
+            type: 'boolean',
+            title: 'Verified',
+            default: false
+        }
+    },
+    type: 'object',
+    title: 'DirectoryPublisher'
+} as const;
+
+export const DirectoryRefSchema = {
+    properties: {
+        source: {
+            type: 'string',
+            enum: ['core-catalog', 'core-marketplace', 'core-mcp-directory'],
+            title: 'Source'
+        },
+        id: {
+            type: 'string',
+            title: 'Id'
+        }
+    },
+    type: 'object',
+    required: ['source', 'id'],
+    title: 'DirectoryRef'
+} as const;
+
+export const DirectoryRequiresSchema = {
+    properties: {
+        credentials: {
+            items: {
+                '$ref': '#/components/schemas/SkillCredentialRequirementPublic'
+            },
+            type: 'array',
+            title: 'Credentials'
+        }
+    },
+    type: 'object',
+    title: 'DirectoryRequires'
+} as const;
+
 export const DisclaimerPublicSchema = {
     properties: {
         enabled: {
@@ -27637,6 +27961,626 @@ export const MarketplaceStatusSchema = {
     description: 'Status of a plugin marketplace.'
 } as const;
 
+export const McpConnectDescriptorSchema = {
+    properties: {
+        transport: {
+            type: 'string',
+            enum: ['stdio', 'http', 'sse'],
+            title: 'Transport'
+        },
+        url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Url'
+        },
+        package: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/McpPackage'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        auth: {
+            type: 'string',
+            enum: ['none', 'oauth', 'bearer', 'env'],
+            title: 'Auth'
+        },
+        env: {
+            items: {
+                '$ref': '#/components/schemas/McpEnvVar'
+            },
+            type: 'array',
+            title: 'Env'
+        }
+    },
+    type: 'object',
+    required: ['transport', 'auth'],
+    title: 'McpConnectDescriptor',
+    description: 'What the desktop needs to connect an MCP directory entry.'
+} as const;
+
+export const McpDirectoryAccessUpdateSchema = {
+    properties: {
+        access: {
+            type: 'string',
+            enum: ['default', 'banned'],
+            title: 'Access'
+        },
+        reason: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 500
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Reason'
+        }
+    },
+    type: 'object',
+    required: ['access'],
+    title: 'McpDirectoryAccessUpdate'
+} as const;
+
+export const McpDirectoryEntriesPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/McpDirectoryEntryPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'McpDirectoryEntriesPublic'
+} as const;
+
+export const McpDirectoryEntryCreateSchema = {
+    properties: {
+        name: {
+            type: 'string',
+            maxLength: 64,
+            title: 'Name'
+        },
+        title: {
+            type: 'string',
+            maxLength: 255,
+            minLength: 1,
+            title: 'Title'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 20000
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        icon_url: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 2048
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Icon Url'
+        },
+        categories: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            maxItems: 20,
+            title: 'Categories'
+        },
+        transport: {
+            type: 'string',
+            enum: ['stdio', 'http', 'sse'],
+            title: 'Transport'
+        },
+        url: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 2048
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Url'
+        },
+        package: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/McpPackage'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        auth: {
+            type: 'string',
+            enum: ['none', 'oauth', 'bearer', 'env'],
+            title: 'Auth',
+            default: 'none'
+        },
+        env: {
+            items: {
+                '$ref': '#/components/schemas/McpEnvVar'
+            },
+            type: 'array',
+            maxItems: 50,
+            title: 'Env'
+        },
+        homepage: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 2048
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Homepage'
+        },
+        publisher_name: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Publisher Name'
+        },
+        verified: {
+            type: 'boolean',
+            title: 'Verified',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['name', 'title', 'transport'],
+    title: 'McpDirectoryEntryCreate',
+    description: `A manual entry. Cross-field rules (transport ⇔ url / package, HTTPS
+only, env names) are checked by the service, so create and update share
+one rule set.`
+} as const;
+
+export const McpDirectoryEntryPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        title: {
+            type: 'string',
+            title: 'Title'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        icon_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Icon Url'
+        },
+        categories: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Categories'
+        },
+        transport: {
+            type: 'string',
+            title: 'Transport'
+        },
+        url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Url'
+        },
+        package: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/McpPackage'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        auth: {
+            type: 'string',
+            title: 'Auth'
+        },
+        env: {
+            items: {
+                '$ref': '#/components/schemas/McpEnvVar'
+            },
+            type: 'array',
+            title: 'Env'
+        },
+        homepage: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Homepage'
+        },
+        publisher_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Publisher Name'
+        },
+        verified: {
+            type: 'boolean',
+            title: 'Verified'
+        },
+        source: {
+            type: 'string',
+            title: 'Source'
+        },
+        source_ref: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Source Ref'
+        },
+        access: {
+            type: 'string',
+            title: 'Access'
+        },
+        access_reason: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Access Reason'
+        },
+        access_changed_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Access Changed At'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        }
+    },
+    type: 'object',
+    required: ['id', 'name', 'title', 'transport', 'auth', 'verified', 'source', 'access', 'created_at', 'updated_at'],
+    title: 'McpDirectoryEntryPublic'
+} as const;
+
+export const McpDirectoryEntryUpdateSchema = {
+    properties: {
+        title: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255,
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Title'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 20000
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        icon_url: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 2048
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Icon Url'
+        },
+        categories: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string'
+                    },
+                    type: 'array',
+                    maxItems: 20
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Categories'
+        },
+        transport: {
+            anyOf: [
+                {
+                    type: 'string',
+                    enum: ['stdio', 'http', 'sse']
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Transport'
+        },
+        url: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 2048
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Url'
+        },
+        package: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/McpPackage'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        auth: {
+            anyOf: [
+                {
+                    type: 'string',
+                    enum: ['none', 'oauth', 'bearer', 'env']
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Auth'
+        },
+        env: {
+            anyOf: [
+                {
+                    items: {
+                        '$ref': '#/components/schemas/McpEnvVar'
+                    },
+                    type: 'array',
+                    maxItems: 50
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Env'
+        },
+        homepage: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 2048
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Homepage'
+        },
+        publisher_name: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Publisher Name'
+        },
+        verified: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Verified'
+        }
+    },
+    type: 'object',
+    title: 'McpDirectoryEntryUpdate',
+    description: `Partial update; an omitted field is unchanged, an explicit \`\`null\`\`
+clears it. \`\`name\`\` is immutable (it is the entry's slug).`
+} as const;
+
+export const McpDirectoryImportResultSchema = {
+    properties: {
+        created: {
+            type: 'integer',
+            title: 'Created',
+            default: 0
+        },
+        updated: {
+            type: 'integer',
+            title: 'Updated',
+            default: 0
+        },
+        unchanged: {
+            type: 'integer',
+            title: 'Unchanged',
+            default: 0
+        },
+        skipped: {
+            items: {
+                '$ref': '#/components/schemas/McpDirectoryImportSkipped'
+            },
+            type: 'array',
+            title: 'Skipped'
+        },
+        stale: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Stale'
+        }
+    },
+    type: 'object',
+    title: 'McpDirectoryImportResult'
+} as const;
+
+export const McpDirectoryImportSkippedSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            title: 'Id'
+        },
+        reason: {
+            type: 'string',
+            title: 'Reason'
+        }
+    },
+    type: 'object',
+    required: ['id', 'reason'],
+    title: 'McpDirectoryImportSkipped'
+} as const;
+
+export const McpEnvVarSchema = {
+    properties: {
+        name: {
+            type: 'string',
+            maxLength: 128,
+            title: 'Name'
+        },
+        secret: {
+            type: 'boolean',
+            title: 'Secret',
+            default: false
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 500
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        }
+    },
+    additionalProperties: true,
+    type: 'object',
+    required: ['name'],
+    title: 'McpEnvVar',
+    description: 'One value an MCP server needs from the user. Never a value, only a name.'
+} as const;
+
 export const McpInfoResponseSchema = {
     properties: {
         mcp_server_url: {
@@ -27648,6 +28592,46 @@ export const McpInfoResponseSchema = {
     required: ['mcp_server_url'],
     title: 'McpInfoResponse',
     description: 'App MCP Server connection info.'
+} as const;
+
+export const McpPackageSchema = {
+    properties: {
+        registry: {
+            type: 'string',
+            enum: ['npm', 'pypi', 'oci'],
+            title: 'Registry'
+        },
+        name: {
+            type: 'string',
+            maxLength: 255,
+            minLength: 1,
+            title: 'Name'
+        },
+        version: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 64
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Version'
+        },
+        args: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Args',
+            description: 'Command-line arguments, shown to every account. Never put a secret here: secrets belong in env, which carries names only.'
+        }
+    },
+    type: 'object',
+    required: ['registry', 'name'],
+    title: 'McpPackage',
+    description: 'How a local-process (stdio) MCP server is fetched and started.'
 } as const;
 
 export const MembershipProvisioningStatusSchema = {
@@ -32062,6 +33046,11 @@ export const ServerConfigSchema = {
             type: 'boolean',
             title: 'Invite Include Desktop Default',
             default: true
+        },
+        addons_directory_version: {
+            type: 'integer',
+            title: 'Addons Directory Version',
+            default: 0
         },
         updated_at: {
             type: 'string',

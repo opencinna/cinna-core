@@ -10,16 +10,16 @@ import {
 import { DataTable } from "@/components/Common/DataTable"
 import { DEFAULT_PAGE_SIZE } from "@/components/Common/DataTablePagination"
 import { QueryErrorAlert } from "@/components/Common/QueryErrorAlert"
+import {
+  TableEmptyBlock,
+  TableSearchInput,
+  useDebouncedValue,
+} from "@/components/Common/TableSearchInput"
 import { Button } from "@/components/ui/button"
 import { AddUserGroupMembersDialog } from "./AddUserGroupMembersDialog"
 import { getMemberColumns } from "./memberColumns"
 import { PendingTable } from "./PendingTable"
 import { RemoveUserGroupMemberDialog } from "./RemoveUserGroupMemberDialog"
-import {
-  TableEmptyBlock,
-  UserGroupSearchInput,
-  useDebouncedValue,
-} from "./UserGroupSearchInput"
 import { userGroupKeys } from "./userGroupQueries"
 
 /** S5a — who is in the group: searched and paged on the server. */
@@ -113,7 +113,7 @@ export function UserGroupMembersTab({ group }: { group: UserGroupPublic }) {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <UserGroupSearchInput
+        <TableSearchInput
           ref={searchRef}
           value={search}
           onChange={changeSearch}

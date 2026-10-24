@@ -1048,6 +1048,11 @@ class Settings(BaseSettings):
     #: Fetch attempts before a row is ``failed`` / ``fetch_failed``.
     PLUGIN_SNAPSHOT_MAX_ATTEMPTS: int = Field(default=5, ge=1)
 
+    # The opencinna index: the public MCP server list Cinna Desktop ships as
+    # its "Cinna Official" registry. ``POST /mcp-directory/import`` seeds the
+    # core MCP directory from it (HTTPS, 10 s timeout, 1 MB cap).
+    MCP_DIRECTORY_INDEX_URL: str = "https://opencinna.io/.well-known/mcp_registry/index.json"
+
     # Desktop agents' git storage (bare repos served at ``/git/<repo_id>.git``).
     #   <GIT_STORAGE_DIR>/<repo_id>.git          one bare repo per desktop agent
     #   <GIT_STORAGE_DIR>/.deleted/<repo_id>-<utc>  removed repos, purged by the operator

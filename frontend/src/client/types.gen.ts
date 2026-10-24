@@ -751,6 +751,26 @@ export type AddonPublic = {
     published_package_id?: (string | null);
 };
 
+export type AddonsDirectoryPublic = {
+    data: Array<DirectoryEntry>;
+    count: number;
+    policy: AddonsPolicy;
+    etag: string;
+};
+
+/**
+ * What this caller's desktop may do beyond the core directory.
+ *
+ * Every flag defaults to the behaviour that shipped before it existed
+ * (everything allowed), so an admin control can only tighten.
+ */
+export type AddonsPolicy = {
+    external_directories?: boolean;
+    custom_mcp?: boolean;
+    plugin_hooks?: boolean;
+    stdio_mcp?: boolean;
+};
+
 /**
  * Enriched environment row for the admin console.
  *
@@ -4693,6 +4713,65 @@ export type DeviceLoginStartResponse = {
     expires_in: number;
 };
 
+export type DirectoryArchiveInstall = {
+    archive_path: string;
+};
+
+export type DirectoryEntry = {
+    ref: DirectoryRef;
+    kind: 'skill' | 'plugin' | 'mcp';
+    name: string;
+    title: string;
+    summary?: (string | null);
+    description?: (string | null);
+    category?: (string | null);
+    tags?: Array<(string)>;
+    icon_url?: (string | null);
+    publisher: DirectoryPublisher;
+    origin: DirectoryOrigin;
+    version?: (string | null);
+    digest?: (string | null);
+    components?: (PluginComponents | null);
+    requires?: DirectoryRequires;
+    runs_code?: boolean;
+    status: 'ready' | 'pending' | 'unsupported';
+    unsupported_reason?: (string | null);
+    install?: (DirectoryArchiveInstall | DirectoryMcpInstall | null);
+};
+
+export type kind4 = 'skill' | 'plugin' | 'mcp';
+
+export type status2 = 'ready' | 'pending' | 'unsupported';
+
+export type DirectoryMcpInstall = {
+    mcp: McpConnectDescriptor;
+};
+
+export type DirectoryOrigin = {
+    label: string;
+    kind: 'marketplace' | 'catalog' | 'directory';
+    repository_url?: (string | null);
+    homepage?: (string | null);
+};
+
+export type kind5 = 'marketplace' | 'catalog' | 'directory';
+
+export type DirectoryPublisher = {
+    name?: (string | null);
+    verified?: boolean;
+};
+
+export type DirectoryRef = {
+    source: 'core-catalog' | 'core-marketplace' | 'core-mcp-directory';
+    id: string;
+};
+
+export type source2 = 'core-catalog' | 'core-marketplace' | 'core-mcp-directory';
+
+export type DirectoryRequires = {
+    credentials?: Array<SkillCredentialRequirementPublic>;
+};
+
 /**
  * Disclaimer projection returned to any authenticated user.
  */
@@ -6356,6 +6435,21 @@ export type ManagedReconcileSkip = {
 export type MarketplaceStatus = 'pending' | 'connected' | 'error' | 'disconnected';
 
 /**
+ * What the desktop needs to connect an MCP directory entry.
+ */
+export type McpConnectDescriptor = {
+    transport: 'stdio' | 'http' | 'sse';
+    url?: (string | null);
+    package?: (McpPackage | null);
+    auth: 'none' | 'oauth' | 'bearer' | 'env';
+    env?: Array<McpEnvVar>;
+};
+
+export type transport = 'stdio' | 'http' | 'sse';
+
+export type auth = 'none' | 'oauth' | 'bearer' | 'env';
+
+/**
  * Resolved display projection for an allowed platform user.
  */
 export type MCPConnectorAllowedUser = {
@@ -6448,12 +6542,126 @@ export type MCPConnectorUpdate = {
     max_clients?: (number | null);
 };
 
+export type McpDirectoryAccessUpdate = {
+    access: 'default' | 'banned';
+    reason?: (string | null);
+};
+
+export type access2 = 'default' | 'banned';
+
+export type McpDirectoryEntriesPublic = {
+    data: Array<McpDirectoryEntryPublic>;
+    count: number;
+};
+
+/**
+ * A manual entry. Cross-field rules (transport ⇔ url / package, HTTPS
+ * only, env names) are checked by the service, so create and update share
+ * one rule set.
+ */
+export type McpDirectoryEntryCreate = {
+    name: string;
+    title: string;
+    description?: (string | null);
+    icon_url?: (string | null);
+    categories?: Array<(string)>;
+    transport: 'stdio' | 'http' | 'sse';
+    url?: (string | null);
+    package?: (McpPackage | null);
+    auth?: 'none' | 'oauth' | 'bearer' | 'env';
+    env?: Array<McpEnvVar>;
+    homepage?: (string | null);
+    publisher_name?: (string | null);
+    verified?: boolean;
+};
+
+export type McpDirectoryEntryPublic = {
+    id: string;
+    name: string;
+    title: string;
+    description?: (string | null);
+    icon_url?: (string | null);
+    categories?: Array<(string)>;
+    transport: string;
+    url?: (string | null);
+    package?: (McpPackage | null);
+    auth: string;
+    env?: Array<McpEnvVar>;
+    homepage?: (string | null);
+    publisher_name?: (string | null);
+    verified: boolean;
+    source: string;
+    source_ref?: (string | null);
+    access: string;
+    access_reason?: (string | null);
+    access_changed_at?: (string | null);
+    created_at: string;
+    updated_at: string;
+};
+
+/**
+ * Partial update; an omitted field is unchanged, an explicit ``null``
+ * clears it. ``name`` is immutable (it is the entry's slug).
+ */
+export type McpDirectoryEntryUpdate = {
+    title?: (string | null);
+    description?: (string | null);
+    icon_url?: (string | null);
+    categories?: (Array<(string)> | null);
+    transport?: ('stdio' | 'http' | 'sse' | null);
+    url?: (string | null);
+    package?: (McpPackage | null);
+    auth?: ('none' | 'oauth' | 'bearer' | 'env' | null);
+    env?: (Array<McpEnvVar> | null);
+    homepage?: (string | null);
+    publisher_name?: (string | null);
+    verified?: (boolean | null);
+};
+
+export type McpDirectoryImportResult = {
+    created?: number;
+    updated?: number;
+    unchanged?: number;
+    skipped?: Array<McpDirectoryImportSkipped>;
+    stale?: Array<(string)>;
+};
+
+export type McpDirectoryImportSkipped = {
+    id: string;
+    reason: string;
+};
+
+/**
+ * One value an MCP server needs from the user. Never a value, only a name.
+ */
+export type McpEnvVar = {
+    name: string;
+    secret?: boolean;
+    description?: (string | null);
+    [key: string]: unknown | string | boolean;
+};
+
 /**
  * App MCP Server connection info.
  */
 export type McpInfoResponse = {
     mcp_server_url: string;
 };
+
+/**
+ * How a local-process (stdio) MCP server is fetched and started.
+ */
+export type McpPackage = {
+    registry: 'npm' | 'pypi' | 'oci';
+    name: string;
+    version?: (string | null);
+    /**
+     * Command-line arguments, shown to every account. Never put a secret here: secrets belong in env, which carries names only.
+     */
+    args?: Array<(string)>;
+};
+
+export type registry = 'npm' | 'pypi' | 'oci';
 
 /**
  * Result of either connect helper — what it created / linked.
@@ -7669,6 +7877,7 @@ export type ServerConfig = {
     google_auto_register?: boolean;
     default_user_role?: string;
     invite_include_desktop_default?: boolean;
+    addons_directory_version?: number;
     updated_at?: string;
     updated_by_id?: (string | null);
 };
@@ -7870,7 +8079,7 @@ export type SetupStatusResponse = {
     setup_url?: (string | null);
 };
 
-export type status2 = 'ready' | 'needs_setup' | 'publisher_broken';
+export type status3 = 'ready' | 'needs_setup' | 'publisher_broken';
 
 /**
  * Response model for AI credentials shared with the current user.
@@ -8420,7 +8629,7 @@ export type SyncPushResult = {
     server_record?: (SyncRecordPublic | null);
 };
 
-export type status3 = 'applied' | 'conflict' | 'unchanged' | 'rejected';
+export type status4 = 'applied' | 'conflict' | 'unchanged' | 'rejected';
 
 export type SyncRecordPublic = {
     collection: string;
@@ -8585,7 +8794,7 @@ export type TaskTarget = {
     requires_approval?: boolean;
 };
 
-export type kind4 = 'folder' | 'kit' | 'cinna' | 'desktop' | 'external';
+export type kind6 = 'folder' | 'kit' | 'cinna' | 'desktop' | 'external';
 
 export type location = 'local' | 'remote';
 
@@ -9561,6 +9770,19 @@ export type ActivitiesMarkActivitiesAsReadData = {
 export type ActivitiesMarkActivitiesAsReadResponse = ({
     [key: string]: unknown;
 });
+
+export type AddonsGetAddonsDirectoryData = {
+    category?: (string | null);
+    ifNoneMatch?: (string | null);
+    kind?: ('skill' | 'plugin' | 'mcp' | null);
+    limit?: (number | null);
+    runsOn?: ("desktop" | null);
+    search?: (string | null);
+    skip?: number;
+    source?: ('core-catalog' | 'core-marketplace' | 'core-mcp-directory' | null);
+};
+
+export type AddonsGetAddonsDirectoryResponse = (AddonsDirectoryPublic);
 
 export type AdminAiKeysListAiKeysData = {
     kind?: (AdminAIKeyKind | null);
@@ -12986,6 +13208,36 @@ export type McpConsentApproveConsentData = {
 };
 
 export type McpConsentApproveConsentResponse = (ConsentApproveResponse);
+
+export type McpDirectoryListMcpDirectoryEntriesResponse = (McpDirectoryEntriesPublic);
+
+export type McpDirectoryCreateMcpDirectoryEntryData = {
+    requestBody: McpDirectoryEntryCreate;
+};
+
+export type McpDirectoryCreateMcpDirectoryEntryResponse = (McpDirectoryEntryPublic);
+
+export type McpDirectoryUpdateMcpDirectoryEntryData = {
+    entryId: string;
+    requestBody: McpDirectoryEntryUpdate;
+};
+
+export type McpDirectoryUpdateMcpDirectoryEntryResponse = (McpDirectoryEntryPublic);
+
+export type McpDirectoryDeleteMcpDirectoryEntryData = {
+    entryId: string;
+};
+
+export type McpDirectoryDeleteMcpDirectoryEntryResponse = (Message);
+
+export type McpDirectorySetMcpDirectoryEntryAccessData = {
+    entryId: string;
+    requestBody: McpDirectoryAccessUpdate;
+};
+
+export type McpDirectorySetMcpDirectoryEntryAccessResponse = (McpDirectoryEntryPublic);
+
+export type McpDirectoryImportMcpDirectoryIndexResponse = (McpDirectoryImportResult);
 
 export type McpOauthGetProtectedResourceMetadataData = {
     resourcePath: string;

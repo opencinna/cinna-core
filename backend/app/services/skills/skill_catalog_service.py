@@ -76,6 +76,7 @@ from app.models.skills.skill_package_access_grant import (
 from app.models.skills.skill_package_revision import SkillPackageRevision
 from app.models.events.security_event import CATALOG_GRANTS_CHANGED
 from app.models.users.user import User
+from app.services.addons.directory_version import AddonsDirectoryVersion
 from app.services.agents.agent_service import AgentService, CanBuildError
 from app.services.agents.agent_skills_service import AgentSkillsService
 from app.services.agents.skill_manifest import (
@@ -1495,6 +1496,7 @@ class SkillCatalogService:
                     session, package, granted_by, catalog_grants
                 )
 
+        AddonsDirectoryVersion.bump(session)
         session.commit()
         session.refresh(package)
         return gained
@@ -2025,6 +2027,7 @@ class SkillCatalogService:
             package.is_listed = data.is_listed
         package.updated_at = datetime.now(UTC)
         session.add(package)
+        AddonsDirectoryVersion.bump(session)
         session.commit()
         session.refresh(package)
         return package
@@ -2066,6 +2069,7 @@ class SkillCatalogService:
         session.add(package)
         session.flush()
         session.delete(package)  # revisions and grants cascade in the database
+        AddonsDirectoryVersion.bump(session)
         session.commit()
         try:
             shutil.rmtree(SkillCatalogService.package_dir(package_uuid), ignore_errors=True)
@@ -2089,6 +2093,7 @@ class SkillCatalogService:
         package.is_listed = False
         package.updated_at = datetime.now(UTC)
         session.add(package)
+        AddonsDirectoryVersion.bump(session)
         session.commit()
         session.refresh(package)
         logger.info(
@@ -2203,6 +2208,7 @@ class SkillCatalogService:
             session, SKILL, package, target, granted_by
         )
         if created and commit:
+            AddonsDirectoryVersion.bump(session)
             session.commit()
             session.refresh(grant)
         return grant
@@ -2233,6 +2239,7 @@ class SkillCatalogService:
         except CatalogConflictError as exc:
             raise SkillCatalogError("last_maintainer", str(exc)) from exc
         session.delete(grant)
+        AddonsDirectoryVersion.bump(session)
         session.commit()
 
     @staticmethod

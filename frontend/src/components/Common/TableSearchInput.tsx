@@ -19,7 +19,7 @@ export function useDebouncedValue<T>(value: T, delayMs = 250): T {
   return debounced
 }
 
-interface UserGroupSearchInputProps {
+interface TableSearchInputProps {
   value: string
   onChange: (value: string) => void
   /** Called by the clear `X`; the caller moves focus back to the input. */
@@ -30,15 +30,17 @@ interface UserGroupSearchInputProps {
 }
 
 /**
- * The toolbar search of the User Groups list and the group's two tabs, built
+ * The toolbar search of a manage-list table (User Groups and its two tabs,
+ * marketplace entries, the MCP directory). Moved here from `Admin/UserGroups/`
+ * at its third consumer. Built
  * from the `credentials.tsx` skeleton: a `Search` glyph, and a tooltipped clear
  * `X` once something is typed. Debouncing is the caller's
  * (`useDebouncedValue`): the Shares tab filters in the browser and needs none.
  */
-export const UserGroupSearchInput = forwardRef<
+export const TableSearchInput = forwardRef<
   HTMLInputElement,
-  UserGroupSearchInputProps
->(function UserGroupSearchInput(
+  TableSearchInputProps
+>(function TableSearchInput(
   { value, onChange, onClear, ariaLabel, placeholder = "Search" },
   ref,
 ) {

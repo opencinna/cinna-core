@@ -64,6 +64,7 @@ import { Route as LayoutAdminUsersRouteImport } from './routes/_layout/admin/use
 import { Route as LayoutAdminUserGroupsRouteImport } from './routes/_layout/admin/user-groups'
 import { Route as LayoutAdminServerConfigurationRouteImport } from './routes/_layout/admin/server-configuration'
 import { Route as LayoutAdminRoutingTuningRouteImport } from './routes/_layout/admin/routing-tuning'
+import { Route as LayoutAdminMcpDirectoryRouteImport } from './routes/_layout/admin/mcp-directory'
 import { Route as LayoutAdminMarketplacesRouteImport } from './routes/_layout/admin/marketplaces'
 import { Route as LayoutAdminLlmProvidersRouteImport } from './routes/_layout/admin/llm-providers'
 import { Route as LayoutAdminCatalogRouteImport } from './routes/_layout/admin/catalog'
@@ -366,6 +367,11 @@ const LayoutAdminRoutingTuningRoute =
     path: '/admin/routing-tuning',
     getParentRoute: () => LayoutRoute,
   } as any)
+const LayoutAdminMcpDirectoryRoute = LayoutAdminMcpDirectoryRouteImport.update({
+  id: '/admin/mcp-directory',
+  path: '/admin/mcp-directory',
+  getParentRoute: () => LayoutRoute,
+} as any)
 const LayoutAdminMarketplacesRoute = LayoutAdminMarketplacesRouteImport.update({
   id: '/admin/marketplaces',
   path: '/admin/marketplaces',
@@ -502,6 +508,7 @@ export interface FileRoutesByFullPath {
   '/admin/catalog': typeof LayoutAdminCatalogRoute
   '/admin/llm-providers': typeof LayoutAdminLlmProvidersRoute
   '/admin/marketplaces': typeof LayoutAdminMarketplacesRoute
+  '/admin/mcp-directory': typeof LayoutAdminMcpDirectoryRoute
   '/admin/routing-tuning': typeof LayoutAdminRoutingTuningRoute
   '/admin/server-configuration': typeof LayoutAdminServerConfigurationRoute
   '/admin/user-groups': typeof LayoutAdminUserGroupsRoute
@@ -571,6 +578,7 @@ export interface FileRoutesByTo {
   '/admin/catalog': typeof LayoutAdminCatalogRoute
   '/admin/llm-providers': typeof LayoutAdminLlmProvidersRoute
   '/admin/marketplaces': typeof LayoutAdminMarketplacesRoute
+  '/admin/mcp-directory': typeof LayoutAdminMcpDirectoryRoute
   '/admin/routing-tuning': typeof LayoutAdminRoutingTuningRoute
   '/admin/server-configuration': typeof LayoutAdminServerConfigurationRoute
   '/admin/user-groups': typeof LayoutAdminUserGroupsRoute
@@ -646,6 +654,7 @@ export interface FileRoutesById {
   '/_layout/admin/catalog': typeof LayoutAdminCatalogRoute
   '/_layout/admin/llm-providers': typeof LayoutAdminLlmProvidersRoute
   '/_layout/admin/marketplaces': typeof LayoutAdminMarketplacesRoute
+  '/_layout/admin/mcp-directory': typeof LayoutAdminMcpDirectoryRoute
   '/_layout/admin/routing-tuning': typeof LayoutAdminRoutingTuningRoute
   '/_layout/admin/server-configuration': typeof LayoutAdminServerConfigurationRoute
   '/_layout/admin/user-groups': typeof LayoutAdminUserGroupsRoute
@@ -721,6 +730,7 @@ export interface FileRouteTypes {
     | '/admin/catalog'
     | '/admin/llm-providers'
     | '/admin/marketplaces'
+    | '/admin/mcp-directory'
     | '/admin/routing-tuning'
     | '/admin/server-configuration'
     | '/admin/user-groups'
@@ -790,6 +800,7 @@ export interface FileRouteTypes {
     | '/admin/catalog'
     | '/admin/llm-providers'
     | '/admin/marketplaces'
+    | '/admin/mcp-directory'
     | '/admin/routing-tuning'
     | '/admin/server-configuration'
     | '/admin/user-groups'
@@ -864,6 +875,7 @@ export interface FileRouteTypes {
     | '/_layout/admin/catalog'
     | '/_layout/admin/llm-providers'
     | '/_layout/admin/marketplaces'
+    | '/_layout/admin/mcp-directory'
     | '/_layout/admin/routing-tuning'
     | '/_layout/admin/server-configuration'
     | '/_layout/admin/user-groups'
@@ -1311,6 +1323,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutAdminRoutingTuningRouteImport
       parentRoute: typeof LayoutRoute
     }
+    '/_layout/admin/mcp-directory': {
+      id: '/_layout/admin/mcp-directory'
+      path: '/admin/mcp-directory'
+      fullPath: '/admin/mcp-directory'
+      preLoaderRoute: typeof LayoutAdminMcpDirectoryRouteImport
+      parentRoute: typeof LayoutRoute
+    }
     '/_layout/admin/marketplaces': {
       id: '/_layout/admin/marketplaces'
       path: '/admin/marketplaces'
@@ -1520,6 +1539,7 @@ interface LayoutRouteChildren {
   LayoutAdminCatalogRoute: typeof LayoutAdminCatalogRoute
   LayoutAdminLlmProvidersRoute: typeof LayoutAdminLlmProvidersRoute
   LayoutAdminMarketplacesRoute: typeof LayoutAdminMarketplacesRoute
+  LayoutAdminMcpDirectoryRoute: typeof LayoutAdminMcpDirectoryRoute
   LayoutAdminRoutingTuningRoute: typeof LayoutAdminRoutingTuningRoute
   LayoutAdminServerConfigurationRoute: typeof LayoutAdminServerConfigurationRoute
   LayoutAdminUserGroupsRoute: typeof LayoutAdminUserGroupsRoute
@@ -1560,6 +1580,7 @@ const LayoutRouteChildren: LayoutRouteChildren = {
   LayoutAdminCatalogRoute: LayoutAdminCatalogRoute,
   LayoutAdminLlmProvidersRoute: LayoutAdminLlmProvidersRoute,
   LayoutAdminMarketplacesRoute: LayoutAdminMarketplacesRoute,
+  LayoutAdminMcpDirectoryRoute: LayoutAdminMcpDirectoryRoute,
   LayoutAdminRoutingTuningRoute: LayoutAdminRoutingTuningRoute,
   LayoutAdminServerConfigurationRoute: LayoutAdminServerConfigurationRoute,
   LayoutAdminUserGroupsRoute: LayoutAdminUserGroupsRoute,

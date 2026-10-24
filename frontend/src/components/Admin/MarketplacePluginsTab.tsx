@@ -16,15 +16,15 @@ import { useMemo, useRef, useState } from "react"
 
 import type { LLMPluginMarketplacePublic } from "@/client"
 import { LlmPluginsService } from "@/client"
-import {
-  TableEmptyBlock,
-  UserGroupSearchInput,
-  useDebouncedValue,
-} from "@/components/Admin/UserGroups/UserGroupSearchInput"
 import { DataTable } from "@/components/Common/DataTable"
 import { DEFAULT_PAGE_SIZE } from "@/components/Common/DataTablePagination"
 import { FilterMenu, type FilterOption } from "@/components/Common/FilterMenu"
 import { QueryErrorAlert } from "@/components/Common/QueryErrorAlert"
+import {
+  TableEmptyBlock,
+  TableSearchInput,
+  useDebouncedValue,
+} from "@/components/Common/TableSearchInput"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import useCustomToast from "@/hooks/useCustomToast"
@@ -236,7 +236,7 @@ export function MarketplacePluginsTab({
     <div className="space-y-4">
       {connected && (
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <UserGroupSearchInput
+          <TableSearchInput
             ref={searchRef}
             value={search}
             onChange={changeSearch}

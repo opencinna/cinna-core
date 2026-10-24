@@ -6,6 +6,11 @@ import { AdminUserGroupsService, type UserGroupPublic } from "@/client"
 import { DataTable } from "@/components/Common/DataTable"
 import { DEFAULT_PAGE_SIZE } from "@/components/Common/DataTablePagination"
 import { QueryErrorAlert } from "@/components/Common/QueryErrorAlert"
+import {
+  TableEmptyBlock,
+  TableSearchInput,
+  useDebouncedValue,
+} from "@/components/Common/TableSearchInput"
 import { Button } from "@/components/ui/button"
 import {
   DeleteUserGroupDialog,
@@ -13,11 +18,6 @@ import {
 } from "./DeleteUserGroupDialog"
 import { PendingTable } from "./PendingTable"
 import { UserGroupFormDialog } from "./UserGroupFormDialog"
-import {
-  TableEmptyBlock,
-  UserGroupSearchInput,
-  useDebouncedValue,
-} from "./UserGroupSearchInput"
 import { getUserGroupColumns } from "./userGroupColumns"
 import { userGroupKeys } from "./userGroupQueries"
 
@@ -128,7 +128,7 @@ export function UserGroupsTable({ onCreate }: { onCreate: () => void }) {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <UserGroupSearchInput
+        <TableSearchInput
           ref={searchRef}
           value={search}
           onChange={changeSearch}

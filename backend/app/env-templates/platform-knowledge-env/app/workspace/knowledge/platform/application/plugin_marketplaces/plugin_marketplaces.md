@@ -162,6 +162,10 @@ Update detection → compare AgentPluginLink.installed_commit_hash
 - **SSH Keys** — Uses the same `user_ssh_keys` table as knowledge source Git repos for private repository authentication. See [ssh_keys](../ssh_keys/ssh_keys.md).
 - **Git Operations** — Shares the `backend/app/services/knowledge/git_operations.py` utility with knowledge sources for clone/pull operations.
 
+## Addons directory
+
+Entries of every marketplace the caller may discover (owner or public discovery) are also served through the [Addons Directory](../addons_directory/addons_directory.md), with their snapshot status, components and archive path. Syncs and snapshot worker batches refresh that directory.
+
 ## Changelog
 
 - 2026-10-24: Plugin-format (claude/codex) entries are snapshotted too, local ones in the sync and external ones by a background worker; entries carry a component analysis; new `archive`, `entries` and `snapshots/retry` routes.

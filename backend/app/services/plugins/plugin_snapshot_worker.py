@@ -43,6 +43,7 @@ from app.models.plugins.llm_plugin import (
     LLMPluginMarketplace,
     LLMPluginMarketplacePlugin,
 )
+from app.services.addons.directory_version import AddonsDirectoryVersion
 from app.services.common.egress_guard import EgressBlockedError
 from app.services.knowledge import git_operations
 from app.services.plugins.marketplace_skill_snapshots import (
@@ -377,6 +378,8 @@ class PluginSnapshotWorker:
                     break
                 for job, outcome in immediate:
                     cls._finish(_default_session_factory, job, claim_id, outcome)
+                if immediate:
+                    cls._bump_directory(_default_session_factory)
                 if not groups:
                     continue
                 with cls._state_lock:
@@ -397,6 +400,7 @@ class PluginSnapshotWorker:
             for job, _src in group.items:
                 cls._release(_default_session_factory, job, claim_id)
         finally:
+            cls._bump_directory(_default_session_factory)
             with cls._state_lock:
                 left = cls._inflight.get(claim_id, 1) - 1
                 if left <= 0:
@@ -438,6 +442,19 @@ class PluginSnapshotWorker:
                     logger.exception("Inline plugin snapshot group failed")
                     for job, _src in group.items:
                         cls._release(factory, job, claim_id)
+            cls._bump_directory(factory)
+
+    @classmethod
+    def _bump_directory(cls, factory: SessionFactory) -> None:
+        """One addons-directory version bump per finished batch (group or
+        immediate outcomes), not per row: the singleton row stays out of the
+        per-row locks. Never raises; a missed bump costs at most the cache TTL."""
+        try:
+            with factory() as session:
+                AddonsDirectoryVersion.bump(session)
+                session.commit()
+        except Exception as exc:
+            logger.error("Could not bump the addons directory version: %s", exc)
 
     # -- claim -----------------------------------------------------------------
 

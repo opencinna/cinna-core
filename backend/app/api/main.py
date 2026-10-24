@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from app.api.routes import (
     a2a,
     access_tokens,
+    addons,
     admin_ai_keys,
     admin_environments,
     admin_ai_providers,
@@ -45,6 +46,7 @@ from app.api.routes import (
     acp_connectors,
     mcp_connectors,
     mcp_consent,
+    mcp_directory,
     mcp_providers,
     events,
     files,
@@ -170,6 +172,8 @@ api_router.include_router(server_channels.router)
 api_router.include_router(user_channels.router)
 api_router.include_router(files.router)
 api_router.include_router(llm_plugins.router)
+api_router.include_router(addons.router)  # /addons/directory (Cinna Desktop Add picker)
+api_router.include_router(mcp_directory.router)  # /mcp-directory/* (superuser)
 api_router.include_router(input_tasks.router)
 # Before task_agent_api: its /agent/tasks/{task_id}/... patterns would capture /protocol/*.
 api_router.include_router(task_protocol_api.router)

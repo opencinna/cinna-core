@@ -240,3 +240,22 @@ export function mcpAuthLabel(auth: string | null | undefined): string | null {
 export function plural(count: number, one: string, many = `${one}s`): string {
   return `${count} ${count === 1 ? one : many}`
 }
+
+/**
+ * An entry's access as the user experiences it — the wire word `default` is
+ * never printed (UI spec S7 label table). Shared by the marketplace entries
+ * list (S1) and the MCP directory (S4), so a banned plugin and a banned server
+ * read alike. `mode` is the marketplace's access mode; an MCP directory entry
+ * has none and reads like `allow_all`.
+ */
+export function entryAccessLabel(
+  access: string | null | undefined,
+  mode?: "allow_all" | "allowlist" | null,
+): { label: string; tone: "on" | "warning" | "error" } {
+  if (access === "banned") return { label: "Banned", tone: "error" }
+  if (access === "allowed") return { label: "Allowed", tone: "on" }
+  if (mode === "allowlist") {
+    return { label: "Waiting for approval", tone: "warning" }
+  }
+  return { label: "Visible", tone: "on" }
+}

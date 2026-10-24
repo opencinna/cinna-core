@@ -13,6 +13,7 @@ Routes marked *Not available via `cinna api`* are refused by the account CLI esc
 | Access Tokens | [access_tokens.md](./access_tokens.md) | 5 |
 | Acp Connectors | [acp_connectors.md](./acp_connectors.md) | 9 |
 | Activities | [activities.md](./activities.md) | 8 |
+| Addons | [addons.md](./addons.md) | 1 |
 | Admin Ai Keys | [admin_ai_keys.md](./admin_ai_keys.md) | 5 |
 | Admin Ai Providers | [admin_ai_providers.md](./admin_ai_providers.md) | 9 |
 | Admin Environments | [admin_environments.md](./admin_environments.md) | 3 |
@@ -57,6 +58,7 @@ Routes marked *Not available via `cinna api`* are refused by the account CLI esc
 | Llm Plugins | [llm_plugins.md](./llm_plugins.md) | 18 |
 | Mail Servers | [mail_servers.md](./mail_servers.md) | 6 |
 | Mcp Connectors | [mcp_connectors.md](./mcp_connectors.md) | 9 |
+| Mcp Directory | [mcp_directory.md](./mcp_directory.md) | 6 |
 | Mcp Providers | [mcp_providers.md](./mcp_providers.md) | 8 |
 | Messages | [messages.md](./messages.md) | 5 |
 | Mfa | [mfa.md](./mfa.md) | 13 |

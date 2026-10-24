@@ -15,12 +15,13 @@ import {
   type UserGroupPublic,
   type UserGroupSharePublic,
 } from "@/client"
+import { DataTable } from "@/components/Common/DataTable"
 import {
   FilterMenu,
   type FilterOption,
 } from "@/components/Common/FilterMenu"
-import { DataTable } from "@/components/Common/DataTable"
 import { QueryErrorAlert } from "@/components/Common/QueryErrorAlert"
+import { TableEmptyBlock, TableSearchInput } from "@/components/Common/TableSearchInput"
 import { Button } from "@/components/ui/button"
 import {
   shareFamily,
@@ -31,7 +32,6 @@ import {
 import { PendingTable } from "./PendingTable"
 import { RevokeUserGroupShareDialog } from "./RevokeUserGroupShareDialog"
 import { getShareColumns } from "./shareColumns"
-import { TableEmptyBlock, UserGroupSearchInput } from "./UserGroupSearchInput"
 import { userGroupKeys } from "./userGroupQueries"
 
 const FAMILY_FILTERS: readonly FilterOption<UserGroupShareFamily>[] = [
@@ -159,7 +159,7 @@ export function UserGroupSharesTab({ group }: { group: UserGroupPublic }) {
           onChange={setFamily}
           allValue="all"
         />
-        <UserGroupSearchInput
+        <TableSearchInput
           ref={searchRef}
           value={search}
           onChange={setSearch}

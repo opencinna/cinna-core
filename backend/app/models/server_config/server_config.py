@@ -3,7 +3,7 @@ import uuid
 from datetime import UTC, datetime
 
 from pydantic import field_validator
-from sqlalchemy import Text
+from sqlalchemy import BigInteger, Text
 from sqlmodel import Field, SQLModel
 
 # ── Registration modes ─────────────────────────────────────────────────
@@ -205,6 +205,15 @@ class ServerConfig(SQLModel, table=True):
     # Pre-ticks the "include desktop instructions" checkbox in the
     # invitation wizard. Presentation default only — no security meaning.
     invite_include_desktop_default: bool = Field(default=True)
+
+    # Monotonic counter of changes to what ``GET /addons/directory`` can
+    # return (marketplace sync and snapshots, catalog publish / visibility,
+    # MCP directory writes). Keys the directory's short in-process cache; the
+    # ETag itself hashes the body, so a missed bump costs staleness, never a
+    # wrong 304. Bumped by ``AddonsDirectoryVersion.bump`` only.
+    addons_directory_version: int = Field(
+        default=0, sa_type=BigInteger, nullable=False, sa_column_kwargs={"server_default": "0"}
+    )
 
     # Audit
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
