@@ -10,6 +10,9 @@ import { createServer } from "vite"
 const frontendRoot = fileURLToPath(new URL("..", import.meta.url))
 const NOTE =
   "Setup link copied. Paste it into the Server URL field in Cinna Desktop."
+// Linux reads the clipboard on first launch, so its note asks for no paste.
+const LINUX_NOTE =
+  "Setup link copied. Cinna Desktop will offer to connect to this server the first time it opens."
 const USER_AGENTS = {
   darwin:
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
@@ -140,10 +143,20 @@ for (const engine of ["chromium", "firefox", "webkit"]) {
   })
 }
 
-test("Linux download writes the same link", async (t) => {
+test("Linux download writes the same link and shows the offer note", async (t) => {
   const { page, writes, deepLink } = await openSection(t, { platform: "linux" })
   await page.getByRole("link", { name: /Download for Linux/ }).click()
   await expect.poll(writes).toEqual([deepLink])
+  await expect(
+    page.getByRole("status").filter({ hasText: LINUX_NOTE }),
+  ).toBeVisible()
+  await expect(page.getByRole("status").filter({ hasText: NOTE })).toHaveCount(
+    0,
+  )
+  // No Server URL field was mentioned, so the address line keeps its wording.
+  await expect(
+    page.getByText("…or enter this server address in the app:"),
+  ).toBeVisible()
 })
 
 for (const engine of ["chromium", "firefox", "webkit"]) {
@@ -275,7 +288,7 @@ test("with both platforms shown, the note sits under the button clicked", async 
   await expect(statuses).toHaveCount(2)
   const linux = page.getByRole("link", { name: /Download for Linux/ })
   await linux.click()
-  await expect(statuses.nth(1)).toHaveText(NOTE)
+  await expect(statuses.nth(1)).toHaveText(LINUX_NOTE)
   await expect(statuses.nth(0)).toHaveText("")
   const linuxBox = await linux.boundingBox()
   const noteBox = await statuses.nth(1).boundingBox()

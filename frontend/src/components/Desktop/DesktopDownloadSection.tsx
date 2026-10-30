@@ -67,16 +67,22 @@ function detectPlatform(): Platform | null {
 
 /**
  * What the page says after a download click has put the connect link on the
- * clipboard. One constant, so switching texts is a one-line change.
+ * clipboard, per platform, because the desktop picks the link up differently
+ * on each.
  *
- * Shipped: text B, for a desktop that cannot read the clipboard on first launch
- * without a macOS prompt, so the person pastes the link into its Server URL
- * field. Once the desktop confirms it picks the link up by itself (text A),
- * this becomes:
- *   "Setup link copied. Cinna Desktop will offer to connect to this server the first time it opens."
+ * Linux: the app reads the clipboard on its first launch and opens on
+ * "Connect to <host>?" by itself, so there is nothing for the person to do.
+ *
+ * macOS: the app does not read the clipboard unprompted (doing so on first
+ * launch raises the system paste prompt), so the person pastes the link into
+ * its Server URL field.
  */
-const LINK_COPIED_NOTE =
-  "Setup link copied. Paste it into the Server URL field in Cinna Desktop."
+const LINK_COPIED_NOTE: Record<Platform, string> = {
+  darwin:
+    "Setup link copied. Paste it into the Server URL field in Cinna Desktop.",
+  linux:
+    "Setup link copied. Cinna Desktop will offer to connect to this server the first time it opens.",
+}
 
 /**
  * The line under a download button that says the connect link was copied.
@@ -87,15 +93,20 @@ const LINK_COPIED_NOTE =
  * in the same grid cell. The visible copy is an `<output>` (a status region),
  * so the note is announced when it appears.
  */
-function LinkCopiedNote({ shown }: { shown: boolean }) {
+function LinkCopiedNote({
+  platform,
+  shown,
+}: {
+  platform: Platform
+  shown: boolean
+}) {
+  const note = LINK_COPIED_NOTE[platform]
   return (
     <p className="grid text-center text-xs text-muted-foreground">
       <span aria-hidden="true" className="invisible [grid-area:1/1]">
-        {LINK_COPIED_NOTE}
+        {note}
       </span>
-      <output className="[grid-area:1/1]">
-        {shown ? LINK_COPIED_NOTE : null}
-      </output>
+      <output className="[grid-area:1/1]">{shown ? note : null}</output>
     </p>
   )
 }
@@ -162,8 +173,9 @@ export function DesktopDownloadSection() {
   const [linkCopiedFor, setLinkCopiedFor] = useState<Platform | null>(null)
 
   /**
-   * Hands the connect link to the desktop app through the clipboard; its first
-   * launch reads it and offers to connect here.
+   * Hands the connect link to the desktop app through the clipboard: on Linux
+   * its first launch reads it and offers to connect here, on macOS the person
+   * pastes it (see `LINK_COPIED_NOTE`).
    *
    * `writeText` is the first thing this does, with nothing awaited before it:
    * Safari drops the click's user activation after the first `await`. The
@@ -275,7 +287,10 @@ export function DesktopDownloadSection() {
                   ? "Intel Mac?"
                   : "Apple Silicon Mac (M1 or later)?"}
               </button>
-              <LinkCopiedNote shown={linkCopiedFor === "darwin"} />
+              <LinkCopiedNote
+                platform="darwin"
+                shown={linkCopiedFor === "darwin"}
+              />
             </>
           ) : detectedArch === "arm64" ? (
             /* Only x86-64 Linux assets are published, so an arm64 machine
@@ -334,7 +349,10 @@ export function DesktopDownloadSection() {
                   ? "Prefer a .deb package?"
                   : "Prefer the AppImage?"}
               </button>
-              <LinkCopiedNote shown={linkCopiedFor === "linux"} />
+              <LinkCopiedNote
+                platform="linux"
+                shown={linkCopiedFor === "linux"}
+              />
             </>
           )}
         </div>
@@ -360,10 +378,11 @@ export function DesktopDownloadSection() {
 
       <div className="space-y-2">
         <p className="text-xs text-muted-foreground text-center">
-          {/* Once the note has asked for the setup link in the Server URL
-              field, this line must not read as a second, different value
-              for the same field: it becomes the explicit alternative. */}
-          {linkCopiedFor
+          {/* Once the macOS note has asked for the setup link in the Server
+              URL field, this line must not read as a second, different value
+              for the same field: it becomes the explicit alternative. The
+              Linux note asks for no field, so its wording stays. */}
+          {linkCopiedFor === "darwin"
             ? "\u2026or type the plain address there instead:"
             : "\u2026or enter this server address in the app:"}
         </p>
