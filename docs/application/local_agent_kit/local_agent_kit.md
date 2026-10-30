@@ -210,7 +210,7 @@ agent into it with one command.
   that echoes the object it read is the cheapest way to leak the token beside
   it. Either frozen key missing or empty, or the file absent, means "not
   connected".
-- **`kit.py`** — The stdlib-only helper the assistant runs through `uv run` (setup installs `uv` when missing; it provisions Python 3.10+ so the macOS system Python is never a blocker)
+- **`kit.py`** — The stdlib-only helper the assistant runs through `uv run` (setup installs `uv` when missing; it provisions Python 3.10+ so the macOS system Python is never a blocker; inside Cinna Desktop the app provides `uv` itself — desktop release carrying contract 1.18.0)
   (`uv run .cinna-kit/tools/kit.py <command>`, no install step): `new` scaffolds
   an agent from the template, `validate` checks it is coherent and (with
   `--cloud-ready`) import-ready, `list` tables every local agent with its ladder
@@ -355,7 +355,7 @@ publishing the kit — see **Business Rules** below.
    prints one setup
    URL per credential so the user fills secrets in the browser — the CLI never
    sees them.
-4. The user verifies with `cinna chat --agent <slug> "<first example prompt>"`
+4. The user verifies (the post-import cloud test is mandatory; the local conversation test is optional, only the static prompt review and `kit.py validate` are required locally) with `cinna chat --agent <slug> "<first example prompt>"`
    and decides, out loud with the assistant, which copy — local or cloud — is
    now authoritative. See
    [Account CLI Workspace](../cinna_cli_integration/account_cli_workspace.md)

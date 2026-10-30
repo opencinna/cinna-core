@@ -308,7 +308,8 @@ key it looks for in `kit.json` no longer exists: `credentials/`, `.venv/`, `.cla
 `.DS_Store` — with `credentials/` and `app-data/` enforced whatever a kit says.
 
 The contract's list covers everything in that list and more: `artifacts/` (what the
-agent built to publish; the published copy is already in Cinna), `README.md`, `Makefile`,
+agent built to publish; the published copy is already in Cinna), `README.md`, a
+`Makefile` left by an older kit,
 `publications.json`, `.gitignore`, `.cursor/`, `.vscode/`, `.idea/`, `venv/`,
 `node_modules/`, the `.mypy_cache/` and `.ruff_cache/` tool caches, `Thumbs.db`, any
 `credentials.json` at any depth, and private key material (`*.pem`, `*.key`, `*.p12`).

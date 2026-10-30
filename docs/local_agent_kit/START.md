@@ -39,7 +39,9 @@ its reason *before* you build, then build what they choose.
    The tarball root is `cinna-kit/`; it becomes `.cinna-kit/` in the project root.
    If you cannot run network commands yourself, ask the user to run those three
    lines and tell you when they are done.
-4. **Make sure `uv` is installed** — it is the kit's Python runtime. Check with
+4. **Make sure `uv` is installed** — it is the kit's Python runtime. Inside Cinna
+   Desktop, skip this step — the app provides `uv` (unless the app itself says it has no
+   `uv` for this platform; then install it as below). Otherwise check with
    `uv --version`. macOS ships Python 3.9, and the kit tool and every agent need
    3.10+; `uv` downloads and manages the right interpreter on its own, without
    touching the system Python. If it is missing, install it (ask the user to run

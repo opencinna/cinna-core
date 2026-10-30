@@ -589,9 +589,49 @@ def test_validate_warnings_are_not_vacuous(scaffolded_agent: Path) -> None:
     result = run_kit("validate", str(scaffolded_agent), "--json")
     assert result.returncode == 0, "advisory findings must never fail the run"
     warnings = json.loads(result.stdout)["warnings"]
-    assert any("no matching Makefile target" in warning for warning in warnings)
+    # Contract 1.18.0: there is no Makefile mirror, so a renamed command is
+    # never reported against one.
+    assert not any("Makefile" in warning for warning in warnings)
     assert any("schedules but no `status` command" in warning for warning in warnings)
     assert any("uncatalogued.py" in warning for warning in warnings)
+
+
+def test_scaffold_ships_no_makefile(scaffolded_agent: Path) -> None:
+    """Contract 1.18.0: `docs/CLI_COMMANDS.yaml` is the single command source.
+
+    Locally its commands run through `layout.json`'s `local_command_runner`, so
+    the scaffold carries no Makefile and `validate` never asks for one.
+    """
+    assert not (scaffolded_agent / "Makefile").exists()
+
+    result = run_kit("validate", str(scaffolded_agent), "--json")
+    payload = json.loads(result.stdout)
+    findings = payload["errors"] + payload["warnings"]
+    assert not any("Makefile" in finding for finding in findings), findings
+
+
+def test_a_legacy_makefile_is_neither_read_nor_exported(
+    cloud_ready_agent: Path, tmp_path: Path
+) -> None:
+    """An agent scaffolded before 1.18.0 still has a Makefile; it is inert.
+
+    `validate` reports nothing about it — not even a Makefile with none of the
+    catalogue's targets — and `export` leaves it behind, because `Makefile`
+    stays in `cloud_import_excludes`.
+    """
+    (cloud_ready_agent / "Makefile").write_text(
+        "# left by an older kit; no targets\n", encoding="utf-8"
+    )
+
+    result = run_kit("validate", str(cloud_ready_agent), "--json")
+    payload = json.loads(result.stdout)
+    findings = payload["errors"] + payload["warnings"]
+    assert not any("Makefile" in finding for finding in findings), findings
+
+    destination = tmp_path / "Cloud" / "agents" / "invoice-watcher" / "workspace"
+    exported = run_kit("export", str(cloud_ready_agent), "--to", str(destination))
+    assert exported.returncode == 0, f"{exported.stdout}\n{exported.stderr}"
+    assert not (destination / "Makefile").exists()
 
 
 def test_validate_fix_regenerates_workspace_requirements(scaffolded_agent: Path) -> None:
@@ -2756,21 +2796,22 @@ def test_two_unreadable_files_read_by_one_check_yield_ONE_error(
     without knowing the trade was deliberate.
     """
     require_enforced_permissions(tmp_path)
-    catalogue = scaffolded_agent / "docs" / "CLI_COMMANDS.yaml"
-    makefile = scaffolded_agent / "Makefile"
-    assert catalogue.is_file() and makefile.is_file()
+    pyproject = scaffolded_agent / "pyproject.toml"
+    requirements = scaffolded_agent / "workspace_requirements.txt"
+    assert pyproject.is_file() and requirements.is_file()
 
-    with unreadable(catalogue), unreadable(makefile):
+    with unreadable(pyproject), unreadable(requirements):
         result = run_kit("validate", str(scaffolded_agent), "--json")
 
     assert result.returncode == 1
     errors = json.loads(result.stdout)["errors"]
     unreadable_errors = [error for error in errors if "could not be read" in error]
     assert len(unreadable_errors) == 1, unreadable_errors
-    assert "CLI_COMMANDS.yaml" in unreadable_errors[0]
+    assert "pyproject.toml" in unreadable_errors[0]
     assert "the check that reads it was skipped" in unreadable_errors[0]
-    assert "Makefile" not in unreadable_errors[0], (
-        "`_validate_commands` reaches the YAML first, so the Makefile is masked"
+    assert "workspace_requirements.txt" not in unreadable_errors[0], (
+        "`_validate_requirements` reaches pyproject.toml first, so the requirements "
+        "file is masked"
     )
 
 

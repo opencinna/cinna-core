@@ -56,25 +56,23 @@ directory**. So:
 
 If a command needs several steps, write a script that does them and call the script.
 
-## Makefile parity
+## Running a command locally
 
-The `Makefile` is the local mirror. Every YAML entry gets a target with the same
-name, running the same thing with `uv run`:
+`docs/CLI_COMMANDS.yaml` is the single source. A local host turns each cloud-first
+command into a local one with the `local_command_runner` rules in
+`.cinna-kit/layout.json`: apply the first matching rule — a command starting with
+`python ` or `python3 ` becomes `uv run ` when `pyproject.toml` exists — otherwise run
+the command unchanged.
 
-```makefile
-check: ## Monthly data-quality check
-	uv run scripts/check_data.py --month
+| In `docs/CLI_COMMANDS.yaml` | Run locally |
+|-----------------------------|-------------|
+| `python scripts/check_data.py --month` | `uv run scripts/check_data.py --month` |
+| `python scripts/weekly_report.py` | `uv run scripts/weekly_report.py` |
 
-report: ## Generate the weekly report
-	uv run scripts/weekly_report.py
-```
+In a terminal, run that localized line yourself from the agent root. Cinna Desktop
+does the same for `/run:<name>`.
 
-Add both in the same change. `kit.py validate` warns when a command name has no
-matching Makefile target, because a drifted pair means one of the two is wrong and
-you cannot tell which.
-
-Also add a `## comment` to every target — `make help` is generated from those, and a
-target nobody can discover is not a command.
+Older agents may still have a `Makefile`; nothing reads it and it never travels.
 
 ## Naming
 
@@ -97,7 +95,6 @@ Keep the set small. Six well-named commands beat twenty that nobody can tell apa
 
 - `docs/CLI_COMMANDS.yaml` exists with at least the `status` command.
 - Every declared command uses a relative path, `python` (not `uv run`), and one line.
-- Every declared command has a matching Makefile target with a `##` description.
-- Every command has been run successfully at least once, from the agent root.
+- Every command, localized, has been run once from the agent root.
 - No command string contains a credential, a token or an absolute path.
 - Command names are operation names and each is unique in the file.

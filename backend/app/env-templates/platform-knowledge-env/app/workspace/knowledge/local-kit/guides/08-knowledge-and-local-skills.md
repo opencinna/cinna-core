@@ -407,7 +407,7 @@ Migrate one when you next touch it, and not before:
 2. Move the doc to `skills/<name>/SKILL.md` and add the `name` / `description`
    frontmatter.
 3. Move the scripts only that skill uses into `skills/<name>/scripts/` and fix their
-   paths in `docs/CLI_COMMANDS.yaml`, the `Makefile` and `scripts/README.md`.
+   paths in `docs/CLI_COMMANDS.yaml` and `scripts/README.md`.
 4. Replace the workflow prompt's block with the two-line trigger above.
 5. `kit.py validate .`
 
@@ -440,14 +440,14 @@ skills/
   key itself.
 - A script used by exactly one skill lives in that skill's `scripts/`.
 - A script that belongs to no skill stays in `scripts/`.
-- Commands and Makefile targets use the full path from the agent root:
+- Commands use the full path from the agent root:
   `python skills/timeoff-check/scripts/check_employee_timeoff.py`.
 - Scripts are always run from the agent root, so top-level helpers stay importable.
 
 Keep it flat below ~8 scripts or when the boundaries are not crisp. Premature
 organisation adds friction without clarity. It is fine to start flat and reorganise
 later — when you do, update every path in `docs/WORKFLOW_PROMPT.md`,
-`scripts/README.md`, `README.md`, `Makefile`, `docs/CLI_COMMANDS.yaml` and every
+`scripts/README.md`, `README.md`, `docs/CLI_COMMANDS.yaml` and every
 `SKILL.md`, in the same change.
 
 ## Done when

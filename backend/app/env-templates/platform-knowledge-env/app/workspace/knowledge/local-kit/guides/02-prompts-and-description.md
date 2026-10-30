@@ -2,7 +2,7 @@
 
 ## Read this when
 
-Always, before the agent is tested for the first time — and again whenever what the
+Always, before the agent's first check — and again whenever what the
 agent *does* changes. This rung is never skipped.
 
 Write the prompt set **last**, from what you actually built. A prompt authored from

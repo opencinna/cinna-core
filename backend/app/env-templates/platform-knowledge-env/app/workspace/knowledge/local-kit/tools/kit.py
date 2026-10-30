@@ -261,7 +261,6 @@ REQUIRED_FILES = (MANIFEST_NAME, SCAFFOLD_IGNORE_TARGET)
 EXPECTED_FILES = (
     "README.md",
     "AGENTS.md",
-    "Makefile",
     "pyproject.toml",
     "workspace_requirements.txt",
     "docs/CLI_COMMANDS.yaml",
@@ -438,7 +437,7 @@ def read_text(path: Path) -> str:
     """Read a PROSE file, tolerating undecodable bytes.
 
     Lossy on purpose, and only safe because every caller here reads: a README, a
-    Makefile, a prompt, a catalog, a version file. Substituting U+FFFD for a byte
+    prompt, a catalog, a version file. Substituting U+FFFD for a byte
     a scanner was going to grep anyway loses nothing recoverable.
 
     It is NOT the reader for anything this tool writes back — see `read_json`.
@@ -2072,8 +2071,8 @@ def cli_command_entries(cli_commands_yaml: Path) -> tuple[list[str], list[tuple[
 
     The second return value is what this reader used to throw away. An entry it
     cannot take a name from is a command that exists in the file and that every
-    check downstream is then blind to — the Makefile mirror, the duplicate check
-    and the `/run:` resolution all silently agree it is not there. It is reported
+    check downstream is then blind to — the name rule, the duplicate check and
+    the `/run:` resolution all silently agree it is not there. It is reported
     and refused rather than guessed at: a command read as something shorter than
     what is written runs a different program.
     """
@@ -2152,15 +2151,6 @@ def cli_command_entries(cli_commands_yaml: Path) -> tuple[list[str], list[tuple[
 def cli_command_names(cli_commands_yaml: Path) -> list[str]:
     """Just the names — the reading half of `cli_command_entries`."""
     return cli_command_entries(cli_commands_yaml)[0]
-
-
-def makefile_targets(makefile: Path) -> set[str]:
-    targets = set()
-    for raw_line in read_text(makefile).splitlines():
-        match = re.match(r"^([A-Za-z0-9_][A-Za-z0-9_.-]*)\s*:(?!=)", raw_line)
-        if match:
-            targets.add(match.group(1))
-    return targets
 
 
 # --------------------------------------------------------------------------- #
@@ -2532,7 +2522,6 @@ def _validate_requirements(agent_dir: Path, report: Report, fix: bool) -> None:
 def _validate_commands(agent_dir: Path, manifest: dict, report: Report) -> None:
     catalog_relative = agent_command_catalog()
     cli_commands = agent_dir / catalog_relative
-    makefile = agent_dir / "Makefile"
 
     # An absent catalog is not an early return. `status_refresh_command` can name
     # a `/run:` command, and a reference into a file that is not there resolves to
@@ -2563,14 +2552,6 @@ def _validate_commands(agent_dir: Path, manifest: dict, report: Report) -> None:
     duplicates = {name for name in names if names.count(name) > 1}
     for name in sorted(duplicates):
         report.error(f"{catalog_relative}: duplicate command name {name!r}.")
-    if makefile.is_file():
-        targets = makefile_targets(makefile)
-        for name in names:
-            if name not in targets:
-                report.warn(
-                    f"{catalog_relative} command {name!r} has no matching Makefile target — "
-                    "add the local mirror in the same change."
-                )
 
     refresh_command = manifest.get("status_refresh_command")
     if isinstance(refresh_command, str) and refresh_command.strip():
@@ -3697,10 +3678,10 @@ def validate_agent(agent_dir: Path, fix: bool, cloud_ready: bool = False) -> Rep
     # The granularity is the CHECK, not the file, and the difference is real:
     # one check is lost per failure and the other eight still run, but two
     # unreadable files read by the SAME check yield one ERROR naming the first,
-    # and the second appears on the next run. Verified: with `pyproject.toml`,
-    # `Makefile`, `docs/WORKFLOW_PROMPT.md` and `docs/CLI_COMMANDS.yaml` all
-    # unreadable, three ERRORs are reported — `Makefile` is masked because
-    # `_validate_commands` reaches the YAML first. Do not describe this as
+    # and the second appears on the next run. Example: with `pyproject.toml` and
+    # `workspace_requirements.txt` both unreadable, one ERROR is reported —
+    # `workspace_requirements.txt` is masked because `_validate_requirements`
+    # reaches `pyproject.toml` first. Do not describe this as
     # "one pass names every permission"; it names one per failing check.
     #
     # `OSError` only: a check that raises anything else is a genuine bug, and a

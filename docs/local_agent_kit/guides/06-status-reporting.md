@@ -52,7 +52,7 @@ never sees a half-written file:
 uv run scripts/update_status.py --status ok --summary "All clear"
 uv run scripts/update_status.py --status warning --summary "3 invoices missing a PO" \
   --details "INV-A, INV-B and INV-C have no purchase order.
-Run 'make report' for the full list."
+Run '/run:report' for the full list."
 ```
 
 From inside another script:
@@ -98,7 +98,8 @@ state: a real check that decides between `ok`, `warning` and `error`. A refresh
 command that hardcodes `--status ok` is a lie the UI will repeat.
 
 The command is cloud-first: `python scripts/…`, relative path, cwd is the workspace
-root. The Makefile mirrors it as `make status` with `uv run`.
+root. Locally it runs as `uv run scripts/update_status.py …` through
+`local_command_runner`.
 
 A blank `status_refresh_command` is a deliberate opt-out and produces no warning.
 
@@ -121,5 +122,6 @@ Do not invent a scale. Four values, chosen by whether a human must act.
 - Every unattended entry point updates the status on both success and failure.
 - `docs/CLI_COMMANDS.yaml` has a `status` command that genuinely recomputes state.
 - `cinna-agent.json` `status_refresh_command` matches a name in that file.
-- `make status` runs and rewrites the file.
+- `uv run scripts/update_status.py …` (the `status` command, localized) runs and
+  rewrites the file.
 - No secret, token or personal identifier appears anywhere in STATUS.md.

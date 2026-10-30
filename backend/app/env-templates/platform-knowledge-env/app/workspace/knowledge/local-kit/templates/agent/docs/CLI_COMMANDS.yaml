@@ -1,6 +1,7 @@
 # Named shell commands this agent exposes.
 #
-# Locally: documentation of what can be run, mirrored by the Makefile.
+# Locally: documentation of what can be run, run through layout.json
+# `local_command_runner` (`python` -> `uv run`).
 # In the cloud: each entry becomes a /run:<name> slash command, an A2A skill and a
 # webapp action, executed without spending an LLM turn.
 #
@@ -11,7 +12,7 @@
 #
 # Commands are CLOUD-FIRST: write `python scripts/x.py` with paths relative to the
 # workspace root. Do not use `uv run` here and do not use absolute paths — the
-# Makefile is where the local `uv run` mirror lives.
+# local host adds `uv run` itself.
 
 commands:
   - name: status

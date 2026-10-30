@@ -16,6 +16,50 @@ folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
 
+## 1.18.0 — no Makefile, uv inside the app, testing proportionate to the runtime
+
+Additive. Every 1.x folder stays valid and needs no change, and a tool built
+against an earlier 1.x keeps operating a 1.18.0 folder, because the majors match.
+
+`docs/CLI_COMMANDS.yaml` is the single source of an agent's commands. Locally
+they run through `layout.json`'s `local_command_runner`; nothing else mirrors them.
+
+### Removed
+
+- **`templates/agent/Makefile`**, its agent role in `layout.json` (the local
+  command mirror), and `kit.py validate`'s "command has no matching Makefile
+  target" warning. Nothing ran the Makefile: hosts run `/run:` commands
+  from `docs/CLI_COMMANDS.yaml` through `local_command_runner`.
+
+### Unchanged on purpose
+
+- **`Makefile` stays in `cloud_import_excludes`.** An existing agent's Makefile
+  is harmless: it is never read and never travels. Delete it or keep it;
+  `validate` reports nothing either way.
+
+### Changed (guides only, no contract effect)
+
+- Guide 07: `docs/CLI_COMMANDS.yaml` is the single source of commands.
+- Guide 10: the conversation test is optional locally; the static prompt
+  review is required.
+- Cinna Desktop provides `uv` to local-agent processes (the desktop release that
+  carries contract 1.18.0).
+
+### For hosts
+
+- A validator port that warns on a missing Makefile target must drop that
+  warning.
+- A scaffolder that special-cases `Makefile` may drop it; the template no longer
+  has one.
+
+### Update by hand
+
+- Workshop `AGENTS.md` is installed once (`survives_update: true`): copy the new
+  "If this workshop is managed by Cinna Desktop" paragraph and the testing
+  bullet from `templates/root/AGENTS.md`.
+- Agent `AGENTS.md`: copy the quick-reference block from
+  `templates/agent/AGENTS.md`.
+
 ## 1.17.0 — plugins and MCP servers in the manifest
 
 Additive. Every 1.x folder stays valid and needs no change, and a tool built

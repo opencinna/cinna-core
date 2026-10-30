@@ -11,7 +11,7 @@ Kit version `{{KIT_VERSION}}` · contract version in `CONTRACT_VERSION` · insta
 |----------|-----------|
 | `START.md` | First contact: setting up the root folder, roles, non-negotiables. |
 | `guides/01-first-agent.md` | Creating a new agent, from interview to first working answer. |
-| `guides/02-prompts-and-description.md` | Always, before the agent is tested for the first time. |
+| `guides/02-prompts-and-description.md` | Always, before the agent's first check. |
 | `guides/03-scripts-and-data.md` | The agent must do something beyond answering from its prompt. |
 | `guides/04-credentials.md` | Anything the agent touches needs a token, login, key or OAuth. |
 | `guides/05-schedules.md` | The user says daily / weekly / every / at …, or wants unattended runs. |
@@ -61,9 +61,9 @@ concrete artefacts. Walk the table top-down after every substantive change.
 | **Scripts & data** | the agent does anything beyond answering from prompts | `scripts/`, `config/`, `app-data/storage/`, cache rules |
 | **Design patterns** | an external system, a send / create / sign / post, a second kind of question, or the agent will serve other people | recommendations made and recorded in `docs/AGENT_DEVELOPMENT.md`; then whichever patterns the user accepted — skills with a routing table, a narrow client module, `docs/test_scenarios/` |
 | **Credentials** | any external system needs a token, login, key or OAuth | `credentials/.env(.example)`, `credentials/README.md`, manifest `credentials[]`, `cinna_credentials.py` usage |
-| **Schedules** | the user says daily / weekly / every / at …, or the agent should run unattended | manifest `schedules[]`, `docs/ENTRYPOINT_PROMPT.md` becomes mandatory, a `run-<name>` Makefile target |
+| **Schedules** | the user says daily / weekly / every / at …, or the agent should run unattended | manifest `schedules[]`, `docs/ENTRYPOINT_PROMPT.md` becomes mandatory, the schedule dry-run with `uv run` (guide 05) |
 | **Status reporting** | the agent runs unattended, or performs long-running checks | `scripts/update_status.py` usage, `app-data/storage/STATUS.md`, `status_refresh_command`, a `status` CLI command |
-| **CLI commands** | the same operation is run repeatedly by name | `docs/CLI_COMMANDS.yaml` entries + matching Makefile targets |
+| **CLI commands** | the same operation is run repeatedly by name | `docs/CLI_COMMANDS.yaml` entries (run locally through `local_command_runner`) |
 | **Knowledge & local skills** | 3+ distinct capabilities, domain docs beyond a page, or a finished skill worth publishing | `knowledge/<topic>/`, `skills/<name>/SKILL.md`, per-skill `scripts/` |
 | **Multi-agent** | a second agent appears, or one agent should delegate | root orchestrator conventions, manifest `handovers[]` |
 | **Go cloud** | the user asks, or the agent needs 24/7, email/chat channels, sharing or webapps | everything in `guides/11-go-cloud.md` |

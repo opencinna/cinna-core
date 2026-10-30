@@ -69,13 +69,14 @@ to know where to look and wants a `refresh`.
 
 Two things change for you when the answer is `yes`:
 
-- **Test through the agent, not through yourself.** `kit.py chat Local/<slug> "…"`
-  takes two positional arguments — the folder and the quoted prompt — and has no
-  options. It streams back what the agent actually said. On any failure it prints one
-  line, exits non-zero, and prints nothing that could be mistaken for an answer. It
-  **never** falls back to role-play, and neither should you: an answer nobody can
-  attribute is worse than no answer. Role-play, as `guides/10-testing-locally.md`
-  describes it, is what you do when there is no desktop.
+- **If you test through a conversation, test the real agent.** The conversation test is
+  optional (`guides/10-testing-locally.md` §5): offer it once. When the user wants it,
+  `kit.py chat Local/<slug> "…"` takes two positional arguments — the folder and the
+  quoted prompt — and has no options. It streams back what the agent actually said. On
+  any failure it prints one line, exits non-zero, and prints nothing that could be
+  mistaken for an answer. It **never** falls back to role-play, and neither should you:
+  an answer nobody can attribute is worse than no answer. Role-play, as guide 10
+  describes it, is only for when there is no desktop.
 - **`app-data/desktop.json` is the desktop's file.** Read `api_base_url` and
   `agent_token` if a tool of yours needs them, and nothing else in it. Never write it,
   never commit it, and **never print or quote any of its contents** — not the token and
@@ -86,8 +87,9 @@ Two things change for you when the answer is `yes`:
 **If you are the assistant inside Cinna Desktop itself**, read
 `.cinna-kit/assistants/cinna-desktop.md` before anything else. Two rules bite there
 immediately: the desktop owns `.cinna-kit/`, so you must never run `kit.py refresh`;
-and `kit.py` needs `uv` (or Python 3.10+), which the app does not promise, so check
-that a command runs before you offer it.
+and `uv` is provided by the app — never ask the user to install it, unless the app
+itself says it has no `uv` for this platform. If it still does not start, say so in one
+line, use the app's own validation, and never offer a command you have not seen run.
 
 ## Freshness
 

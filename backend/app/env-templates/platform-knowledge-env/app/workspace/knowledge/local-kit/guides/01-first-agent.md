@@ -50,7 +50,7 @@ and refuses outright once you ask it to check the agent as cloud-ready. You rewr
 sentence properly in step 4 either way; starting from a true one is cheaper than
 starting from a placeholder you have to notice.
 
-Look at what you got before writing anything: `AGENTS.md`, `README.md`, `Makefile`,
+Look at what you got before writing anything: `AGENTS.md`, `README.md`,
 `cinna-agent.json`, `docs/`, `skills/`, `scripts/`, `config/`, `credentials/`,
 `knowledge/`, `files/`, `app-data/`. Each folder has a defined meaning — see
 `03-scripts-and-data.md`. Do not invent new top-level folders.
@@ -86,14 +86,12 @@ Write the prompt set **last**, from what actually exists. Read
 
 Also fill `docs/ENTRYPOINT_PROMPT.md` if the agent has (or will have) a schedule.
 
-## 5. Test as the agent
+## 5. Check the agent
 
-If Cinna Desktop is running this agent, send the first example prompt to the real
-thing — `kit.py chat . "<prompt>"` — and judge what comes back. Otherwise switch to the
-**Agent** role: forget the build context, read only `docs/WORKFLOW_PROMPT.md`, and
-answer the user's first example prompt yourself. Either way: if the answer needed
-something that is not in the prompt or the scripts, that is the bug — fix the agent, not
-the answer. Full procedure in `10-testing-locally.md`.
+Run the required checks in `10-testing-locally.md` §1–4 (prompt-completeness review,
+script checks, secret sweep, validate). Anything you know only from building is the
+bug — fix the agent. Then offer the conversation test once, in one line; run it only
+if the user asks.
 
 ## 6. Validate
 
@@ -125,4 +123,4 @@ try, and what is deliberately not built yet. No feature list padding.
 - `docs/WORKFLOW_PROMPT.md` names the real scripts and the real output format.
 - `cinna-agent.json` has a true `description` and at least one `example_prompt`.
 - `kit.py validate Local/<slug>` exits 0.
-- You answered one example prompt in the Agent role without consulting the build log.
+- The prompt-completeness review found nothing undocumented; a conversation test was offered.

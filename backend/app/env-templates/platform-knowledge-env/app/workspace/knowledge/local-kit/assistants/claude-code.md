@@ -29,8 +29,7 @@ The agent scaffold ships `.claude/settings.local.json`:
 {
   "permissions": {
     "allow": [
-      "Bash(uv run:*)",
-      "Bash(make:*)"
+      "Bash(uv run:*)"
     ]
   }
 }

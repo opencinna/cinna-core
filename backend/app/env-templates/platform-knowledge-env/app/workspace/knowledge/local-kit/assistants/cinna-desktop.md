@@ -22,9 +22,12 @@ they do not have open.
 - Run commands from the agent folder, with relative paths only. This is the same rule
   the cloud runtime enforces, so it costs nothing and buys portability.
 - `.cinna-kit/` holds the full kit — `README.md`, `guides/` and `tools/kit.py` included.
-  `kit.py` still needs `uv` (or Python 3.10+) on the machine, which the app does not
-  promise. If `uv run .cinna-kit/tools/kit.py …` will not start, say so in one line and
-  use the app's own validation; never hand the user a command you have not seen run.
+  **Cinna Desktop provides `uv`**: every process it starts for a local agent can run
+  `uv`, even when the user never installed it. Never ask the user to install `uv` or
+  Python, unless the app itself says it has no `uv` for this platform. If `uv run …`
+  still does not start (an older app, or the app could not download its copy), say so in
+  one line and use the app's own validation; never hand the user a command you have not
+  seen run.
 - Scaffolding and validation are the app's own actions here. The desktop builds and
   checks folders from the same contract `kit.py` reads, so a folder it created is one
   `kit.py new` would have created, and the other way round. Use the app's action rather
@@ -45,26 +48,24 @@ If the contract looks stale — a guide contradicts what you see, or a manifest 
 app rejects is documented as valid — say so in one line and tell the user to update
 Cinna Desktop. Do not work around it silently, and do not update the contract yourself.
 
-## Testing: use the local API, never role-play
+## Testing
 
-The app runs the agent for real. That is the reason to build in it, and it changes the
-testing rule in `guides/10-testing-locally.md`:
+Here, building and conversation are the same chat, the same engine and the same
+process. So the required checks in `guides/10-testing-locally.md` are the test: script
+checks, the secret sweep, validation and the prompt-completeness review (§1). The
+review looks for the gap between what the build session knows and what
+`docs/WORKFLOW_PROMPT.md` says.
+
+The conversation test is optional. Offer it once, in one line, after the required
+checks. If the user asks for it:
 
 1. Open a **fresh** conversation with the agent — not the one you built it in.
-2. Send each entry of `example_prompts` verbatim.
+2. Send the example prompts the user chooses, verbatim.
 3. Read what the agent actually answered, and judge that.
 
-`example_prompts` is the acceptance suite; run **every** entry, not the first one. A
-prompt the agent cannot answer is either a broken agent or a wrong example — decide
-which, and fix that one. The symptom table in `guides/10-testing-locally.md` §1 reads
-the same way here: you are still looking for the gap between what the build session
-knows and what `docs/WORKFLOW_PROMPT.md` says.
-
-What does **not** apply to you is the role-switch fallback. Role-play exists for
-assistants with no runtime to talk to. You have one, so imitating the agent is never the
-test — and never present your own answer to an example prompt as the agent's. A user who
-cannot tell whether they read the agent or an assistant impersonating it has learned
-nothing, which is the whole reason the real path exists.
+Never role-play the agent in this host, and never present your own answer to an
+example prompt as the agent's. A user who cannot tell whether they read the agent or an
+assistant imitating it has learned nothing.
 
 ## `app-data/desktop.json` is not yours
 

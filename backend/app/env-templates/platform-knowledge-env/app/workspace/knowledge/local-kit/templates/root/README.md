@@ -20,12 +20,8 @@ in `.cinna-kit/` and does the work.
 Open your assistant inside `Local/<agent>` and talk to it normally. It reads the
 agent's `AGENTS.md`, which points at the agent's real instructions.
 
-Most agents also expose plain commands:
-
-```bash
-cd Local/<agent>
-make help
-```
+Most agents also expose plain commands. The agent's commands are listed in
+`Local/<agent>/docs/CLI_COMMANDS.yaml`.
 
 ## Secrets
 

@@ -1,6 +1,6 @@
 {
   "kit_version": "{{KIT_VERSION}}",
-  "contract_version": "1.17.0",
+  "contract_version": "1.18.0",
   "platform_url": "{{PLATFORM_URL}}",
   "kit_base_url": "{{KIT_BASE_URL}}",
   "start_url": "{{START_URL}}",
@@ -31,7 +31,7 @@
     {
       "rung": "prompts",
       "doc": "guides/02-prompts-and-description.md",
-      "trigger": "always, before the agent is tested for the first time"
+      "trigger": "always, before the agent's first check"
     },
     {
       "rung": "scripts",

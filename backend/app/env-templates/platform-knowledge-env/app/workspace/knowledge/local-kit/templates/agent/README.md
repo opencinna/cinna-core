@@ -35,14 +35,14 @@ uv sync
 Talk to the agent through your coding assistant from inside this folder, or run the
 commands directly:
 
-```bash
-make help
-```
+The agent's commands are listed in `docs/CLI_COMMANDS.yaml`. Run one locally from
+this folder with `uv run …` in place of `python …`. In Cinna Desktop, use
+`/run:<name>`.
 
 | Command | What it does |
 |---------|--------------|
-| `make status` | Refresh `app-data/storage/STATUS.md`. |
-| `make validate` | Check the agent against the kit conventions. |
+| `uv run scripts/update_status.py --status ok --summary "Ready"` | Refresh `app-data/storage/STATUS.md`. |
+| `uv run ../../.cinna-kit/tools/kit.py validate .` | Check the agent against the kit conventions. |
 
 ## Layout
 

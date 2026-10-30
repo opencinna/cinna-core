@@ -52,7 +52,7 @@ Group file writes so the user approves a coherent change rather than twenty
 fragments. State what you are about to do in one line before asking.
 
 Commands worth pre-approving with the user, if your harness supports it:
-`uv run`, `make`, `uv run .cinna-kit/tools/kit.py`. Keep `curl`, `git push` and
+`uv run`, `uv run .cinna-kit/tools/kit.py`. Keep `curl`, `git push` and
 `cinna` as explicit per-use decisions.
 
 ## Working directory

@@ -33,10 +33,12 @@ Switch to the **Builder** role and say so in one line. Then:
 ## Quick reference
 
 ```bash
-make help              # available commands
-make status            # refresh app-data/storage/STATUS.md
-make validate          # kit validation for this agent
+uv run scripts/update_status.py --status ok --summary "Ready"   # the status command, run locally
+uv run ../../.cinna-kit/tools/kit.py validate .                  # kit validation for this agent
 ```
+
+Every named command is in `docs/CLI_COMMANDS.yaml`; run it locally with `uv run` in
+place of `python`.
 
 ## Rules
 

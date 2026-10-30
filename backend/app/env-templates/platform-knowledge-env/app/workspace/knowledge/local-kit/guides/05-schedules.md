@@ -98,12 +98,15 @@ Any defaults the run depends on ("if no period is given, use yesterday") belong 
 
 ## Dry-run it locally
 
-Every schedule gets a Makefile target so the user (and you) can run it on demand:
+Run every schedule once on demand, the way the local runner would: from the agent
+root, with `uv run` in place of `python`:
 
-```makefile
-run-morning-check: ## Dry-run the "Weekday morning check" schedule
-	uv run scripts/check_invoices.py --since yesterday
+```bash
+uv run scripts/check_invoices.py --since yesterday
 ```
+
+Inside Cinna Desktop, run the same `uv run …` line, or `/run:<name>` if the schedule's
+command is also in `docs/CLI_COMMANDS.yaml`.
 
 For a `script_trigger`, run the command and check the contract:
 
@@ -114,9 +117,9 @@ uv run scripts/check_queue.py; echo "exit=$?"
 It must print `OK` and nothing else in the quiet case. A script that prints a
 progress line before `OK` will trigger a session every single run.
 
-For a `static_prompt`, switch to the **Agent** role and answer
-`docs/ENTRYPOINT_PROMPT.md` cold. If you needed anything the prompt did not give
-you, the schedule will fail unattended.
+For a `static_prompt`, read `docs/ENTRYPOINT_PROMPT.md` cold, the way
+`10-testing-locally.md` §1 reads the workflow prompt. If it relies on anything it does
+not give, the schedule will fail unattended.
 
 ## Real unattended runs, locally
 
@@ -126,8 +129,10 @@ install it themselves:
 
 ```
 # crontab -e   (macOS / Linux)
-0 6 * * 1-5 cd ~/Documents/CinnaAgents/Local/<slug> && /usr/bin/make run-morning-check >> app-data/storage/cron.log 2>&1
+0 6 * * 1-5 cd ~/Documents/CinnaAgents/Local/<slug> && /ABSOLUTE/PATH/TO/uv run scripts/check_invoices.py --since yesterday >> app-data/storage/cron.log 2>&1
 ```
+
+cron's PATH is minimal; use the path `command -v uv` prints.
 
 Say clearly what this does not give them: no retries, no logs in the UI, no
 notification, nothing while the laptop is asleep. That is the honest argument for
@@ -147,5 +152,5 @@ unless the user explicitly does not want it.
 - Each `script_trigger` command uses a relative path and prints exactly `OK` when
   there is nothing to report.
 - `docs/ENTRYPOINT_PROMPT.md` is non-empty, self-contained and placeholder-free.
-- Each schedule has a `run-<name>` Makefile target that you have actually run.
+- Each schedule's command has been run once from the agent root with `uv run`.
 - The user has been told that unattended execution starts in the cloud.
