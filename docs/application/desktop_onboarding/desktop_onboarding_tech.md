@@ -31,6 +31,7 @@
 
 ### Frontend
 
+- `frontend/tests/desktopDownloadSection.test.mjs` (with `frontend/tests/fixtures/desktopDownloadHarness.tsx`) — UI test for the clipboard write, the note, the silent failure and the button emphasis switch; run with `npm run test:desktop-download:ui`
 - `frontend/src/routes/desktop.tsx` — public route; deliberately no `beforeLoad` guard (contrast the sibling `desktop-auth/consent` route)
 - `frontend/src/components/Desktop/DesktopLandingPage.tsx` — the `/desktop` page **shell** only: full-viewport centring, the `Monitor` header card, and `<DesktopDownloadSection />` inside it
 - `frontend/src/components/Desktop/DesktopDownloadSection.tsx` — the download offer itself, extracted so `/start` can embed it without inheriting the page shell. Also rendered by `frontend/src/routes/start.tsx` (see [Public Landing Page — tech](../server_configuration/landing_page_tech.md))
@@ -128,6 +129,8 @@ It keeps its **own** inline copy-to-clipboard control rather than using the shar
 - `apiBase`, `serverOrigin`, and `deepLink` are each `useMemo`'d once — all three derive from build-time config and the page URL, neither of which changes while the page is open.
 - `downloadUrl()` takes the **API base**, not the origin, because it builds a backend route. It is `resolveApiBase()`'s only consumer.
 - The copy-to-clipboard tick reverts on a timer cleared on unmount.
+- `handleDownloadClick(target)` runs on the macOS and Linux download anchors (not the releases-index link). It calls `navigator.clipboard?.writeText(deepLink)` first, with nothing awaited before it (Safari drops user activation after the first `await`), and does not prevent the default action so the anchor still navigates to the resolver. Success sets `linkCopiedFor` to the clicked platform; rejection or a synchronous throw is swallowed. It also sets `downloaded`, which demotes the download buttons to `outline`, relabels "Already installed?" to "Installed it?" and promotes Open Cinna Desktop to `default`.
+- `LinkCopiedNote` renders `LINK_COPIED_NOTE` (text B) at the foot of the clicked platform group, after its "Intel Mac?" / ".deb" toggle so the toggle stays next to its button: an invisible copy of the text holds the height in a one-cell grid, and the visible copy is an `<output>` status region stacked on it. Switching to text A is a one-line change to the constant. Desktop-side behaviour: [Connect link](https://raw.githubusercontent.com/opencinna/cinna-desktop/main/docs/auth/onboarding/connect_link.md).
 - Both toggling labels sit in an `aria-live="polite"` span, since the toggle rewrites the button text in place.
 
 ### `frontend/src/components/Auth/NativeAuthConsentPage.tsx`

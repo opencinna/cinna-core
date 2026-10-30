@@ -12,7 +12,8 @@
     "test:skill-credentials": "node --experimental-strip-types --test tests/skillCredentials.test.mjs",
     "test:skill-credentials:ui": "node --test tests/skillInstallDialog.test.mjs",
     "test:acp:ui": "node --test tests/acpConnectors.test.mjs",
-    "test:artifacts:e2e": "node --test tests/e2e/artifacts.e2e.mjs"
+    "test:artifacts:e2e": "node --test tests/e2e/artifacts.e2e.mjs",
+    "test:desktop-download:ui": "node --test tests/desktopDownloadSection.test.mjs"
   },
   "dependencies": {
     "@dagrejs/dagre": "^3.0.0",

@@ -28,8 +28,8 @@ Nothing about authentication or token minting is new here. This feature adds thr
 
 1. An admin creates the user. `generate_new_account_email` sends the welcome mail with the primary button **Get Cinna Desktop** pointing at `{FRONTEND_HOST}/desktop`, and a secondary line — *"Prefer the browser? Log in on the web"* — pointing at `{FRONTEND_HOST}/start`. (It pointed at the bare SPA origin until zero-touch-onboarding phase 4; the origin only ever redirected to `/login`, which is one of the ways in, while `/start` renders whichever ones this instance actually offers.)
 2. The visitor opens `/desktop`. The page detects their OS from the user agent and (on Chromium) their CPU architecture from `navigator.userAgentData.getHighEntropyValues(["architecture"])`.
-3. They click the single download button. The browser hits the resolver, which 302s to the matching GitHub release asset; the file downloads directly from GitHub.
-4. They install and launch the app, then return to the page and click **Open Cinna Desktop**. The `cinna://` deep link hands the app this instance's server origin.
+3. They click the single download button. The browser hits the resolver, which 302s to the matching GitHub release asset; the file downloads directly from GitHub. On macOS and Linux the same click also writes the `cinna://connect?server=…` link to the clipboard, and a note under the button says *"Setup link copied. Paste it into the Server URL field in Cinna Desktop."* A failed copy is silent: the download is unaffected. (The desktop side of this handoff is described in [Connect link](https://raw.githubusercontent.com/opencinna/cinna-desktop/main/docs/auth/onboarding/connect_link.md).)
+4. They install and launch the app, then return to the page and click **Open Cinna Desktop** (after any download click the label above it reads *"Installed it?"* instead of *"Already installed?"* and this button becomes the primary one; it stays the fallback when the clipboard path did not work). The `cinna://` deep link hands the app this instance's server origin.
 5. The desktop runs the ordinary OAuth + PKCE flow (see [Desktop App Authentication](../desktop_auth/desktop_auth.md)). The visitor approves once in the browser.
 6. On the consent success screen the SPA now offers **Return to Cinna Desktop** — the same deep link — for browsers that keep the tab in front rather than refocusing the app.
 7. The desktop fetches `/.well-known/cinna-desktop`, reads `local_dev.setup_token_endpoint`, and calls it with its own OAuth bearer to bootstrap a cinna-cli account workspace (see [Account CLI Workspace](../cinna_cli_integration/account_cli_workspace.md)).
@@ -40,6 +40,10 @@ Nothing about authentication or token minting is new here. This feature adds thr
 - macOS → defaults to Apple Silicon with an **Intel Mac?** toggle; the architecture hint corrects the default asynchronously when the browser supplies it, and an explicit click always wins over a late detection result.
 - Linux → defaults to the AppImage with a **.deb** toggle.
 - Linux on arm64 → **no download button at all**. There is no published arm64 Linux asset, so the page links to the releases index instead. Offering an x86-64 button next to the words "x86-64 only" would put the wrong binary one click away.
+
+### Clipboard handoff note
+
+Two texts are possible under the download button. The shipped one (B) tells the person to paste the link into the desktop's Server URL field, because the desktop's macOS clipboard-read probe has not run yet and it cannot yet pick the link up by itself. Once the desktop confirms it does, the text switches to the offer wording (A): *"Setup link copied. Cinna Desktop will offer to connect to this server the first time it opens."* The note reserves its space from first render, so it appearing shifts nothing. "Browse Linux releases" (arm64 Linux) is not a download and copies nothing. After a successful copy the server-address line below reads *"…or type the plain address there instead:"*, so it offers the address as the alternative to the pasted link rather than a second value for the same field.
 
 ### Already installed, deep link does not fire
 

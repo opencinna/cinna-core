@@ -66,6 +66,41 @@ function detectPlatform(): Platform | null {
 }
 
 /**
+ * What the page says after a download click has put the connect link on the
+ * clipboard. One constant, so switching texts is a one-line change.
+ *
+ * Shipped: text B, for a desktop that cannot read the clipboard on first launch
+ * without a macOS prompt, so the person pastes the link into its Server URL
+ * field. Once the desktop confirms it picks the link up by itself (text A),
+ * this becomes:
+ *   "Setup link copied. Cinna Desktop will offer to connect to this server the first time it opens."
+ */
+const LINK_COPIED_NOTE =
+  "Setup link copied. Paste it into the Server URL field in Cinna Desktop."
+
+/**
+ * The line under a download button that says the connect link was copied.
+ *
+ * It occupies its full height from the first render, so the note appearing
+ * moves nothing on the page: an invisible copy of the text holds the space
+ * (at whatever width it wraps to), and the visible copy is stacked on top of it
+ * in the same grid cell. The visible copy is an `<output>` (a status region),
+ * so the note is announced when it appears.
+ */
+function LinkCopiedNote({ shown }: { shown: boolean }) {
+  return (
+    <p className="grid text-center text-xs text-muted-foreground">
+      <span aria-hidden="true" className="invisible [grid-area:1/1]">
+        {LINK_COPIED_NOTE}
+      </span>
+      <output className="[grid-area:1/1]">
+        {shown ? LINK_COPIED_NOTE : null}
+      </output>
+    </p>
+  )
+}
+
+/**
  * The resolver URL for one platform/arch/format triple.
  *
  * Takes the API *base* (`resolveApiBase`), not the server origin: this is a
@@ -118,6 +153,36 @@ export function DesktopDownloadSection() {
   const [detectedArch, setDetectedArch] = useState<MacArch | null>(null)
   const [chosenMacArch, setChosenMacArch] = useState<MacArch | null>(null)
   const [linuxKind, setLinuxKind] = useState<LinuxKind>("appimage")
+
+  // After a download click the next step is opening the app, so emphasis moves
+  // from the download button to Open Cinna Desktop. `linkCopiedFor` is the
+  // platform whose button put the connect link on the clipboard: the note sits
+  // under the button that was clicked.
+  const [downloaded, setDownloaded] = useState(false)
+  const [linkCopiedFor, setLinkCopiedFor] = useState<Platform | null>(null)
+
+  /**
+   * Hands the connect link to the desktop app through the clipboard; its first
+   * launch reads it and offers to connect here.
+   *
+   * `writeText` is the first thing this does, with nothing awaited before it:
+   * Safari drops the click's user activation after the first `await`. The
+   * default action is not prevented, so the anchor still navigates to the
+   * resolver. A failed write (insecure context, denied permission, no
+   * Clipboard API) is not reported: the download worked, and Open Cinna Desktop
+   * is the way forward without the clipboard.
+   */
+  const handleDownloadClick = (target: Platform) => {
+    try {
+      navigator.clipboard
+        ?.writeText(deepLink)
+        .then(() => setLinkCopiedFor(target))
+        .catch(() => {})
+    } catch {
+      // A browser that throws synchronously instead of rejecting: same answer.
+    }
+    setDownloaded(true)
+  }
 
   useEffect(() => {
     const uaData = (
@@ -184,9 +249,12 @@ export function DesktopDownloadSection() {
               <Button
                 asChild
                 className="w-full"
-                variant={index === 0 ? "default" : "outline"}
+                variant={index === 0 && !downloaded ? "default" : "outline"}
               >
-                <a href={downloadUrl(apiBase, "darwin", macArch, "dmg")}>
+                <a
+                  href={downloadUrl(apiBase, "darwin", macArch, "dmg")}
+                  onClick={() => handleDownloadClick("darwin")}
+                >
                   <Download className="mr-2 h-4 w-4" />
                   {/* Live region: the toggle below rewrites this label in
                       place, which is otherwise a silent change. */}
@@ -207,6 +275,7 @@ export function DesktopDownloadSection() {
                   ? "Intel Mac?"
                   : "Apple Silicon Mac (M1 or later)?"}
               </button>
+              <LinkCopiedNote shown={linkCopiedFor === "darwin"} />
             </>
           ) : detectedArch === "arm64" ? (
             /* Only x86-64 Linux assets are published, so an arm64 machine
@@ -239,9 +308,12 @@ export function DesktopDownloadSection() {
               <Button
                 asChild
                 className="w-full"
-                variant={index === 0 ? "default" : "outline"}
+                variant={index === 0 && !downloaded ? "default" : "outline"}
               >
-                <a href={downloadUrl(apiBase, "linux", "x64", linuxKind)}>
+                <a
+                  href={downloadUrl(apiBase, "linux", "x64", linuxKind)}
+                  onClick={() => handleDownloadClick("linux")}
+                >
                   <Download className="mr-2 h-4 w-4" />
                   {/* Live region: the toggle below rewrites this label in
                       place, which is otherwise a silent change. */}
@@ -262,6 +334,7 @@ export function DesktopDownloadSection() {
                   ? "Prefer a .deb package?"
                   : "Prefer the AppImage?"}
               </button>
+              <LinkCopiedNote shown={linkCopiedFor === "linux"} />
             </>
           )}
         </div>
@@ -270,8 +343,14 @@ export function DesktopDownloadSection() {
       <Separator />
 
       <div className="space-y-2 text-center">
-        <p className="text-sm text-muted-foreground">Already installed?</p>
-        <Button asChild variant="outline" className="w-full">
+        <p className="text-sm text-muted-foreground">
+          {downloaded ? "Installed it?" : "Already installed?"}
+        </p>
+        <Button
+          asChild
+          variant={downloaded ? "default" : "outline"}
+          className="w-full"
+        >
           <a href={deepLink}>
             <Monitor className="mr-2 h-4 w-4" />
             Open Cinna Desktop
@@ -281,7 +360,12 @@ export function DesktopDownloadSection() {
 
       <div className="space-y-2">
         <p className="text-xs text-muted-foreground text-center">
-          &hellip;or enter this server address in the app:
+          {/* Once the note has asked for the setup link in the Server URL
+              field, this line must not read as a second, different value
+              for the same field: it becomes the explicit alternative. */}
+          {linkCopiedFor
+            ? "\u2026or type the plain address there instead:"
+            : "\u2026or enter this server address in the app:"}
         </p>
         {/* The *resolved* origin, never a hard-coded one: if this instance
             is misconfigured, a person reads the wrong address here instead
