@@ -97,25 +97,38 @@ class TestSkillsSummary:
         # feature carries ``None``, and that comes from the absent manifest key.
         assert PublishService._collect_skills_summary(None) == []
 
-    def test_summary_carries_name_description_and_scripts_only(self, tmp_path: Path):
+    def test_summary_carries_name_description_scripts_and_dashboards_only(
+        self, tmp_path: Path
+    ):
         env_root = _workspace(tmp_path)
         skill_dir = _skill(env_root, "pdf-report")
         (skill_dir / "scripts").mkdir()
         (skill_dir / "scripts" / "run.py").write_text("print(1)\n", encoding="utf-8")
+        board_dir = _skill(env_root, "metrics") / "dashboards" / "weekly"
+        board_dir.mkdir(parents=True)
+        (board_dir / "component.json").write_text("{}\n", encoding="utf-8")
         _skill(env_root, "plain")
 
         summary = PublishService._collect_skills_summary(env_root)
 
         assert summary == [
             {
+                "name": "metrics",
+                "description": "Does metrics things.",
+                "has_scripts": False,
+                "has_dashboards": True,
+            },
+            {
                 "name": "pdf-report",
                 "description": "Does pdf-report things.",
                 "has_scripts": True,
+                "has_dashboards": False,
             },
             {
                 "name": "plain",
                 "description": "Does plain things.",
                 "has_scripts": False,
+                "has_dashboards": False,
             },
         ]
 

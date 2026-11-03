@@ -43,7 +43,8 @@ class CatalogEntryPublic(SQLModel):
     user_install_pending_update: bool = False
     required_credential_specs: list = []
     #: Skills the bundle ships, derived from the latest revision's
-    #: ``skills_summary`` (``[{name, description, has_scripts}]``). ``None``
+    #: ``skills_summary`` (``[{name, description, has_scripts, has_dashboards}]``;
+    #: ``has_dashboards`` absent on revisions published before it existed). ``None``
     #: when the latest revision predates agent skills — the card renders
     #: nothing rather than claiming the bundle has no skills.
     skills: list | None = None

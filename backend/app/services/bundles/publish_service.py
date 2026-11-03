@@ -1051,7 +1051,7 @@ class PublishService:
     def _collect_skills_summary(env_workspace_root: Path | None) -> list[dict]:
         """Derive ``skills_summary`` from the publisher workspace.
 
-        ``[{name, description, has_scripts}]`` — enough for a catalog card to
+        ``[{name, description, has_scripts, has_dashboards}]`` — enough for a catalog card to
         answer "does this bundle come with skills?", and nothing more. The skill
         *files* travel in the snapshot tree like every other workspace file;
         this is metadata only, and it is derived rather than authored (same
@@ -1071,6 +1071,7 @@ class PublishService:
                 "name": entry.name,
                 "description": entry.description,
                 "has_scripts": entry.has_scripts,
+                "has_dashboards": entry.has_dashboards,
             }
             for entry in scan_skills_root(skills_root)
             if entry.is_valid

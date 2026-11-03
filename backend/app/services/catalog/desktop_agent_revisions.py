@@ -332,6 +332,7 @@ def _authored_skills(skills_root: Path) -> list[dict]:
             "name": entry.name,
             "description": entry.description,
             "has_scripts": entry.has_scripts,
+            "has_dashboards": entry.has_dashboards,
             "source": "authored",
         }
         for entry in scan_skills_root(skills_root)

@@ -23,3 +23,24 @@ def test_marketplace_pins_survive_the_projection_unchanged() -> None:
 def test_a_manifest_without_pins_projects_an_empty_list() -> None:
     assert project_revision_manifest({}).get("marketplace_skills") == []
     assert project_revision_manifest({"marketplace_skills": None}).get("marketplace_skills") == []
+
+
+def test_authored_skills_summary_flags_dashboards(tmp_path) -> None:
+    from app.services.catalog.desktop_agent_revisions import _authored_skills
+
+    for name in ("metrics", "plain"):
+        skill = tmp_path / name
+        skill.mkdir()
+        (skill / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: Does {name} things.\n---\nBody\n",
+            encoding="utf-8",
+        )
+    board = tmp_path / "metrics" / "dashboards" / "weekly"
+    board.mkdir(parents=True)
+    (board / "component.json").write_text("{}\n", encoding="utf-8")
+
+    summary = {entry["name"]: entry for entry in _authored_skills(tmp_path)}
+
+    assert summary["metrics"]["has_dashboards"] is True
+    assert summary["plain"]["has_dashboards"] is False
+    assert summary["plain"]["source"] == "authored"

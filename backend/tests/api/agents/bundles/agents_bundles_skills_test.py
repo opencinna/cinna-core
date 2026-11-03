@@ -94,7 +94,7 @@ def test_publish_captures_skills_and_derives_the_summary(
       1. Seed two skills (one with ``scripts/``) plus the kit's
          ``skills/README.md``.
       2. Publish → the revision carries ``skills_summary``: name, description,
-         has_scripts — and nothing else.
+         has_scripts, has_dashboards — and nothing else.
       3. The manifest carries the same derived key.
       4. The snapshot on disk carries the actual ``skills/`` tree.
       5. The catalog card reads the summary off the latest revision.
@@ -121,8 +121,14 @@ def test_publish_captures_skills_and_derives_the_summary(
             "name": "pdf-report",
             "description": "Does pdf-report things.",
             "has_scripts": True,
+            "has_dashboards": False,
         },
-        {"name": "plain", "description": "Does plain things.", "has_scripts": False},
+        {
+            "name": "plain",
+            "description": "Does plain things.",
+            "has_scripts": False,
+            "has_dashboards": False,
+        },
     ]
 
     # ── Phase 3: the manifest carries it too ─────────────────────────────

@@ -122,7 +122,7 @@ reserved by a platform skill."). Only a skill scanned with
 `source="platform"` may carry it. Extra frontmatter keys such as `when_to_use`,
 `compatibility` and a `metadata` map are kept verbatim, like every unknown key.
 
-`has_dashboards` is true when the skill folder holds at least one regular, non-symlink `dashboards/<name>/component.json` (mirrors `has_scripts`; also in snapshot components, `PluginSkillSummary`/`PluginSkillComponent` and `SkillEntryPublic`). Rows stored before the flag read False until a marketplace re-sync, re-snapshot or env-core rebuild. Core only reports the flag: it does not host or render dashboard components (kit phase C2, not scheduled).
+`has_dashboards` is true when the skill folder holds at least one regular, non-symlink `dashboards/<name>/component.json` (mirrors `has_scripts`; also in snapshot components, `PluginSkillSummary`/`PluginSkillComponent`, `SkillEntryPublic` and bundle-revision `skills_summary` entries, both publish and desktop share). Rows and revisions stored before the flag lack the key, so read it as False (revisions are immutable and never backfilled); index rows refresh on a marketplace re-sync, re-snapshot or env-core rebuild. Core only reports the flag: it does not host or render dashboard components (kit phase C2, not scheduled).
 
 `SKILL_CREDENTIAL_TYPES` mirrors `app.models.credentials.credential.CredentialType`
 for the same reason, minus `mcp_provider` — an MCP connector never reaches
@@ -781,7 +781,7 @@ what keeps a skill from shadowing a real command here.
 | Manifest key `skills_summary` | Written by `RevisionFormat.build_manifest`; read back with `manifest.get("skills_summary")` and **no `or []`** — collapsing absent into empty would tell a consumer that an old bundle definitely ships no skills, which is not known |
 
 `PublishService._collect_skills_summary(env_workspace_root)` returns
-`[{name, description, has_scripts}]` for valid entries, derived from the
+`[{name, description, has_scripts, has_dashboards}]` for valid entries, derived from the
 publisher's **live workspace** — the same tree the snapshot is about to copy.
 `GitSourceService._build_live_manifest` calls the same helper so
 `cinna.agent.json` and `manifest.json` stay one schema.

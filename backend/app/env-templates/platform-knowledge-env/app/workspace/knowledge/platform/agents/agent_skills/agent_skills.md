@@ -256,7 +256,7 @@ existing denylist walk with no special case, replaced wholesale on apply-update
 like `scripts/`, and carried by env migration and git push/pull.
 
 Publish additionally derives a `skills_summary` (`[{name, description,
-has_scripts}]`) into the revision manifest — **derived, never authored**, the
+has_scripts, has_dashboards}]`) into the revision manifest — **derived, never authored**, the
 same discipline as `content_hash` — and blocks on two conditions (see
 [Business Rules](#business-rules)).
 

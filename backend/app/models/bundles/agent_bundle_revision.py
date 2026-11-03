@@ -147,7 +147,8 @@ class AgentBundleRevision(SQLModel, table=True):
     )
 
     # Derived summary of the agent skills captured in this revision's
-    # workspace tree: ``[{name, description, has_scripts}]``, built at publish
+    # workspace tree: ``[{name, description, has_scripts, has_dashboards}]``
+    # (``has_dashboards`` is absent on older rows; read it as False), built at publish
     # from ``skills/`` and never authored. NULL (not ``[]``) on a revision
     # published before the feature existed — the same missing-key discipline
     # every other additive column here follows, so "predates skills" stays
