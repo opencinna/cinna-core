@@ -57,6 +57,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.architecture._source_index import parse_source, python_files
+
 APP_ROOT = Path(__file__).resolve().parents[2] / "app"
 SCANNED_DIRS = ("services", "api")
 
@@ -108,8 +110,8 @@ def _enclosing_function(tree: ast.AST, node: ast.AST) -> str | None:
 def _violations() -> list[str]:
     found: list[str] = []
     for scanned in SCANNED_DIRS:
-        for path in sorted((APP_ROOT / scanned).rglob("*.py")):
-            tree = ast.parse(path.read_text(), filename=str(path))
+        for path in python_files(APP_ROOT / scanned):
+            tree = parse_source(path)
             rel = path.relative_to(APP_ROOT).as_posix()
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Assign):
@@ -152,7 +154,7 @@ def test_allowlisted_writers_still_exist(rel: str, function: str) -> None:
     Without this, a renamed or deleted writer leaves a stale exemption behind
     that would silently excuse a *future* function of the same name.
     """
-    tree = ast.parse((APP_ROOT / rel).read_text(), filename=rel)
+    tree = parse_source(APP_ROOT / rel)
     names = {
         node.name
         for node in ast.walk(tree)

@@ -71,6 +71,7 @@ from app.models.credentials.managed_ai_credential import ManagedAICredential
 from app.services.credentials.managed_ai_credentials_service import (
     ManagedAICredentialsService,
 )
+from tests.architecture._source_index import parse_source, python_files
 
 MODEL = "ManagedAICredential"
 
@@ -100,12 +101,7 @@ _PRUNED = {"alembic", "env-templates", "__pycache__", ".venv", "node_modules"}
 
 
 def _source_files() -> list[pathlib.Path]:
-    out: list[pathlib.Path] = []
-    for path in _APP.rglob("*.py"):
-        if any(part in _PRUNED for part in path.relative_to(_APP).parts):
-            continue
-        out.append(path)
-    return out
+    return python_files(_APP, exclude=_PRUNED)
 
 
 def _rel(path: pathlib.Path) -> str:
@@ -184,7 +180,7 @@ def _reads_in(path: pathlib.Path) -> list[tuple[str, str, int]]:
     ``session.get`` can bind an instance name as well. Hits are de-duplicated by
     position, since the whole-module pass sees the function bodies too.
     """
-    tree = ast.parse(path.read_text(encoding="utf-8"))
+    tree = parse_source(path)
     found = list(_scan(tree, {MODEL}))
     for func in ast.walk(tree):
         if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -206,7 +202,7 @@ def test_the_inference_binds_names_where_it_obviously_should() -> None:
     violations forever while enforcing nothing.
     """
     service = _APP / "services/credentials/managed_ai_credentials_service.py"
-    tree = ast.parse(service.read_text(encoding="utf-8"))
+    tree = parse_source(service)
     bound = set()
     for func in ast.walk(tree):
         if isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):

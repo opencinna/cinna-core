@@ -72,12 +72,12 @@ against the real file text rather than trusting the docstring's claim.
 from __future__ import annotations
 
 import functools
-import os
 import pathlib
 import re
 
 import pytest
 
+from tests.architecture._source_index import python_files, read_source
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -140,18 +140,13 @@ def _relative(path: pathlib.Path) -> str:
 def _source_files() -> tuple[tuple[pathlib.Path, str], ...]:
     """Read every candidate .py file under APP_ROOT exactly once."""
     files: list[tuple[pathlib.Path, str]] = []
-    for dirpath, dirnames, filenames in os.walk(APP_ROOT):
-        dirnames[:] = [d for d in dirnames if d not in EXCLUDED_DIR_NAMES]
-        for filename in filenames:
-            if not filename.endswith(".py"):
-                continue
-            if filename.endswith("_test.py") or filename.startswith("test_"):
-                continue
-            path = pathlib.Path(dirpath) / filename
-            try:
-                files.append((path, path.read_text(encoding="utf-8")))
-            except (OSError, UnicodeDecodeError):
-                continue
+    for path in python_files(APP_ROOT, exclude=EXCLUDED_DIR_NAMES):
+        if path.name.endswith("_test.py") or path.name.startswith("test_"):
+            continue
+        try:
+            files.append((path, read_source(path)))
+        except (OSError, UnicodeDecodeError):
+            continue
     return tuple(sorted(files, key=lambda pt: pt[0]))
 
 

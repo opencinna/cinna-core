@@ -76,6 +76,7 @@ from fastapi.routing import APIRoute
 from app.api.routes import _user_public
 from app.main import app
 from app.models import User, UserPublic
+from tests.architecture._source_index import parse_source, python_files
 
 # The builder, and the alias ``routes/users.py`` imports it under. Both are
 # asserted to exist below, so a rename fails here instead of quietly making
@@ -214,8 +215,8 @@ def _producers() -> list[tuple[str, str, str, ast.FunctionDef]]:
     """``(module, function, response_model, node)`` for every family producer."""
     family = _user_public_family()
     found: list[tuple[str, str, str, ast.FunctionDef]] = []
-    for path in sorted(_routes_package_dir().rglob("*.py")):
-        tree = ast.parse(path.read_text(), filename=str(path))
+    for path in python_files(_routes_package_dir()):
+        tree = parse_source(path)
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue

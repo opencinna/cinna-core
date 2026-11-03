@@ -68,6 +68,8 @@ from __future__ import annotations
 import ast
 import pathlib
 
+from tests.architecture._source_index import parse_source, python_files
+
 MODEL = "AIProvider"
 
 #: The two modules that legitimately reach the table. See the module docstring.
@@ -83,12 +85,7 @@ _PRUNED = {"alembic", "env-templates", "__pycache__", ".venv", "node_modules"}
 
 
 def _source_files() -> list[pathlib.Path]:
-    out: list[pathlib.Path] = []
-    for path in _APP.rglob("*.py"):
-        if any(part in _PRUNED for part in path.relative_to(_APP).parts):
-            continue
-        out.append(path)
-    return out
+    return python_files(_APP, exclude=_PRUNED)
 
 
 def _rel(path: pathlib.Path) -> str:
@@ -101,7 +98,7 @@ def _names_the_model(node: ast.AST) -> bool:
 
 def _queries_in(path: pathlib.Path) -> list[tuple[str, int]]:
     """``(shape, lineno)`` for every statically visible query in one file."""
-    tree = ast.parse(path.read_text(encoding="utf-8"))
+    tree = parse_source(path)
     found: list[tuple[str, int]] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):

@@ -38,12 +38,12 @@ the output clearly names which method has too few callers.
 from __future__ import annotations
 
 import functools
-import os
 import pathlib
 import re
 
 import pytest
 
+from tests.architecture._source_index import python_files, read_source
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -106,25 +106,19 @@ def _source_files() -> tuple[tuple[pathlib.Path, str], ...]:
     definition_site = DEFINITION_SITE.resolve()
     files: list[tuple[pathlib.Path, str]] = []
 
-    for dirpath, dirnames, filenames in os.walk(APP_ROOT):
-        # Prune excluded subtrees in place so os.walk never descends into them
-        # (avoids stat-ing / reading ~10k vendored site-package files).
-        dirnames[:] = [d for d in dirnames if d not in EXCLUDED_DIR_NAMES]
-
-        for filename in filenames:
-            if not filename.endswith(".py"):
-                continue
-            # Exclude test files (belt-and-suspenders: tests/ is outside APP_ROOT anyway).
-            if filename.endswith("_test.py") or filename.startswith("test_"):
-                continue
-            path = pathlib.Path(dirpath) / filename
-            # Always exclude the definition site.
-            if path.resolve() == definition_site:
-                continue
-            try:
-                files.append((path, path.read_text(encoding="utf-8")))
-            except (OSError, UnicodeDecodeError):
-                continue
+    # The shared walk prunes excluded subtrees without descending into them
+    # (avoids stat-ing / reading ~10k vendored site-package files).
+    for path in python_files(APP_ROOT, exclude=EXCLUDED_DIR_NAMES):
+        # Exclude test files (belt-and-suspenders: tests/ is outside APP_ROOT anyway).
+        if path.name.endswith("_test.py") or path.name.startswith("test_"):
+            continue
+        # Always exclude the definition site.
+        if path.resolve() == definition_site:
+            continue
+        try:
+            files.append((path, read_source(path)))
+        except (OSError, UnicodeDecodeError):
+            continue
 
     return tuple(sorted(files, key=lambda pt: pt[0]))
 

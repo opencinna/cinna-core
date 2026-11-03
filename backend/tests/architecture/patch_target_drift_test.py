@@ -82,6 +82,7 @@ import re
 
 import pytest
 
+from tests.architecture._source_index import parse_source, python_files
 from tests.utils.fixtures import (
     CREATE_SESSION_TARGETS_BASE,
     CREATE_SESSION_TARGETS_AGENT,
@@ -151,18 +152,11 @@ def _module_dotted_path(path: pathlib.Path) -> str:
 def _iter_app_source_files() -> list[pathlib.Path]:
     """First-party ``.py`` files under ``app/``, pruning vendored subtrees.
 
-    Uses ``os.walk`` so pruned directories are skipped without descending into
-    them (``rglob`` would still traverse the whole vendored tree).
+    The walk is shared with the other architecture tests and prunes vendored
+    directories without descending into them (``rglob`` would still traverse
+    the whole vendored tree).
     """
-    import os
-
-    files: list[pathlib.Path] = []
-    for dirpath, dirnames, filenames in os.walk(APP_ROOT):
-        dirnames[:] = [d for d in dirnames if d not in _PRUNED_DIR_NAMES]
-        for fn in filenames:
-            if fn.endswith(".py"):
-                files.append(pathlib.Path(dirpath) / fn)
-    return files
+    return python_files(APP_ROOT, exclude=_PRUNED_DIR_NAMES)
 
 
 # The (source_module, name) pairs this test cares about. Collected in a single
@@ -186,7 +180,7 @@ def _scan_all_importers() -> dict[tuple[str, str], frozenset[str]]:
     tracked = {pair: set() for pair in _TRACKED_IMPORTS}
     for path in sorted(_iter_app_source_files()):
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
+            tree = parse_source(path)
         except (OSError, UnicodeDecodeError, SyntaxError):
             continue
         module = _module_dotted_path(path)

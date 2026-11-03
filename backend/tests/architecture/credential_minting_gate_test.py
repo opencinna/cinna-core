@@ -134,6 +134,7 @@ from fastapi.routing import APIRoute
 import app as app_package
 from app.api import deps
 from app.main import app
+from tests.architecture._source_index import parse_source, python_files
 
 # ── Hand-written inputs (all existence-checked in the first test) ──────────
 
@@ -193,32 +194,26 @@ def _index() -> _Index:
     assert app_package.__file__ is not None
     app_dir = os.path.dirname(os.path.abspath(app_package.__file__))
     idx = _Index()
-    for dirpath, dirnames, filenames in os.walk(app_dir):
-        dirnames[:] = [d for d in dirnames if d not in PRUNED_DIRS]
-        for filename in sorted(filenames):
-            if not filename.endswith(".py"):
-                continue
-            path = os.path.join(dirpath, filename)
-            try:
-                with open(path, encoding="utf-8") as handle:
-                    tree = ast.parse(handle.read())
-            except (SyntaxError, UnicodeDecodeError):  # pragma: no cover
-                continue
-            for node in ast.walk(tree):
-                if isinstance(node, ast.ClassDef):
-                    idx.class_fields[node.name] = [
-                        stmt.target.id
-                        for stmt in node.body
-                        if isinstance(stmt, ast.AnnAssign)
-                        and isinstance(stmt.target, ast.Name)
-                    ]
-                    for member in node.body:
-                        if isinstance(member, ast.FunctionDef | ast.AsyncFunctionDef):
-                            idx.by_qualified[(node.name, member.name)] = member
-            # Only module-level functions are callable by a bare name.
-            for node in tree.body:
-                if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
-                    idx.by_bare.setdefault(node.name, []).append(node)
+    for path in python_files(app_dir, exclude=PRUNED_DIRS):
+        try:
+            tree = parse_source(path)
+        except (SyntaxError, UnicodeDecodeError):  # pragma: no cover
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef):
+                idx.class_fields[node.name] = [
+                    stmt.target.id
+                    for stmt in node.body
+                    if isinstance(stmt, ast.AnnAssign)
+                    and isinstance(stmt.target, ast.Name)
+                ]
+                for member in node.body:
+                    if isinstance(member, ast.FunctionDef | ast.AsyncFunctionDef):
+                        idx.by_qualified[(node.name, member.name)] = member
+        # Only module-level functions are callable by a bare name.
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                idx.by_bare.setdefault(node.name, []).append(node)
     return idx
 
 

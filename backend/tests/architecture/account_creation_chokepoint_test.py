@@ -61,6 +61,7 @@ from app.services.credentials.managed_ai_credentials_service import (
     ManagedAICredentialsService,
 )
 from app.services.users.user_service import UserService
+from tests.architecture._source_index import parse_source, python_files
 
 # The one place a ``User`` row may be constructed, as (path suffix, function).
 CHOKEPOINT_FILE = "services/users/user_service.py"
@@ -77,12 +78,7 @@ def _app_dir() -> pathlib.Path:
 
 def _app_modules() -> list[pathlib.Path]:
     """Every backend source file, minus the two deliberate exclusions."""
-    root = _app_dir()
-    return [
-        path
-        for path in sorted(root.rglob("*.py"))
-        if not any(part in _EXCLUDED_DIRS for part in path.relative_to(root).parts)
-    ]
+    return python_files(_app_dir(), exclude=_EXCLUDED_DIRS)
 
 
 def _relative(path: pathlib.Path) -> str:
@@ -113,7 +109,7 @@ def _calls_named(name: str) -> list[tuple[str, str | None, ast.Call, ast.AST]]:
     """``(module, enclosing function, call node, tree)`` for every call to ``name``."""
     found: list[tuple[str, str | None, ast.Call, ast.AST]] = []
     for path in _app_modules():
-        tree = ast.parse(path.read_text(), filename=str(path))
+        tree = parse_source(path)
         for node in ast.walk(tree):
             if isinstance(node, ast.Call) and _called_name(node) == name:
                 found.append((_relative(path), _enclosing_function(tree, node), node, tree))
@@ -189,7 +185,7 @@ def test_no_user_row_is_built_by_validating_another_model_into_it() -> None:
     """
     offenders = []
     for path in _app_modules():
-        tree = ast.parse(path.read_text(), filename=str(path))
+        tree = parse_source(path)
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
@@ -345,7 +341,7 @@ def test_the_creation_path_does_not_import_a_provider_client(
     widening this rule to it would make the test wrong rather than strict.
     """
     forbidden = {"httpx", "requests", "aiohttp", "urllib3", "openai", "anthropic"}
-    tree = ast.parse((_app_dir() / module_path).read_text())
+    tree = parse_source(_app_dir() / module_path)
 
     imported: set[str] = set()
     for node in ast.walk(tree):

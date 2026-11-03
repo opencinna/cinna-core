@@ -60,10 +60,11 @@ from __future__ import annotations
 
 import ast
 import functools
-import os
 import pathlib
 
 import pytest
+
+from tests.architecture._source_index import parse_source, python_files, read_source
 
 # ── Constants ──────────────────────────────────────────────────────────────
 
@@ -120,18 +121,13 @@ def _uploader_user_id_keyword_values(tree: ast.AST) -> list[ast.expr]:
 @functools.lru_cache(maxsize=1)
 def _source_files() -> tuple[tuple[pathlib.Path, str], ...]:
     files: list[tuple[pathlib.Path, str]] = []
-    for dirpath, dirnames, filenames in os.walk(APP_ROOT):
-        dirnames[:] = [d for d in dirnames if d not in _EXCLUDED_DIR_NAMES]
-        for filename in filenames:
-            if not filename.endswith(".py"):
-                continue
-            if filename.endswith("_test.py") or filename.startswith("test_"):
-                continue
-            path = pathlib.Path(dirpath) / filename
-            try:
-                files.append((path, path.read_text(encoding="utf-8")))
-            except (OSError, UnicodeDecodeError):
-                continue
+    for path in python_files(APP_ROOT, exclude=_EXCLUDED_DIR_NAMES):
+        if path.name.endswith("_test.py") or path.name.startswith("test_"):
+            continue
+        try:
+            files.append((path, read_source(path)))
+        except (OSError, UnicodeDecodeError):
+            continue
     return tuple(sorted(files, key=lambda pt: pt[0]))
 
 
@@ -146,9 +142,9 @@ def test_only_channel_inbound_service_may_originate_a_non_none_uploader_user_id(
     violations: list[tuple[pathlib.Path, str]] = []
     origin_found = False
 
-    for path, text in _source_files():
+    for path, _text in _source_files():
         try:
-            tree = ast.parse(text)
+            tree = parse_source(path)
         except SyntaxError:
             continue
         values = _uploader_user_id_keyword_values(tree)

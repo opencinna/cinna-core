@@ -56,7 +56,6 @@ declared outside the package.
 from __future__ import annotations
 
 import ast
-import os
 import pathlib
 
 import pytest
@@ -66,6 +65,7 @@ from app.models.credentials.provider_admin_credential import (
     ProviderAdminCredentialConfig,
 )
 from app.services.ai_providers import registry
+from tests.architecture._source_index import parse_source, python_files
 
 _HERE = pathlib.Path(__file__).resolve()
 _BACKEND_ROOT = _HERE.parent.parent.parent          # backend/
@@ -86,13 +86,7 @@ ALLOWED_PROVIDER_TABLE_MODULES: set[str] = set()
 
 
 def _iter_source_files(root: pathlib.Path) -> list[pathlib.Path]:
-    files: list[pathlib.Path] = []
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in _PRUNED_DIR_NAMES]
-        for filename in filenames:
-            if filename.endswith(".py"):
-                files.append(pathlib.Path(dirpath) / filename)
-    return files
+    return python_files(root, exclude=_PRUNED_DIR_NAMES)
 
 
 def _module_dotted_path(path: pathlib.Path, base: pathlib.Path) -> str:
@@ -132,7 +126,7 @@ def _find_provider_tables(
         if exclude in path.resolve().parents:
             continue
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
+            tree = parse_source(path)
         except (OSError, UnicodeDecodeError, SyntaxError):
             continue
         module = _module_dotted_path(path, base)

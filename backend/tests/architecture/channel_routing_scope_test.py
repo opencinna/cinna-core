@@ -88,6 +88,8 @@ from typing import NamedTuple
 
 import pytest
 
+from tests.architecture._source_index import parse_source, python_files
+
 _HERE = pathlib.Path(__file__).resolve()
 _BACKEND_ROOT = _HERE.parent.parent.parent  # backend/
 
@@ -184,7 +186,7 @@ def test_channel_routing_never_imports_the_app_mcp_candidate_set() -> None:
     offenders: list[str] = []
     for path in _GUARDED_MODULES:
         assert path.is_file(), f"Expected {path} to exist"
-        symbols, modules = _imports(ast.parse(path.read_text(encoding="utf-8")))
+        symbols, modules = _imports(parse_source(path))
         rel = path.relative_to(_BACKEND_ROOT)
         for name, why in _FORBIDDEN_SYMBOLS.items():
             if name in symbols:
@@ -577,7 +579,7 @@ def test_routing_surface_boundary_is_not_crossed(
 ) -> None:
     """One provider/consumer seam, over one file (phase 7 §2.2)."""
     assert path.is_file(), f"Expected {path} to exist"
-    tree = ast.parse(path.read_text(encoding="utf-8"))
+    tree = parse_source(path)
     symbols, modules = _imports(tree)
     rel = path.relative_to(_BACKEND_ROOT)
 
@@ -636,11 +638,7 @@ _MIN_IDENTITY_BUILD_CALL_SITES = 3
 
 
 def _app_source_files() -> list[pathlib.Path]:
-    return [
-        path
-        for path in sorted(_APP.rglob("*.py"))
-        if not any(part in _NOT_APP_SOURCE for part in path.relative_to(_APP).parts)
-    ]
+    return python_files(_APP, exclude=_NOT_APP_SOURCE)
 
 
 _PROVIDER_CLASS = "IdentityCandidateProvider"
@@ -761,7 +759,7 @@ def test_every_identity_candidate_build_call_passes_a_policy() -> None:
     found = 0
     for path in _app_source_files():
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
+            tree = parse_source(path)
         except SyntaxError:  # pragma: no cover - not this test's subject
             continue
         for call in _identity_build_calls(tree):
