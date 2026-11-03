@@ -3,7 +3,9 @@
 //   cinna.onData(cb)             -> cb(data, { stale, fetched_at }); cached first, then fresh
 //   cinna.setParams(params)      -> stored on the tile; the source recomputes, arrives via onData
 //   cinna.setContext({ summary, selection, visible }) -> what the owner's chat sees; last call wins
-//   await cinna.call(endpoint, params) -> one of this component's own endpoints (drill-downs)
+//   await cinna.call(endpoint, params) -> one of this component's own endpoints (drill-downs):
+//                                         its JSON value itself; rejects with { message }
+// The helper is the kit's protocols/dashboards-bridge.js, injected by the host; never copy it here.
 // Relative paths only, every library in this folder, no network.
 (function () {
   const chart = document.getElementById("chart");

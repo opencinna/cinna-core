@@ -1,0 +1,14 @@
+{
+  "description": "A web view whose page has a `<base>` tag, which the sandbox refuses (base-uri 'none').",
+  "component": "dashboards/follow-ups",
+  "run": false,
+  "expect": {
+    "errors": [
+      {
+        "path": "dashboards/follow-ups/index.html",
+        "code": "base_tag",
+        "field": null
+      }
+    ]
+  }
+}

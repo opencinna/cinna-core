@@ -70,7 +70,8 @@ Use `html` only for what native views cannot draw: a custom chart, a map, an int
 ## Endpoints
 
 - An endpoint is a script in the component's `api/`. The params object arrives on **stdin**, unwrapped; print **one JSON value** on **stdout**; logs go to stderr. cwd is the agent folder, the environment carries the agent's credentials.
-- `.py` runs with Python (`uv run python` when the agent has a `pyproject.toml`); `.js`, `.mjs` and `.cjs` run with Node. Choose by what the agent already uses. A Node endpoint uses built-ins, or an already-installed `node_modules`; nothing installs packages for it.
+- `.py` runs with Python, localized as `/run:` commands are (through `uv` when the agent has a `pyproject.toml`); `.js`, `.mjs` and `.cjs` run with Node. Choose by what the agent already uses.
+- **A Node endpoint is pure JS**: Node built-ins and pure-JS packages only, from an already-installed `node_modules`; nothing installs packages for it. Native addons (`.node` files) do not load when the owner has no Node of their own: Cinna Desktop then runs Electron as Node, macOS library validation in the signed app refuses unsigned addons, and the Node ABI differs as well (measured). When you need a native module, write the endpoint in Python. ESM, top-level `await` and Node's global `fetch` all work.
 - **Make them fast.** Read data that is already prepared; do not crawl a mailbox or an API on every call. The timeout is 60 s by default (`timeout_s`, at most 300), and the owner is waiting.
 - **Slow work** goes into `refresh.command` (`/run:<name>`, a command in `docs/CLI_COMMANDS.yaml` that rewrites the source file) or into a schedule.
 - **Data that needs judgment**, such as ranking emails by the owner's own rules, comes from a prompt schedule that writes the file; name it in `refresh.schedule` and point `source.file` at what it writes.
@@ -85,15 +86,25 @@ Use `html` only for what native views cannot draw: a custom chart, a map, an int
 
 ## Web views
 
-`view: "html"` with an `entry` page (default `index.html`) in the component folder. The page runs in a sandbox:
+`view: "html"` with an `entry` page (default `index.html`) in the component folder. The page runs in a sandboxed frame whose content security policy allows only the component's own folder, with no same-origin access and no top navigation. `check_component.py` flags each of these:
 
 - **No network.** Bundle every library into the folder; no CDN, no web fonts, no external images. A request that leaves the folder is blocked.
-- **Relative paths only**: `./app.js`, never `/app.js` or a URL.
-- The host injects `window.cinna`:
+- **`fetch` and XHR reach only the component's own folder, by relative path.** Static files are fine. Endpoint data never comes through `fetch`: `api/` is not served (404). Use `cinna.onData` and `cinna.call`.
+- **Relative paths, with no leading slash**: `./app.js` or `app.js`, never `/app.js`. The page lives under a per-tile path prefix, so `/app.js` resolves outside it and is blocked.
+- **No `<base>`**: the policy sets `base-uri 'none'`.
+- **No `<iframe>`**: `frame-src 'none'`.
+- **No Web Workers**: `worker-src 'none'`.
+- **No form submission**: `form-action 'none'`; a submitted form replaces the page with an error page.
+- **No `eval`, `new Function` or string `setTimeout`**: there is no `'unsafe-eval'`. Some chart libraries need it, so pick ones that do not.
+- **No WebAssembly**: there is no `'wasm-unsafe-eval'`.
+- **No `localStorage`, `sessionStorage`, IndexedDB or cookies**: the origin is opaque, so each throws `SecurityError`. State that must persist goes into params (`cinna.setParams`) or into `app-data/` through an endpoint.
+- **No `window.open` and no top navigation**, not even on a click: links go through `cinna.openLink(url)`, which the owner confirms.
+- Inline `<script>` and `<style>` are allowed.
+- The host injects `window.cinna` before your scripts run (the kit's reference helper, `protocols/dashboards-bridge.js`); never copy or write it yourself:
   - `await cinna.ready` gives `{component, title, params, theme, size}`;
   - `cinna.onData((data, meta) => …)` gets the source's result, the cached one first (`meta.stale`), then the fresh one;
   - `cinna.setParams({...})` changes the tile's params; the new result arrives through `onData`;
-  - `await cinna.call("<endpoint>", {...})` runs one of this component's own endpoints, for drill-downs;
+  - `await cinna.call("<endpoint>", {...})` runs one of this component's own endpoints, for drill-downs. It resolves to the endpoint's JSON value itself and rejects with `{message}`, so wrap it in `try`/`catch`;
   - `cinna.setContext({summary, selection, visible})` tells the owner's chat what is on screen;
   - `cinna.ask(text)` fills in the chat's composer, and `cinna.openLink(url)` opens a link after the owner confirms.
 - **Always call `setContext`** after drawing and after every selection: a one-line `summary` of what is shown, and `selection` and `visible` as row or item ids.
@@ -116,7 +127,7 @@ echo '{"week": "2026-W45"}' | node dashboards/revenue/api/week_detail.mjs
 
 1. Run the check from the agent folder and fix everything it prints:
    `uv run python <this skill's folder>/scripts/check_component.py dashboards/<name> --run`
-   The host's prompt gives this skill's folder. The check covers Node endpoints too: it runs them with the `node` in `CINNA_NODE` when the host sets that variable, otherwise the first `node` on `PATH`; with neither it warns and skips the run, because a host runs them with its own Node.
+   The host's prompt gives this skill's folder. The check covers Node endpoints too: it runs them with `CINNA_NODE` when the host sets that variable (an executable that runs a script the way `node` does), otherwise the first `node` on `PATH`; with neither it warns and skips the run, because a host runs them with its own Node.
 2. Print the reference **on its own line**, with the prefix your host's prompt gives you (`bundle:<id>` for a shared agent, otherwise `id:<manifest id>`):
 
    cinna://component/id:2f6c…/deals-pipeline

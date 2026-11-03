@@ -1,0 +1,15 @@
+{
+  "description": "A web view that reads localStorage, which throws in the sandbox's opaque origin; the check warns.",
+  "component": "dashboards/follow-ups",
+  "run": false,
+  "expect": {
+    "errors": [],
+    "warnings": [
+      {
+        "path": "dashboards/follow-ups/app.js",
+        "code": "sandbox_unsupported",
+        "field": "localStorage"
+      }
+    ]
+  }
+}

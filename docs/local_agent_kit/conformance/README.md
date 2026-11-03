@@ -103,7 +103,8 @@ same triples from the same rules (`x-check-codes` in
 `protocols/dashboards.schema.json` lists the codes). `path` is agent-relative;
 `field` is the `component.json` field with map keys written literally
 (`endpoints.items.script`), or for a result the data field with indices dropped
-(`items.title`), or null.
+(`items.title`), for a web view's content scans (since 1.19.1) the trigger that
+matched (`href`, `fetch`, `localStorage`), or null.
 
 | Key | Passes when |
 |-----|-------------|

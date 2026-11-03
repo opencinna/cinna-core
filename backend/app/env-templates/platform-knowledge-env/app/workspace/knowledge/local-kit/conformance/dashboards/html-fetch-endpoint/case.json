@@ -1,0 +1,14 @@
+{
+  "description": "A web view that fetches its endpoint script from `./api/`, which is never served to a page; data comes through cinna.onData and cinna.call.",
+  "component": "dashboards/follow-ups",
+  "run": false,
+  "expect": {
+    "errors": [
+      {
+        "path": "dashboards/follow-ups/app.js",
+        "code": "fetch_endpoint",
+        "field": "fetch"
+      }
+    ]
+  }
+}

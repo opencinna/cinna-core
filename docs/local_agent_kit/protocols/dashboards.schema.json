@@ -242,13 +242,13 @@
   "x-endpoint-convention": {
     "location": "dashboards/<component>/api/<endpoint>.<ext>; a component may mix runtimes.",
     "runtimes": {
-      ".py": "python <script>, localized as commands are: `uv run python <script>` when the agent has a pyproject.toml; the host's managed uv. check_component.py --run without `uv` on PATH runs the checker's own Python and warns `uv_missing`.",
-      ".js": "node <script>: the user's `node` when one resolves on the command's PATH, otherwise the host's own Node runtime (Cinna Desktop: Electron as Node). A host passes that runtime's path to tools it runs in `CINNA_NODE`; check_component.py --run uses `CINNA_NODE`, then `node` on PATH, and with neither warns `runtime_missing` and skips the run.",
+      ".py": "python <script>, localized as `/run:` commands are (through the host's managed uv when the agent has a pyproject.toml). check_component.py --run without `uv` on PATH runs the checker's own Python and warns `uv_missing`.",
+      ".js": "node <script>: the user's `node` when one resolves on the command's PATH, otherwise the host's own Node runtime (Cinna Desktop: Electron as Node). A host passes `CINNA_NODE` to tools it runs: it names an executable that runs a script the way `node` does (`$CINNA_NODE <script>`), not necessarily a real node, so it is never probed with `--version` or any other flag. check_component.py --run runs exactly `[CINNA_NODE, script]`, else `node` on PATH, and with neither warns `runtime_missing` and skips the run.",
       ".mjs": "as .js",
       ".cjs": "as .js",
       ".ts": "not yet: unknown extensions are refused."
     },
-    "node_dependencies": "Built-ins and files in the agent folder. A package.json dependency works only when node_modules/ is already installed by the agent; a host never runs npm install.",
+    "node_dependencies": "Pure JS only: Node built-ins, files in the agent folder, and pure-JS packages. A package.json dependency works only when node_modules/ is already installed by the agent; a host never runs npm install. Native addons (`.node`) do not load when the owner has no Node of their own: the host then runs its own runtime as Node (Cinna Desktop: Electron as Node, where macOS library validation in the signed app refuses unsigned addons and the Node ABI differs as well; measured). An endpoint that needs a native module is written in Python. ESM, top-level await and the global fetch all work under that fallback.",
     "cwd": "The agent root, also for a component a skill ships.",
     "environment": "The agent's credential environment, the same as for /run: commands.",
     "stdin": "The params object itself (not wrapped): the tile's values, or each param's default with `current`/`today` resolved.",
@@ -259,17 +259,54 @@
     "failure": "A non-zero exit fails the run with the last 2,000 characters of stderr; the tile keeps its last good data and shows a mark. Stdout is read only up to max_stdout_bytes: past that the run is killed and fails."
   },
   "x-web-view": {
-    "sandbox": "The page runs in a sandboxed frame whose CSP allows only the component's own files: no network, no CDN, no web fonts, no top navigation. Bundle every library into the folder and load it by relative path.",
+    "sandbox": {
+      "description": "The page runs in a frame sandboxed with `allow-scripts allow-forms allow-modals` (no `allow-same-origin`, no top navigation, no popups), served under a per-tile path prefix, with a content security policy scoped to the component's own folder `<src>`: `default-src 'none'; connect-src <src>; script-src <src> 'unsafe-inline'; style-src <src> 'unsafe-inline'; img-src <src> data: blob:; font-src <src> data:; media-src <src> blob:; form-action 'none'; base-uri 'none'; frame-src 'none'; worker-src 'none'`. A host uses this policy as written; `<src>` is never `'self'`, a bare scheme or a host. Each rule below says why; check_component.py reports the code given.",
+      "rules": [
+        { "rule": "No network: bundle every library into the folder; no CDN, web fonts or external images.", "why": "Every fetch directive allows only <src>.", "code": "network_reference" },
+        { "rule": "fetch / XHR reach only the component's own folder, by relative path. Static files are fine; endpoint data never comes through fetch.", "why": "connect-src <src>, and api/ is never served (404). Use cinna.onData and cinna.call.", "code": "fetch_endpoint" },
+        { "rule": "Relative paths with no leading slash: `./app.js` or `app.js`, never `/app.js`.", "why": "The page lives under a per-tile path prefix, so `/app.js` resolves outside it and is blocked.", "code": "root_relative_path" },
+        { "rule": "No `<base>`.", "why": "base-uri 'none'.", "code": "base_tag" },
+        { "rule": "No `<iframe>`.", "why": "frame-src 'none'; a frame could otherwise leak data through its URL.", "code": "sandbox_unsupported" },
+        { "rule": "No Web Workers.", "why": "worker-src 'none'.", "code": "sandbox_unsupported" },
+        { "rule": "No form submission.", "why": "form-action 'none': a submitted form replaces the page with an error page." },
+        { "rule": "No eval, new Function or string setTimeout; pick chart libraries that do not need them.", "why": "There is no 'unsafe-eval'.", "code": "sandbox_unsupported" },
+        { "rule": "No WebAssembly.", "why": "There is no 'wasm-unsafe-eval'.", "code": "sandbox_unsupported" },
+        { "rule": "No localStorage, sessionStorage, IndexedDB or cookies; persist state in params (cinna.setParams) or in app-data/ through an endpoint.", "why": "The origin is opaque, so each throws SecurityError.", "code": "sandbox_unsupported" },
+        { "rule": "No window.open and no top navigation, not even on a click; links go through cinna.openLink(url).", "why": "The sandbox grants neither popups nor top navigation; the owner confirms every link.", "code": "sandbox_unsupported" },
+        { "rule": "Inline <script> and <style> are allowed.", "why": "script-src and style-src carry 'unsafe-inline'." }
+      ]
+    },
     "bridge": {
-      "description": "The host injects `window.cinna`, which speaks MCP Apps (2026-01-26) JSON-RPC over postMessage; Cinna-only methods are under `cinna/*`. Pages use the helper and never the wire.",
-      "cinna.ready": "Promise of {component, title, params, theme, size}. Wire: ui/initialize + ui/notifications/initialized.",
-      "cinna.onData(cb)": "cb(data, {stale, fetched_at}): the cached result first, then the fresh one. Wire: ui/notifications/tool-result.",
-      "cinna.call(endpoint, params)": "Promise of one of this component's own endpoints' result, for drill-downs; not cached. Wire: tools/call.",
-      "cinna.setParams(params)": "Stored on the tile; the source recomputes and the result arrives through onData. Wire: cinna/params-changed.",
-      "cinna.setContext({summary, selection, visible})": "What the owner's dashboard chat sees about this tile; `selection` and `visible` are row or item ids. The last call wins. Wire: ui/update-model-context.",
-      "cinna.ask(text)": "Fills the dashboard chat's composer; never sends. Wire: ui/message.",
-      "cinna.openLink(url)": "Opens the default browser after the owner confirms the full URL. Wire: ui/open-link.",
-      "cinna.onTheme(cb)": "Light/dark changes. Wire: ui/notifications/host-context-changed. The host also sets CSS variables named `--cinna-*`; a page uses them with fallbacks, e.g. `var(--cinna-bg, #fff)`."
+      "description": "The host injects `window.cinna` before the page's own scripts. The helper is the kit's `protocols/dashboards-bridge.js`: every host injects that file unchanged and keeps no fork; a change to the bridge is a change to that file. A component never ships or writes its own. It speaks MCP Apps (2026-01-26) JSON-RPC 2.0 over postMessage with `window.parent` (targetOrigin '*', since the frame's origin is opaque) and reads only messages whose `event.source` is `window.parent`; Cinna-only methods are under `cinna/*`. Pages use the helper and never the wire.",
+      "cinna.ready": "Promise of {component, title, params, theme, size}. Wire: ui/initialize, then ui/notifications/initialized.",
+      "cinna.onData(cb)": "cb(data, {stale, fetched_at}): the cached result first, then the fresh one; a callback registered late gets the last result. Returns an unsubscribe function. Wire: ui/notifications/tool-result.",
+      "cinna.call(endpoint, params)": "Runs one of this component's own endpoints, for drill-downs; not cached. Resolves to the endpoint's JSON value itself (on the wire, tools/call → the result's structuredContent, which the helper unwraps); rejects with {message} on a JSON-RPC error, a result with isError, or no answer within 330 s.",
+      "cinna.setParams(params)": "Stored on the tile; the source recomputes and the result arrives through onData. Fire-and-forget. Wire: cinna/params-changed.",
+      "cinna.setContext({summary, selection, visible})": "What the owner's dashboard chat sees about this tile; `selection` and `visible` are row or item ids. The last call wins. Returns a promise a page need not await. Wire: ui/update-model-context.",
+      "cinna.ask(text)": "Fills the dashboard chat's composer; never sends. Returns a promise a page need not await. Wire: ui/message.",
+      "cinna.openLink(url)": "Opens the default browser after the owner confirms the full URL. Returns a promise a page need not await. Wire: ui/open-link.",
+      "cinna.onTheme(cb)": "cb(theme) on light/dark changes; returns an unsubscribe function. Wire: ui/notifications/host-context-changed. The helper sets the host's `--cinna-*` CSS variables and `color-scheme` on the document element; a page uses the variables with fallbacks, e.g. `var(--cinna-bg, #fff)`.",
+      "host_contract": {
+        "description": "What the helper expects of a host. Messages are JSON-RPC 2.0 objects posted to and from the frame.",
+        "nonce": "The ui/initialize result carries `_meta.cinna.nonce`. The helper holds anything written before that result arrives, then repeats the nonce as `params._meta.cinna.nonce` on every later request and notification it sends, and on its answers as `result._meta.cinna.nonce` (or `error.data._meta.cinna.nonce`). It replaces the nonce whenever a later ui/initialize result, or any host message, carries a new `_meta.cinna.nonce`, so a host may rotate it on every ui/initialize. The page attaches a nonce only when it has been given one: a result without one is accepted with one console warning, the handshake completes, and messages go without the field until a host message supplies one. Enforcing the nonce is the host's job: a host finds the tile by `event.source`, then requires the current nonce; ui/initialize itself carries none.",
+        "requests_sent": {
+          "ui/initialize": "params {protocolVersion: \"2026-01-26\", appInfo: {name, version}, appCapabilities: {}}, sent once when the helper loads. Result {protocolVersion, hostInfo?, hostCapabilities?, hostContext: {theme: \"light\"|\"dark\", styles?: {variables: {\"--cinna-…\": value}}}, _meta: {cinna: {nonce, component, title, params, size}}}. No timeout: cinna.ready waits for it.",
+          "tools/call": "params {name: endpoint, arguments: params}. Result an MCP CallToolResult: {structuredContent, content?, isError?}; isError with a text content block rejects with that text.",
+          "ui/update-model-context": "params {content: [{type: \"text\", text: summary}], structuredContent: {summary, selection, visible}}. Result {}. Times out after 60 s.",
+          "ui/message": "params {role: \"user\", content: [{type: \"text\", text}]}. Result {}. Times out after 60 s.",
+          "ui/open-link": "params {url}. Result {} once handled. Times out after 300 s, since the owner confirms first."
+        },
+        "notifications_sent": {
+          "ui/notifications/initialized": "params {} (plus the nonce), once the ui/initialize result is in. A host sends no data before it.",
+          "cinna/params-changed": "params {params}: the tile's new params; the host stores them, recomputes the source and answers through ui/notifications/tool-result."
+        },
+        "notifications_received": {
+          "ui/notifications/tool-result": "params an MCP CallToolResult {structuredContent, content?, isError?, _meta: {cinna: {stale, fetched_at}}}: the cached result (stale true) first, then the fresh one. A result with isError is ignored, so the page keeps its last data.",
+          "ui/notifications/host-context-changed": "params a partial hostContext {theme?, styles?: {variables}}."
+        },
+        "requests_received": "ping and ui/resource-teardown are answered with {} (plus the nonce); any other host request with error -32601, so a host never waits on a page.",
+        "unanswered": "A request the host never answers rejects after its timeout; one that times out before the handshake completes is dropped, never posted. setContext, ask and openLink swallow that rejection unless the page awaits them, and setParams is a notification with nothing to answer."
+      }
     }
   },
   "x-references": {
@@ -317,12 +354,16 @@
       { "code": "script_location", "severity": "warning", "field": "endpoints.<name>.script", "rule": "Scripts live in api/." },
       { "code": "entry_ignored", "severity": "warning", "field": "entry", "rule": "entry is only read for view html." },
       { "code": "network_reference", "severity": "warning", "rule": "No page asset loads from the network." },
+      { "code": "root_relative_path", "field": "src | href | url | import | fetch | XMLHttpRequest", "rule": "Content scan of a web view's page files (the entry, and every .html, .htm, .css, .js and .mjs in the component outside api/) for a path that starts with a single `/`: a `src=`/`href=` attribute value, quoted or not, in .html/.htm; a quoted string assigned to `src`/`href` in .js/.mjs; CSS `url(` and JS/CSS `import` in any page file; a quoted `fetch(` or XHR `.open(method, …)` URL in .html/.js/.mjs. A protocol-relative `//` is network_reference's, and a root-relative `/api/` URL is fetch_endpoint's alone. `field` names which form matched." },
+      { "code": "base_tag", "rule": "Content scan of the entry and every .html/.htm page file: no `<base` tag." },
+      { "code": "fetch_endpoint", "field": "fetch | XMLHttpRequest", "rule": "Content scan of the page files: no `fetch(` or XMLHttpRequest `.open(method, …)` aimed at `api/`, `./api/` or `/api/`." },
+      { "code": "sandbox_unsupported", "severity": "warning", "field": "Worker | iframe | eval | Function | WebAssembly | localStorage | sessionStorage | indexedDB | document.cookie | window.open", "rule": "Content scan of the page files for `new Worker(`, `<iframe`, `eval(`, `new Function(`, `WebAssembly.`, `localStorage`, `sessionStorage`, `indexedDB`, `document.cookie` and `window.open(`, each matched as a whole identifier (so `retrieval(` is not `eval(`). `field` names the trigger." },
       { "code": "stray_file", "severity": "warning", "rule": "No plain file directly in dashboards/." }
     ],
     "schema_failures": "A schema failure reports the code x-check-codes gives for that field: `while_open_every` too short is `while_open_every_too_short`, other durations `duration_invalid`; a bad endpoint or param name `endpoint_name_invalid` / `param_name_invalid`; a script path `script_extension` when only the extension fails, else `script_outside_component`; source.file `source_file_extension` when only the extension fails, else `source_file_location`; a .csv/.md source with the wrong view `source_file_view`; source with neither, both or extra keys `source_invalid`; entry `entry_invalid`; refresh.command `refresh_command_invalid`; a missing required field `required`; a wrong JSON type `invalid_type`; anything else `invalid_value`."
   },
   "x-check-codes": {
-    "description": "Stable finding codes. check_component.py prints `path: message` lines and, with --json, {path, code, field, severity, message}. `path` is agent-relative; `field` is the component.json field (map keys written literally, e.g. `endpoints.deals.script`) or, for a result, the data field with array indices dropped (`items.title`).",
+    "description": "Stable finding codes. check_component.py prints `path: message` lines and, with --json, {path, code, field, severity, message}. `path` is agent-relative; `field` is the component.json field (map keys written literally, e.g. `endpoints.deals.script`), for a result the data field with array indices dropped (`items.title`), or for a page-file content scan the trigger that matched (x-script-only-checks). A content scan reports each (path, code, field) once per file.",
     "errors": {
       "not_a_directory": "the path is not a folder",
       "not_in_dashboards": "the folder is not dashboards/<name>/ of an agent or a skill",
@@ -352,7 +393,10 @@
       "credential_unknown": "a requires_credentials name is not in the manifest's credentials[]",
       "run_failed": "--run: the endpoint exited non-zero, timed out or could not start",
       "run_output_invalid": "--run: stdout is not one JSON value, or is over 5 MB",
-      "shape_invalid": "--run: the result does not fit the view's shape"
+      "shape_invalid": "--run: the result does not fit the view's shape",
+      "root_relative_path": "a web view's page file has a src/href, CSS url(, import, fetch or XHR path starting with a single `/`, which resolves outside the tile's folder",
+      "base_tag": "a web view's page has a `<base>` tag (base-uri 'none')",
+      "fetch_endpoint": "a web view's page fetches api/, ./api/ or /api/, which is never served; use cinna.onData and cinna.call"
     },
     "warnings": {
       "script_location": "an endpoint script is outside api/",
@@ -365,7 +409,8 @@
       "network_reference": "a page asset loads something from the network",
       "stray_file": "a plain file directly in dashboards/",
       "source_file_unwritten": "--run: the source file does not exist yet",
-      "id_missing": "--run: a row or item has no id, so it cannot be selected"
+      "id_missing": "--run: a row or item has no id, so it cannot be selected",
+      "sandbox_unsupported": "a web view's page uses something the sandbox refuses: a Worker, an iframe, eval or new Function, WebAssembly, storage or cookies, or window.open"
     }
   }
 }

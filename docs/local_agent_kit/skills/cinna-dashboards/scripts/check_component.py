@@ -57,7 +57,8 @@ SOURCE_FILE_EXTENSIONS = (".md", ".json", ".csv")
 # Extensions are matched as written: lowercase only, like the schema's patterns.
 ENTRY_EXTENSIONS = (".html",)
 DEFAULT_ENTRY = "index.html"
-# A node executable a host can pass (Cinna Desktop: its Electron-as-Node shim); read before PATH.
+# An executable that runs a script the way `node` does, passed by a host; read before PATH.
+# The check only ever runs `[CINNA_NODE, script]`: never `--version`, a flag or any probe.
 NODE_ENV_VAR = "CINNA_NODE"
 
 DURATION_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
@@ -89,6 +90,73 @@ _CSS_NETWORK_RE = re.compile(r"""(?:@import\s+|url\(\s*)["']?(?:https?:)?//""", 
 _JS_NETWORK_RE = re.compile(
     r"""(?:\bfrom\s+|\bimport\s*\(\s*|\bfetch\s*\(\s*|\bnew\s+WebSocket\s*\(\s*)["'`](?:https?:|wss?:)?//"""
 )
+
+# The page files a web view's content scans read (api/ is never served, so it is skipped).
+PAGE_SCAN_EXTENSIONS = (".html", ".htm", ".css", ".js", ".mjs")
+_HTML_EXTENSIONS = (".html", ".htm")
+
+# A single leading `/` resolves outside the tile's per-tile path prefix, so it is blocked.
+# `(?![/*])` leaves a protocol-relative `//host` to network_reference; a root-relative api/
+# URL is fetch_endpoint's alone. Each is (field, pattern).
+_ROOT = r"""/(?![/*])"""
+_QUOTED_ROOT = r"""["'`]/(?![/*])"""
+_HTML_ATTR_ROOT_RES = (  # an attribute value, quoted or not: .html/.htm only
+    ("src", re.compile(r"""(?<![\w$])src\s*=\s*["']?""" + _ROOT, re.IGNORECASE)),
+    ("href", re.compile(r"""(?<![\w$])href\s*=\s*["']?""" + _ROOT, re.IGNORECASE)),
+)
+_SCRIPT_ATTR_ROOT_RES = (  # a script assigning a quoted string: `img.src = "/x.png"`
+    ("src", re.compile(r"""(?<![\w$])src\s*=\s*""" + _QUOTED_ROOT)),
+    ("href", re.compile(r"""(?<![\w$])href\s*=\s*""" + _QUOTED_ROOT)),
+)
+_SHARED_ROOT_RES = (  # CSS url( and imports, in every page file
+    ("url", re.compile(r"""(?<![\w$.-])url\(\s*["']?""" + _ROOT)),
+    ("import", re.compile(r"""(?:\bfrom\s+|\bimport\s*\(\s*|\bimport\s+|@import\s+)""" + _QUOTED_ROOT)),
+)
+_REQUEST_ROOT_RES = (  # a request by root-relative URL, outside api/ (that is fetch_endpoint)
+    ("fetch", re.compile(r"""\bfetch\s*\(\s*""" + _QUOTED_ROOT + r"""(?!api/)""")),
+    ("XMLHttpRequest", re.compile(
+        r"""\.open\s*\(\s*["'`][A-Za-z]+["'`]\s*,\s*""" + _QUOTED_ROOT + r"""(?!api/)""")),
+)
+_ROOT_RELATIVE_RES = {
+    ".html": _HTML_ATTR_ROOT_RES + _SHARED_ROOT_RES + _REQUEST_ROOT_RES,
+    ".htm": _HTML_ATTR_ROOT_RES + _SHARED_ROOT_RES + _REQUEST_ROOT_RES,
+    ".js": _SCRIPT_ATTR_ROOT_RES + _SHARED_ROOT_RES + _REQUEST_ROOT_RES,
+    ".mjs": _SCRIPT_ATTR_ROOT_RES + _SHARED_ROOT_RES + _REQUEST_ROOT_RES,
+    ".css": _SHARED_ROOT_RES,
+}
+# `<base` changes how every relative path resolves, and base-uri 'none' blocks it.
+_BASE_TAG_RE = re.compile(r"<base\b", re.IGNORECASE)
+# Endpoint data never comes through fetch: api/ is not served. (field, pattern)
+_FETCH_ENDPOINT_RES = (
+    ("fetch", re.compile(r"""\bfetch\s*\(\s*["'`](?:\.?/)?api/""")),
+    ("XMLHttpRequest", re.compile(
+        r"""\.open\s*\(\s*["'`][A-Za-z]+["'`]\s*,\s*["'`](?:\.?/)?api/""")),
+)
+# What the sandbox refuses (CSP and an opaque origin): it throws or does nothing. (field, pattern)
+_SANDBOX_UNSUPPORTED_RES = (
+    ("Worker", re.compile(r"\bnew\s+Worker\s*\(")),
+    ("iframe", re.compile(r"<iframe\b", re.IGNORECASE)),
+    ("eval", re.compile(r"(?<![\w$])eval\s*\(")),
+    ("Function", re.compile(r"\bnew\s+Function\s*\(")),
+    ("WebAssembly", re.compile(r"(?<![\w$])WebAssembly\.")),
+    ("localStorage", re.compile(r"(?<![\w$])localStorage(?![\w$])")),
+    ("sessionStorage", re.compile(r"(?<![\w$])sessionStorage(?![\w$])")),
+    ("indexedDB", re.compile(r"(?<![\w$])indexedDB(?![\w$])")),
+    ("document.cookie", re.compile(r"(?<![\w$])document\.cookie(?![\w$])")),
+    ("window.open", re.compile(r"(?<![\w$])window\.open\s*\(")),
+)
+_SANDBOX_REASONS = {
+    "Worker": "Web Workers are blocked (worker-src 'none')",
+    "iframe": "frames are blocked (frame-src 'none')",
+    "eval": "there is no 'unsafe-eval', so eval throws",
+    "Function": "there is no 'unsafe-eval', so new Function throws",
+    "WebAssembly": "there is no 'wasm-unsafe-eval', so WebAssembly does not compile",
+    "localStorage": "the origin is opaque, so localStorage throws SecurityError",
+    "sessionStorage": "the origin is opaque, so sessionStorage throws SecurityError",
+    "indexedDB": "the origin is opaque, so IndexedDB throws SecurityError",
+    "document.cookie": "the origin is opaque, so cookies throw SecurityError",
+    "window.open": "popups and top navigation are blocked; use cinna.openLink(url)",
+}
 
 
 @dataclass
@@ -546,27 +614,63 @@ def _check_credentials(raw: object, manifest: dict | None, at: str, out: _Findin
                       "requires_credentials")
 
 
-def _scan_network(component_dir: Path, paths: _Paths, out: _Findings) -> None:
-    """Warn on page assets that reach outside the folder (api/ scripts run locally, so skipped)."""
+def _page_files(component_dir: Path, doc: dict) -> list[Path]:
+    """The entry plus every page file (.html, .htm, .css, .js, .mjs) outside api/."""
+    found: list[Path] = []
     for root, dirs, files in os.walk(component_dir):
         dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and not d.startswith("."))
         if Path(root) == component_dir and "api" in dirs:
             dirs.remove("api")
         for name in sorted(files):
-            suffix = Path(name).suffix.lower()
-            pattern = {".html": _HTML_NETWORK_RE, ".htm": _HTML_NETWORK_RE, ".css": _CSS_NETWORK_RE,
-                       ".js": _JS_NETWORK_RE, ".mjs": _JS_NETWORK_RE}.get(suffix)
-            if pattern is None:
-                continue
-            path = Path(root) / name
-            try:
-                text = path.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                continue
-            if pattern.search(text):
-                out.warn(paths.show(path), "network_reference",
-                         "loads something from the network; a web view gets none. Bundle it into the "
-                         "folder and use a relative path.")
+            if Path(name).suffix.lower() in PAGE_SCAN_EXTENSIONS:
+                found.append(Path(root) / name)
+    entry = doc.get("entry", DEFAULT_ENTRY)
+    relative = _safe_relative(entry) if isinstance(entry, str) else None
+    if relative is not None:
+        entry_path = component_dir / relative
+        if entry_path.is_file() and _inside(entry_path, component_dir) and entry_path not in found:
+            found.append(entry_path)
+    return found
+
+
+def _scan_hits(text: str, rules: tuple) -> list[str]:
+    return [field for field, pattern in rules if pattern.search(text)]
+
+
+def _scan_page(path: Path, shown: str, out: _Findings) -> None:
+    """One file's content scans: each (code, field) is reported once per file."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return
+    suffix = path.suffix.lower()
+    network = {".html": _HTML_NETWORK_RE, ".htm": _HTML_NETWORK_RE, ".css": _CSS_NETWORK_RE,
+               ".js": _JS_NETWORK_RE, ".mjs": _JS_NETWORK_RE}[suffix]
+    if network.search(text):
+        out.warn(shown, "network_reference",
+                 "loads something from the network; a web view gets none. Bundle it into the "
+                 "folder and use a relative path.")
+    for field in _scan_hits(text, _ROOT_RELATIVE_RES[suffix]):
+        out.error(shown, "root_relative_path",
+                  f"a `{field}` path starts with `/`, which resolves outside the component's own "
+                  "folder and is blocked. Write `./app.js` or `app.js`.", field)
+    if suffix in _HTML_EXTENSIONS and _BASE_TAG_RE.search(text):
+        out.error(shown, "base_tag",
+                  "has a `<base>` tag; the sandbox refuses it (base-uri 'none'). Remove it and use "
+                  "relative paths.")
+    for field in _scan_hits(text, _FETCH_ENDPOINT_RES):
+        out.error(shown, "fetch_endpoint",
+                  f"`{field}` asks for api/, which is never served to a page. Get the source through "
+                  "cinna.onData and other endpoints through cinna.call.", field)
+    for field in _scan_hits(text, _SANDBOX_UNSUPPORTED_RES):
+        out.warn(shown, "sandbox_unsupported",
+                 f"uses `{field}`: {_SANDBOX_REASONS[field]} in a web view.", field)
+
+
+def _scan_pages(component_dir: Path, doc: dict, paths: _Paths, out: _Findings) -> None:
+    """Content scans of a web view's page files: what its sandbox (schema `x-web-view`) blocks."""
+    for path in _page_files(component_dir, doc):
+        _scan_page(path, paths.show(path), out)
 
 
 # --------------------------------------------------------------------------- #
@@ -593,7 +697,11 @@ def default_params(raw: object, today: date | None = None) -> dict:
 
 
 def _node_executable() -> str | None:
-    """`CINNA_NODE` when it names an executable file, else the first `node` on PATH."""
+    """`CINNA_NODE` when it names an executable file, else the first `node` on PATH.
+
+    Never runs it: whatever `CINNA_NODE` names may not be a real node (a host's shim), so
+    it is not probed with `--version` or anything else; endpoint_command runs it with the
+    script as its only argument."""
     override = os.environ.get(NODE_ENV_VAR, "").strip()
     if override and os.path.isfile(override) and os.access(override, os.X_OK):
         return override
@@ -626,7 +734,8 @@ def endpoint_command(script: Path, agent_root: Path) -> tuple[list[str] | None, 
             return [node, shown], None
         return None, (
             f"not run: no `node` ({NODE_ENV_VAR} or PATH). A host falls back to its own Node "
-            f"runtime; set {NODE_ENV_VAR} to a node executable or install node to run it here."
+            f"runtime; set {NODE_ENV_VAR} to an executable that runs a script the way `node` does, "
+            "or install node, to run it here."
         )
     return None, "not run: no runtime for this extension."
 
@@ -968,7 +1077,7 @@ def check_component(component_dir: Path, *, agent_root: Path | None = None,
     _check_refresh(doc.get("refresh"), agent_root, manifest, at, out)
     _check_credentials(doc.get("requires_credentials"), manifest, at, out)
     if view == "html":
-        _scan_network(component_dir, paths, out)
+        _scan_pages(component_dir, doc, paths, out)
 
     if run and not out.has_errors:
         if agent_root is None:

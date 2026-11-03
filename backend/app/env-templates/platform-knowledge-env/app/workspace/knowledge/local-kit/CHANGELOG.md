@@ -16,6 +16,70 @@ folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
 
+## 1.19.1 — the web-view sandbox, stated exactly, and the reference bridge
+
+Additive. Every 1.x folder stays valid, and a tool built against an earlier 1.x
+keeps operating a 1.19.1 folder, because the majors match. A component that
+passed the 1.19.0 check can now fail it, but only for something the sandbox
+already blocked: the new errors name pages that never worked in a host.
+
+### Added
+
+- **`protocols/dashboards-bridge.js`** — the reference `window.cinna` helper. Every
+  host that shows web views injects this file unchanged and keeps no fork of it;
+  an agent never copies it into a component. It speaks MCP Apps JSON-RPC over
+  postMessage with the parent frame: `ui/initialize` (the result carries
+  `_meta.cinna.nonce`, repeated on every later message and replaced whenever the
+  host issues a new one), `ui/notifications/initialized`, `tools/call`,
+  `cinna/params-changed`, `ui/update-model-context`, `ui/message`,
+  `ui/open-link`, and it listens for `ui/notifications/tool-result` and
+  `ui/notifications/host-context-changed`. `x-web-view.bridge.host_contract`
+  describes what it expects of a host, including the nonce rule: the page
+  attaches a nonce once it is given one, and enforcing it is the host's job. `kit.json` names it as
+  `protocols.dashboards_bridge`.
+- **Four check codes** in `check_component.py` and `x-check-codes`, content scans
+  of a web view's page files (the entry and every `.html`, `.htm`, `.css`, `.js`,
+  `.mjs` outside `api/`), listed in `x-script-only-checks`:
+  - `root_relative_path` (error): a `src=`/`href=` (attributes in `.html`, quoted
+    strings in `.js`), CSS `url(`, `import`, or quoted `fetch(`/XHR path starting
+    with a single `/`; `field` is `src`, `href`, `url`, `import`, `fetch` or
+    `XMLHttpRequest`.
+  - `base_tag` (error): a `<base>` tag.
+  - `fetch_endpoint` (error): `fetch(` or an XHR aimed at `api/`, `./api/` or
+    `/api/` (only this code, never root_relative_path too); `field` is `fetch` or
+    `XMLHttpRequest`.
+  - `sandbox_unsupported` (warning): a Worker, `<iframe`, `eval(`,
+    `new Function(`, `WebAssembly.`, storage, `document.cookie` or
+    `window.open(`; `field` names the trigger.
+- **Conformance cases** `html-root-relative-path`, `html-base-tag`,
+  `html-fetch-endpoint`, `html-fetch-root-relative` and `html-sandbox-unsupported`.
+
+### Changed
+
+- **`x-web-view.sandbox` changed type: from a string to an object
+  `{description, rules[]}`.** A reader that took it as a string must read
+  `description` instead. It is now the exact policy: the frame's sandbox flags, the
+  content security policy scoped to the component's own folder, and each rule
+  with its reason (the skill's "Web views" and the `dashboard-html` README say the
+  same).
+- **`x-web-view.bridge`**: `cinna.call` resolves to the endpoint's JSON value
+  itself (`tools/call` → `structuredContent`, unwrapped by the helper) and rejects
+  with `{message}`.
+- **`x-endpoint-convention.node_dependencies`**: a Node endpoint is pure JS
+  (built-ins and pure-JS packages). Native addons do not load under a host's own
+  Node runtime (measured on Cinna Desktop: library validation and a different
+  ABI); use Python for a native module.
+- **`CINNA_NODE`** names an executable that runs a script the way `node` does, not
+  necessarily a real node. `check_component.py --run` runs exactly
+  `[CINNA_NODE, script]` and never probes it.
+- **`.py` endpoints** are localized as `/run:` commands are, instead of naming
+  `uv run python <script>` as the form.
+
+### For hosts
+
+- Inject `protocols/dashboards-bridge.js` as it is, before the page's scripts.
+- Mirror the four new codes in a host-side validator, with the same fields.
+
 ## 1.19.0 — dashboard components
 
 Additive for agent folders: every 1.x folder stays valid and needs no change, and a

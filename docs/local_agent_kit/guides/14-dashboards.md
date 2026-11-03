@@ -97,9 +97,17 @@ app-data/
 
 An endpoint is a script in `api/`. Params arrive on stdin as one JSON object; it
 prints one JSON value on stdout; cwd is the agent folder; it has the agent's
-credentials, as `/run:` commands do. `.py` runs with Python (through `uv run` when
-the agent has a `pyproject.toml`), `.js`, `.mjs` and `.cjs` with Node. Pick the
-language the agent already uses.
+credentials, as `/run:` commands do. `.py` runs with Python, localized as `/run:`
+commands are (through `uv` when the agent has a `pyproject.toml`); `.js`, `.mjs`
+and `.cjs` run with Node. Pick the language the agent already uses.
+
+A Node endpoint is pure JS: built-ins and pure-JS packages only. Native addons
+(`.node`) do not load when the owner has no Node of their own, because the host
+then runs its own runtime as Node (Cinna Desktop: Electron as Node, whose signed
+app refuses unsigned addons, with a different Node ABI; measured). Use Python when
+an endpoint needs a native module. A host that sets `CINNA_NODE` names an
+executable that runs a script the way `node` does; the check runs exactly
+`$CINNA_NODE <script>` and never probes it.
 
 Keep endpoints fast: read what a script, a `refresh.command` or a schedule already
 prepared. Anything that needs the model's judgment, such as ranking emails by the
@@ -113,6 +121,16 @@ component reads.
   dependency-free SVG bar and line helper (`chart.js`), `api/data.py` and a Node
   drill-down. It shows `cinna.onData`, `cinna.setParams`, `cinna.setContext` and
   `cinna.call`. No CDN, relative paths only: web views get no network.
+
+A web view runs in a sandbox scoped to its own folder: relative paths without a
+leading slash (the page sits under a per-tile path prefix), no `fetch` of `api/`
+(never served; use `cinna.onData` and `cinna.call`), no `<base>`, `<iframe>`,
+workers, form submission, `eval`/`new Function`, WebAssembly, storage, cookies or
+`window.open`. The `cinna-dashboards` skill and the template README give the reason
+for each; `check_component.py` flags them. The host injects `window.cinna`, the
+kit's `protocols/dashboards-bridge.js`, unchanged; a component never ships its own.
+`cinna.call` resolves to the endpoint's JSON value itself and rejects with
+`{message}`.
 
 Copy one to `dashboards/<name>/`, rename, change.
 

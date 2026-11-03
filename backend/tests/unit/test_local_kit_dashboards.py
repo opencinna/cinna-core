@@ -1,4 +1,4 @@
-"""Local Agent Kit dashboard components (contract 1.19.0) - pure unit tests.
+"""Local Agent Kit dashboard components (contract 1.19.0, 1.19.1) - pure unit tests.
 
 Runs the kit's `skills/cinna-dashboards/scripts/check_component.py` over every
 `conformance/dashboards/<case>/` and compares the findings as
@@ -72,7 +72,7 @@ def _matches(problem: dict, wanted: dict) -> bool:
 
 
 def test_the_conformance_set_is_not_empty() -> None:
-    assert len(CASES) >= 28
+    assert len(CASES) >= 33
 
 
 @pytest.mark.parametrize("case", CASES)
@@ -396,3 +396,218 @@ def test_cinna_node_is_used_before_path(tmp_path: Path) -> None:
     assert marker.exists()
     assert not any(p["code"] == "runtime_missing" for p in problems)
     assert [p for p in problems if p["severity"] == "error"] == []
+
+
+
+@pytest.mark.skipif(not POSIX, reason="a shell script stands in for node")
+def test_cinna_node_is_run_with_the_script_as_its_only_argument(tmp_path: Path) -> None:
+    """CINNA_NODE may be a shim, not a real node: never `--version`, a flag or a probe."""
+    agent = _node_endpoint_agent(tmp_path)
+    fake_node = tmp_path / "fake-node"
+    calls = tmp_path / "fake-node-calls"
+    fake_node.write_text(
+        "#!/bin/sh\n"
+        f"printf '%s\\n' \"$#:$*\" >> '{calls}'\n"
+        "printf '{\"items\": []}'\n",
+        encoding="utf-8",
+    )
+    fake_node.chmod(0o755)
+    env = {**os.environ, "CINNA_NODE": str(fake_node), "PATH": str(tmp_path / "empty-bin")}
+
+    problems = _check_env(agent / COMPONENT, agent, env)
+
+    assert [p for p in problems if p["severity"] == "error"] == []
+    assert calls.read_text(encoding="utf-8").splitlines() == [f"1:{COMPONENT}/api/items.mjs"]
+
+
+# ── web-view content scans (1.19.1) ───────────────────────────────────────
+
+SCAN_CODES = {"root_relative_path", "base_tag", "fetch_endpoint", "sandbox_unsupported",
+              "network_reference"}
+
+
+def _html_agent(tmp_path: Path, files: dict[str, str]) -> Path:
+    agent = _agent_from_valid_list(tmp_path)
+    _edit_component(agent, view="html")
+    page = {"index.html": '<!doctype html><html><body><script src="./app.js"></script></body></html>\n',
+            "app.js": "console.log(1);\n"}
+    page.update(files)
+    for name, text in page.items():
+        target = agent / COMPONENT / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+    return agent
+
+
+def _scan_findings(agent: Path) -> set[tuple]:
+    _, problems = _check(agent / COMPONENT, agent)
+    return {(p["path"], p["code"], p.get("field"), p["severity"])
+            for p in problems if p["code"] in SCAN_CODES}
+
+
+def test_content_scans_report_each_trigger_with_its_field(tmp_path: Path) -> None:
+    agent = _html_agent(tmp_path, {
+        "index.html": (
+            '<!doctype html><html><head><base href="./"><link rel="stylesheet" href="/s.css">'
+            '<script src="/app.js"></script></head><body><iframe></iframe></body></html>\n'
+        ),
+        "app.js": (
+            'import { x } from "/lib.mjs";\n'
+            'fetch("api/items.py");\n'
+            'const xhr = new XMLHttpRequest(); xhr.open("GET", "./api/items.py");\n'
+            'eval("1"); new Function("return 1"); new Worker("w.js");\n'
+            'WebAssembly.instantiate; localStorage.x; sessionStorage.x; indexedDB.open("d");\n'
+            'document.cookie; window.open("https://example.com");\n'
+            'fetch("api/other.py");\n'
+            'fetch("/data.json");\n'
+        ),
+        "style.css": 'body { background: url("/bg.png"); }\n',
+    })
+    html, js, css = (f"{COMPONENT}/{n}" for n in ("index.html", "app.js", "style.css"))
+
+    found = _scan_findings(agent)
+
+    assert found == {
+        (html, "base_tag", None, "error"),
+        (html, "root_relative_path", "href", "error"),
+        (html, "root_relative_path", "src", "error"),
+        (html, "sandbox_unsupported", "iframe", "warning"),
+        (js, "root_relative_path", "import", "error"),
+        (js, "root_relative_path", "fetch", "error"),
+        (js, "fetch_endpoint", "fetch", "error"),
+        (js, "fetch_endpoint", "XMLHttpRequest", "error"),
+        *((js, "sandbox_unsupported", field, "warning") for field in (
+            "eval", "Function", "Worker", "WebAssembly", "localStorage", "sessionStorage",
+            "indexedDB", "document.cookie", "window.open")),
+        (css, "root_relative_path", "url", "error"),
+    }
+
+
+def test_content_scans_skip_lookalikes(tmp_path: Path) -> None:
+    agent = _html_agent(tmp_path, {
+        "index.html": (
+            '<!doctype html><html><head><basefont size="3"><link rel="stylesheet" href="./s.css">'
+            '<script src="app.js"></script></head><body><a href="#top">top</a></body></html>\n'
+        ),
+        "app.js": (
+            "function retrieval(x) { return x; } retrieval(1); evaluate(2); myEval(3);\n"
+            "const myLocalStorage = {}; const indexedDBName = 'x'; const u = new URL('/x', base);\n"
+            'fetch("./data.json"); fetch("apis/x"); xhr.open("GET", "./data.json");\n'
+            "const re = /api/; const half = a / b; obj.window.openDoor();\n"
+            "var src = /^data:/; var href = /^#/; const isLink = (href) => /x/.test(href);\n"
+        ),
+        "s.css": 'body { background: url("./bg.png"); }\n',
+    })
+
+    assert _scan_findings(agent) == set()
+
+
+def test_a_protocol_relative_url_is_network_reference_only(tmp_path: Path) -> None:
+    agent = _html_agent(tmp_path, {
+        "index.html": '<html><head><script src="//cdn.example.com/x.js"></script></head></html>\n',
+    })
+
+    assert _scan_findings(agent) == {
+        (f"{COMPONENT}/index.html", "network_reference", None, "warning"),
+    }
+
+
+def test_content_scans_skip_api_and_non_html_views(tmp_path: Path) -> None:
+    agent = _html_agent(tmp_path, {"api/helper.js": "eval('x'); localStorage.y;\n"})
+    assert _scan_findings(agent) == set()
+
+    listed = _agent_from_valid_list(tmp_path / "list")
+    (listed / COMPONENT / "notes.js").write_text("eval('x');\n", encoding="utf-8")
+    assert _scan_findings(listed) == set()
+
+
+# ── the reference bridge (protocols/dashboards-bridge.js, 1.19.1) ─────────
+
+BRIDGE_JS = KIT_DIR / "protocols" / "dashboards-bridge.js"
+
+
+@pytest.mark.skipif(not BRIDGE_JS.is_file(), reason="kit has no reference bridge (pre-1.19.1)")
+def test_the_reference_bridge_is_plain_sandbox_safe_and_host_agnostic(tmp_path: Path) -> None:
+    import re
+
+    text = BRIDGE_JS.read_text(encoding="utf-8")
+
+    if HAVE_NODE:
+        checked = subprocess.run(["node", "--check", str(BRIDGE_JS)], capture_output=True,
+                                 text=True, timeout=60, check=False)
+        assert checked.returncode == 0, checked.stderr
+    assert not re.search(r"(?<![\w$])eval\s*\(", text)
+    assert not re.search(r"\bnew\s+Function\b", text)
+    assert not re.search(r"setTimeout\s*\(\s*[\"'`]", text)
+    assert not re.search(r"https?://|wss?://|[\"'`]//", text)
+    assert not re.search(r"\b(?:import|export)\b\s*[{*\"'\w]", text)  # a plain script
+    assert not re.search(
+        r"(?i)electron|desktop|ipcRenderer|preload|cinna-core|cinna_core|workflow-runner|\bcore\b",
+        text,
+    )
+    for method in ("ui/initialize", "ui/notifications/initialized", "tools/call",
+                   "cinna/params-changed", "ui/update-model-context", "ui/message",
+                   "ui/open-link", "ui/notifications/tool-result",
+                   "ui/notifications/host-context-changed"):
+        assert f'"{method}"' in text, method
+
+    # A host may copy it into a frame next to the page: the page scans must stay quiet.
+    agent = _html_agent(tmp_path, {
+        "index.html": ('<!doctype html><html><body><script src="./bridge.js"></script>'
+                       '<script src="./app.js"></script></body></html>\n'),
+        "bridge.js": text,
+    })
+    assert _scan_findings(agent) == set()
+
+
+_BRIDGE_HARNESS = r"""
+const listeners = [];
+const sent = [];
+const timers = [];
+const warnings = [];
+global.setTimeout = (fn, ms) => { timers.push(fn); return timers.length; };
+global.clearTimeout = () => {};
+console.warn = (...args) => warnings.push(args.join(" "));
+const parent = { postMessage: (m) => sent.push(JSON.parse(JSON.stringify(m))) };
+global.window = { parent, addEventListener: (name, fn) => listeners.push(fn) };
+global.document = { documentElement: { style: { setProperty() {} }, setAttribute() {} } };
+require(process.argv[2]);
+const fire = (data) => listeners.forEach((fn) => fn({ source: parent, data }));
+(async () => {
+  window.cinna.ask("dropped");          // times out while still queued: never posted
+  timers[0]();
+  window.cinna.setContext({ summary: "kept" });
+  fire({ jsonrpc: "2.0", id: 1, result: { hostContext: { theme: "light" } } });  // no nonce
+  await window.cinna.ready;
+  window.cinna.setParams({ month: "2026-11" });
+  fire({ jsonrpc: "2.0", method: "ui/notifications/host-context-changed",
+         params: { theme: "dark", _meta: { cinna: { nonce: "n2" } } } });
+  window.cinna.setParams({ month: "2026-12" });
+  fire({ jsonrpc: "2.0", id: 77, method: "unknown/thing" });
+  process.stdout.write(JSON.stringify({ sent, warnings }));
+})();
+"""
+
+
+@pytest.mark.skipif(not (BRIDGE_JS.is_file() and HAVE_NODE), reason="needs node and the bridge")
+def test_the_bridge_proceeds_without_a_nonce_and_drops_timed_out_queued_requests(
+    tmp_path: Path,
+) -> None:
+    harness = tmp_path / "harness.js"
+    harness.write_text(_BRIDGE_HARNESS, encoding="utf-8")
+    result = subprocess.run(["node", str(harness), str(BRIDGE_JS)], capture_output=True,
+                            text=True, timeout=60, check=False)
+    assert result.returncode == 0, result.stderr
+    out = json.loads(result.stdout)
+    sent = out["sent"]
+
+    methods = [m.get("method") for m in sent]
+    assert methods[:4] == ["ui/initialize", "ui/notifications/initialized",
+                           "ui/update-model-context", "cinna/params-changed"]
+    assert "ui/message" not in methods
+    assert len(out["warnings"]) == 1
+    for message in sent[1:4]:
+        assert "cinna" not in message["params"]["_meta"]
+    assert sent[4]["params"]["_meta"]["cinna"] == {"nonce": "n2"}
+    assert sent[5]["id"] == 77
+    assert sent[5]["error"]["data"]["_meta"]["cinna"] == {"nonce": "n2"}

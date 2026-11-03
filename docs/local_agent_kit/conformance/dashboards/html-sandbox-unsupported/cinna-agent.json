@@ -1,0 +1,13 @@
+{
+  "contract_version": "1.19.1",
+  "id": "0f6d2c1e-8a4b-4c3d-9e2f-1a2b3c4d5e6f",
+  "name": "Conformance Agent",
+  "slug": "conformance-agent",
+  "description": "Answers questions about follow-ups.",
+  "credentials": [
+    {
+      "name": "crm",
+      "type": "api_token"
+    }
+  ]
+}

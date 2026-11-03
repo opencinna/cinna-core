@@ -1,0 +1,19 @@
+{
+  "description": "A web view that loads its stylesheet by a root-relative path (`/style.css`); it resolves outside the tile's own folder, so the sandbox blocks it.",
+  "component": "dashboards/follow-ups",
+  "run": false,
+  "expect": {
+    "errors": [
+      {
+        "path": "dashboards/follow-ups/index.html",
+        "code": "root_relative_path",
+        "field": "href"
+      }
+    ],
+    "no_warnings": [
+      {
+        "code": "network_reference"
+      }
+    ]
+  }
+}

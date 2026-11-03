@@ -1,0 +1,19 @@
+{
+  "description": "A web view that fetches by root-relative URL: `/data.json` resolves outside the tile's folder (root_relative_path), and `/api/items.py` is an endpoint, reported only as fetch_endpoint.",
+  "component": "dashboards/follow-ups",
+  "run": false,
+  "expect": {
+    "errors": [
+      {
+        "path": "dashboards/follow-ups/app.js",
+        "code": "root_relative_path",
+        "field": "fetch"
+      },
+      {
+        "path": "dashboards/follow-ups/app.js",
+        "code": "fetch_endpoint",
+        "field": "fetch"
+      }
+    ]
+  }
+}
