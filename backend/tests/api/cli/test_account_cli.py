@@ -1600,6 +1600,7 @@ def test_context_package_version_moves_when_the_local_kit_changes(
     client: TestClient,
     superuser_token_headers: dict[str, str],
     monkeypatch,
+    tmp_path,
 ) -> None:
     """A kit edit must reach workspaces that already ran ``account setup``.
 
@@ -1611,9 +1612,26 @@ def test_context_package_version_moves_when_the_local_kit_changes(
     The kit is monkeypatched rather than edited on disk: the package memoizes on
     an mtime probe, and the point here is the *content* hash, so both caches are
     dropped and the same request is made twice.
+
+    The platform / examples / guides snapshot is swapped for a one-file tree.
+    Each forced rebuild otherwise hashes and tars the whole real snapshot (~2s,
+    three times over), and none of it bears on this invariant: what moves the
+    version here is the kit, and the snapshot is held constant either way. The
+    real snapshot's contents are covered by ``test_context_package_content``.
     """
+    import app.services.cli.context_package_service as context_package_module
     from app.services.cli.context_package_service import ContextPackageService
     from app.services.cli.local_agent_kit_service import LocalAgentKitService
+
+    platform_dir = tmp_path / "platform"
+    platform_dir.mkdir()
+    (platform_dir / "README.md").write_text("# platform\n")
+    for name, path in (
+        ("platform_knowledge_dir", platform_dir),
+        ("example_scripts_dir", tmp_path / "examples"),
+        ("guides_snapshot_dir", tmp_path / "guides"),
+    ):
+        monkeypatch.setattr(context_package_module, name, lambda path=path: path)
 
     account_jwt, _ = bootstrap_account_token(
         client, superuser_token_headers, machine_name="Kit Version Machine"
