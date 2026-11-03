@@ -30059,6 +30059,11 @@ export const PluginSkillComponentSchema = {
             type: 'boolean',
             title: 'Has Scripts',
             default: false
+        },
+        has_dashboards: {
+            type: 'boolean',
+            title: 'Has Dashboards',
+            default: false
         }
     },
     type: 'object',
@@ -30081,6 +30086,11 @@ export const PluginSkillSummarySchema = {
         has_scripts: {
             type: 'boolean',
             title: 'Has Scripts',
+            default: false
+        },
+        has_dashboards: {
+            type: 'boolean',
+            title: 'Has Dashboards',
             default: false
         }
     },
@@ -34988,6 +34998,11 @@ export const SkillEntryPublicSchema = {
         has_scripts: {
             type: 'boolean',
             title: 'Has Scripts',
+            default: false
+        },
+        has_dashboards: {
+            type: 'boolean',
+            title: 'Has Dashboards',
             default: false
         },
         user_invocable: {

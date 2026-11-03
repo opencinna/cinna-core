@@ -1,0 +1,19 @@
+{
+  "description": "An enum param without values, and a month default that is neither YYYY-MM nor current.",
+  "component": "dashboards/follow-ups",
+  "run": false,
+  "expect": {
+    "errors": [
+      {
+        "path": "dashboards/follow-ups/component.json",
+        "code": "invalid_value",
+        "field": "params.stage.values"
+      },
+      {
+        "path": "dashboards/follow-ups/component.json",
+        "code": "invalid_value",
+        "field": "params.month.default"
+      }
+    ]
+  }
+}

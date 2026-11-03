@@ -31,6 +31,7 @@ from uuid import uuid4
 
 from app.services.agents import skill_manifest as host_manifest
 from app.services.agents.agent_service import AgentService
+from app.services.environments.platform_protocol_files import PROTOCOL_FILES
 from app.services.tasks.input_task_service import (
     RESULT_PACKET_BODY_LIMIT,
     InputTaskService,
@@ -224,8 +225,15 @@ def _layout(tmp_path: Path) -> tuple[Path, Path, Path]:
     (workspace / "skills").mkdir(parents=True)
     home = tmp_path / "claude_home"
     home.mkdir()
+    # The platform root holds what a cloud environment receives: only the
+    # skills ``platform_protocol_files.PROTOCOL_FILES`` installs, not every
+    # skill the kit ships (cinna-dashboards is kit-only for now).
     platform = tmp_path / "platform_skills"
-    shutil.copytree(_KIT_SKILLS, platform)
+    platform.mkdir()
+    for relative in PROTOCOL_FILES:
+        if relative.startswith("skills/"):
+            name = relative.removeprefix("skills/")
+            shutil.copytree(_KIT_SKILLS / name, platform / name)
     return workspace, home, platform
 
 

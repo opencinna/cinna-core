@@ -1,5 +1,7 @@
 # Conformance set
 
+Two sets: `manifests/` (below) and `dashboards/` (contract 1.19.0, at the end).
+
 Manifests with the findings every validator of this contract must report for
 them. `kit.py` and Cinna Desktop's validator both run the whole set in their
 tests, so the two cannot disagree about a manifest without a test failing. Part
@@ -65,3 +67,51 @@ One behaviour per case, named for it (`runtime-engine-unknown.json`). Start
 from `minimal-valid.json`, which reports nothing, so that the only finding is
 the one the case is about. A new validation rule in the contract lands with at
 least one case that fires it and, where it has a boundary, one that does not.
+
+## Dashboard components (`dashboards/`)
+
+Since contract 1.19.0. Each case is a folder shaped like an agent, because the
+checks need one around the component: the manifest's `credentials[]`, scripts
+that exist, `--run` with cwd at the agent root.
+
+```
+dashboards/<case>/
+├── case.json
+├── cinna-agent.json          # absent only where the case is about its absence
+└── dashboards/<name>/…       # or skills/<skill>/dashboards/<name>/…
+```
+
+`case.json`:
+
+```json
+{
+  "description": "What the case pins, in one sentence.",
+  "component": "dashboards/follow-ups",
+  "run": false,
+  "expect": {
+    "errors": [{"path": "dashboards/follow-ups/component.json", "code": "script_missing", "field": "endpoints.items.script"}],
+    "warnings": [{"code": "network_reference"}],
+    "no_warnings": [{"code": "id_missing"}]
+  }
+}
+```
+
+A checker runs on `component` (relative to the case folder, which is the agent
+root), with `--run` when `run` is true. `check_component.py --json` reports each
+finding as `{path, code, field, severity, message}`; another checker produces the
+same triples from the same rules (`x-check-codes` in
+`protocols/dashboards.schema.json` lists the codes). `path` is agent-relative;
+`field` is the `component.json` field with map keys written literally
+(`endpoints.items.script`), or for a result the data field with indices dropped
+(`items.title`), or null.
+
+| Key | Passes when |
+|-----|-------------|
+| `errors` | the set of error `(path, code, field)` triples equals this list exactly. `[]` means no error. |
+| `warnings` | each entry matches some warning on every key it gives. Other warnings may appear. |
+| `no_warnings` | no entry matches any warning. |
+
+`message` is never matched. One behaviour per case, named for it; start from
+`valid-list/`, which reports nothing. Symlink cases (`symlink_escape`,
+`component_symlink`) have no folder here: the platform-knowledge sync and some
+checkouts drop symlinks, so a checker's own tests create them.

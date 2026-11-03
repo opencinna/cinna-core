@@ -1,0 +1,14 @@
+{
+  "description": "An endpoint script with an extension no host runs (.ts waits for a checked Node).",
+  "component": "dashboards/follow-ups",
+  "run": false,
+  "expect": {
+    "errors": [
+      {
+        "path": "dashboards/follow-ups/component.json",
+        "code": "script_extension",
+        "field": "endpoints.items.script"
+      }
+    ]
+  }
+}

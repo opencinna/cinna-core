@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "title": "   ",
+  "view": "list",
+  "source": {
+    "endpoint": "items"
+  },
+  "endpoints": {
+    "items": {
+      "script": "api/items.py",
+      "description": "Open follow-ups."
+    }
+  },
+  "refresh": {
+    "max_age": "15m",
+    "after_turn": true
+  },
+  "params": {
+    "priority": {
+      "type": "enum",
+      "values": [
+        "all",
+        "high"
+      ],
+      "default": "all"
+    }
+  },
+  "requires_credentials": [
+    "crm"
+  ],
+  "size": "m",
+  "context": "One item per follow-up.",
+  "prompts": [
+    {
+      "label": "First?",
+      "prompt": "Which follow-up should I answer first?"
+    }
+  ]
+}

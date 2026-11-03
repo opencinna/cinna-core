@@ -78,7 +78,7 @@ fetched_at, can_add}`. `agent_id` is the only required field; `environment_id`,
 environment.
 
 `SkillEntryPublic`, for reference: `name`, `description`, `source`, `plugin_ref`,
-`path`, `has_scripts`, `user_invocable`, `model_invocable`, `size_bytes`, `error`,
+`path`, `has_scripts`, `has_dashboards`, `user_invocable`, `model_invocable`, `size_bytes`, `error`,
 `warning`, `secret_paths`, `can_publish`.
 
 ---
@@ -455,7 +455,7 @@ root when there is no `skills/` directory. Each folder is parsed by the **backen
 copy** of the vendored `skill_manifest` parser — the same restricted-subset
 frontmatter reader env-core uses, reused rather than copied a third time — and
 emitted as one plugin entry with `category="skill"`, `plugin_type="skills"`,
-`source_type=local`, and `config={"skill": {name, description, has_scripts}}`.
+`source_type=local`, and `config={"skill": {name, description, has_scripts, has_dashboards}}`.
 An invalid `SKILL.md` becomes `supported=false, no_skill_md` so the admin can see
 the repo is half-broken and a later upstream fix re-syncs into a supported row.
 

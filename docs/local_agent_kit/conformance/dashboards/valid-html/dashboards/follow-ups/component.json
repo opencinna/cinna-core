@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "title": "Follow-ups",
+  "view": "html",
+  "source": {
+    "endpoint": "data"
+  },
+  "endpoints": {
+    "data": {
+      "script": "api/data.py"
+    }
+  },
+  "refresh": {
+    "max_age": "15m",
+    "after_turn": true
+  },
+  "entry": "index.html"
+}

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "title": "Follow-ups",
+  "view": "list",
+  "source": {
+    "file": "app-data/dashboards/inbox-triage/follow-ups/items.json"
+  },
+  "refresh": {
+    "max_age": "1h",
+    "schedule": "rank-inbox"
+  }
+}

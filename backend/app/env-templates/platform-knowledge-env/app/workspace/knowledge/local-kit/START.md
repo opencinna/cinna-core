@@ -96,7 +96,10 @@ The finished root looks like this:
 3. To create the first agent, follow `guides/01-first-agent.md`.
 
 Read guides on demand. The ladder tells you which one to open and when. Do not read
-all thirteen up front, and do not add a capability whose trigger has not fired.
+all fourteen up front, and do not add a capability whose trigger has not fired.
+
+When the user wants to keep an eye on something over time in Cinna Desktop, build a
+dashboard component in `dashboards/<name>/` (`guides/14-dashboards.md`), not an artifact.
 
 ## 4. The three roles you switch between
 

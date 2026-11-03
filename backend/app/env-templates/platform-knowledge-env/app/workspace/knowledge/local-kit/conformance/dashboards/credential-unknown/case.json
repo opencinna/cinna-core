@@ -1,0 +1,14 @@
+{
+  "description": "requires_credentials names a credential the manifest's credentials[] does not declare.",
+  "component": "dashboards/follow-ups",
+  "run": false,
+  "expect": {
+    "errors": [
+      {
+        "path": "dashboards/follow-ups/component.json",
+        "code": "credential_unknown",
+        "field": "requires_credentials"
+      }
+    ]
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "description": "A component a skill ships, under skills/<skill>/dashboards/<name>/, reading a file its schedule writes; the file is not written yet, which --run reports as a warning only.",
+  "component": "skills/inbox-triage/dashboards/follow-ups",
+  "run": true,
+  "expect": {
+    "errors": [],
+    "warnings": [
+      {
+        "path": "app-data/dashboards/inbox-triage/follow-ups/items.json",
+        "code": "source_file_unwritten",
+        "field": null
+      }
+    ]
+  }
+}

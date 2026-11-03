@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "title": "Follow-ups",
+  "description": "Open follow-ups, most urgent first.",
+  "view": "list",
+  "source": { "endpoint": "items" },
+  "endpoints": {
+    "items": { "script": "api/items.py", "description": "Open follow-ups. Params: priority." }
+  },
+  "params": {
+    "priority": { "type": "enum", "label": "Priority", "values": ["all", "high", "medium", "low"], "default": "all" }
+  },
+  "refresh": { "max_age": "15m", "after_turn": true, "on_app_start": false,
+               "while_open_every": null, "command": null, "schedule": null },
+  "size": "m",
+  "context": "Each item is one open follow-up. priority is how soon it needs an answer; time is when it was last touched.",
+  "prompts": [
+    { "label": "What first?", "prompt": "Which of the follow-ups in view should I answer first, and why?" }
+  ]
+}

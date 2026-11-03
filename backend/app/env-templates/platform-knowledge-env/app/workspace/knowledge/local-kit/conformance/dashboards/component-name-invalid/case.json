@@ -1,0 +1,14 @@
+{
+  "description": "The folder name is the component name and breaks its pattern (uppercase and '_').",
+  "component": "dashboards/Follow_Ups",
+  "run": false,
+  "expect": {
+    "errors": [
+      {
+        "path": "dashboards/Follow_Ups",
+        "code": "component_name_invalid",
+        "field": null
+      }
+    ]
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "description": "No cinna-agent.json in the agent folder: requires_credentials cannot be checked, which is a warning, not an error.",
+  "component": "dashboards/follow-ups",
+  "run": false,
+  "expect": {
+    "errors": [],
+    "warnings": [
+      {
+        "path": "dashboards/follow-ups/component.json",
+        "code": "manifest_missing",
+        "field": "requires_credentials"
+      }
+    ]
+  }
+}

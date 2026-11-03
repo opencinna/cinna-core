@@ -23,6 +23,7 @@ Kit version `{{KIT_VERSION}}` · contract version in `CONTRACT_VERSION` · insta
 | `guides/11-go-cloud.md` | The user asks to move an agent to {{INSTANCE_NAME}}. |
 | `guides/12-keeping-up-to-date.md` | The kit may be stale, or a convention changed under you. |
 | `guides/13-design-patterns.md` | Interviewing for any new agent (§0), and whenever the agent reaches an external system, sends or posts, answers several kinds of question, or will serve other people. |
+| `guides/14-dashboards.md` | The owner wants to see, track or keep an eye on something over time in Cinna Desktop. |
 | `assistants/claude-code.md` | You are Claude Code. |
 | `assistants/codex.md` | You are Codex or another sandboxed CLI assistant. |
 | `assistants/antigravity.md` | You are Google Antigravity's agent. |
@@ -33,7 +34,10 @@ Kit version `{{KIT_VERSION}}` · contract version in `CONTRACT_VERSION` · insta
 | `skills/cinna-tasks/` | The skill that teaches agents the task protocol. Hosts deliver it; it is not part of an agent folder. |
 | `protocols/artifacts.schema.json` | You implement a host's `artifacts_publish` tool on the same `cinna` server, or need its exact schema. |
 | `skills/cinna-artifacts/` | The skill that teaches agents to publish artifacts and build sites that work in the artifact sandbox. Hosts deliver it beside `cinna-tasks`. |
-| `templates/artifact-sqlite-dashboard/` | A minimal dashboard folder an agent copies, fills with its data and publishes. |
+| `templates/artifact-sqlite-report/` | A minimal report site an agent copies, fills with its data and publishes as an artifact (a snapshot for people). |
+| `protocols/dashboards.schema.json` | You implement a host that shows dashboard components, or need the exact `component.json`, data shapes, endpoint convention, page bridge or reference grammar (`cinna_protocol: dashboards/1`). |
+| `skills/cinna-dashboards/` | The skill that teaches agents to build dashboard components, live views the owner keeps, and its `scripts/check_component.py`. Hosts deliver it beside `cinna-artifacts`. |
+| `templates/dashboard-list/`, `templates/dashboard-html/` | Starter components: a native `list` view, and a web view with a dependency-free SVG chart helper. Copy one to `dashboards/<name>/`. |
 | `layout.json` | You need the folder model as data: what each folder is for, what a kit refresh may replace, what never travels to the cloud, and which file Cinna Desktop owns. |
 | `CONTRACT_VERSION` | You need the contract version this kit ships — the number `kit.py validate` gates a folder against. |
 | `templates/root/` | Setting up the root folder. |
@@ -66,6 +70,7 @@ concrete artefacts. Walk the table top-down after every substantive change.
 | **CLI commands** | the same operation is run repeatedly by name | `docs/CLI_COMMANDS.yaml` entries (run locally through `local_command_runner`) |
 | **Knowledge & local skills** | 3+ distinct capabilities, domain docs beyond a page, or a finished skill worth publishing | `knowledge/<topic>/`, `skills/<name>/SKILL.md`, per-skill `scripts/` |
 | **Multi-agent** | a second agent appears, or one agent should delegate | root orchestrator conventions, manifest `handovers[]` |
+| **Dashboards** | the owner wants to see, track or keep an eye on something over time in Cinna Desktop | `dashboards/<name>/component.json` and its endpoints; data under `app-data/dashboards/<name>/` |
 | **Go cloud** | the user asks, or the agent needs 24/7, email/chat channels, sharing or webapps | everything in `guides/11-go-cloud.md` |
 
 ### The ladder check
@@ -96,6 +101,7 @@ not get `STATUS.md`. Unused scaffolding costs the user real attention later.
 | `list [--root DIR]` | Table of local agents, which rungs each has, cloud state. |
 | `refresh [--check]` | Compare and update the kit from {{PLATFORM_URL}}. |
 | `export <path> --to DIR` | Produce the cloud-import tree (exclude list applied). |
+| `dashboards check [path] [--run]` | Check dashboard components (the `cinna-dashboards` skill's check, also run by `validate`). |
 
 ## Folder meanings (identical locally and in the cloud)
 
@@ -112,6 +118,7 @@ not get `STATUS.md`. Unused scaffolding costs the user real attention later.
 | `app-data/cache/` | runtime | yes, per install | disposable, rebuildable snapshots |
 | `app-data/uploads/` | runtime | yes, per install | files the user attaches |
 | `artifacts/` | runtime | yes, per install; never shared or copied to the cloud | what the agent builds to publish as Cinna artifacts, one subfolder per artifact |
+| `dashboards/` | the agent's author | replaced on update | one folder per dashboard component, `dashboards/<name>/component.json`; its data goes to `app-data/dashboards/<name>/` |
 
 Write runtime output to `app-data/storage/`, and anything meant to be published under
 `artifacts/<name>/`. Never to `files/` or `docs/`.

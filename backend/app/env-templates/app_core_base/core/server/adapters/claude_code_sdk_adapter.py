@@ -317,8 +317,8 @@ class ClaudeCodeAdapter(BaseSDKAdapter):
                 # The `cinna` server (tools and schemas from
                 # core/protocols/*.schema.json): conversation mode serves the
                 # Cinna Task Protocol and artifacts_publish, building mode
-                # artifacts_publish only (agents assemble dashboards while
-                # building; a publish is private to the owner). Replaces the
+                # artifacts_publish only (agents assemble reports and sites
+                # while building; a publish is private to the owner). Replaces the
                 # former `agent_task` server; its names stay pre-approved only.
                 cinna_toolsets = cinna_toolsets_for_mode(mode)
                 if cinna_toolsets:

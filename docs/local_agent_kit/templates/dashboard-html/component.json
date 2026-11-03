@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "title": "Revenue by week",
+  "description": "Weekly revenue as bars with the running average as a line; click a bar for that week's deals.",
+  "view": "html",
+  "entry": "index.html",
+  "source": { "endpoint": "data" },
+  "endpoints": {
+    "data": { "script": "api/data.py", "description": "Weekly revenue for one month. Params: month." },
+    "week_detail": { "script": "api/week_detail.mjs", "description": "The deals behind one week. Params: week.", "timeout_s": 30 }
+  },
+  "params": {
+    "month": { "type": "month", "label": "Month", "default": "current" }
+  },
+  "refresh": { "max_age": "1h", "after_turn": false, "on_app_start": false,
+               "while_open_every": null, "command": null, "schedule": null },
+  "size": "l",
+  "context": "Bars are revenue per ISO week in EUR; the line is the running weekly average. A selected week id looks like 2026-W45.",
+  "prompts": [
+    { "label": "Why the dip?", "prompt": "Why was revenue lower in the selected week than the average?" }
+  ]
+}

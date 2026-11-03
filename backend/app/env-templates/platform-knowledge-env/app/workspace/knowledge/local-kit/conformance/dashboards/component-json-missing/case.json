@@ -1,0 +1,14 @@
+{
+  "description": "A folder under dashboards/ with no component.json.",
+  "component": "dashboards/follow-ups",
+  "run": false,
+  "expect": {
+    "errors": [
+      {
+        "path": "dashboards/follow-ups/component.json",
+        "code": "component_json_missing",
+        "field": null
+      }
+    ]
+  }
+}

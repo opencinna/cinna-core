@@ -1,7 +1,7 @@
 ---
 name: cinna-artifacts
-description: Publish a report, a set of files or a small self-contained dashboard from your workspace as a Cinna artifact, a private page your owner opens in Cinna. Covers when to publish, how to build a folder that works inside the artifact sandbox, and how to update it later. Use before the first artifacts_publish call and before building any HTML page meant to be published.
-when_to_use: The user asks to publish, share, show or hand over a report, dashboard, page, chart or set of files; a tool named artifacts_publish is about to be called; you are building an HTML page, dashboard or static site that a person will open later.
+description: Publish a report, a set of files or a self-contained page from your workspace as a Cinna artifact, a private page your owner opens in Cinna: a snapshot to read or hand to people. A live view the owner keeps is a dashboard component (cinna-dashboards), not an artifact. Covers when to publish, how to build a folder that works inside the artifact sandbox, and how to update it later. Use before the first artifacts_publish call and before building any HTML page meant to be published.
+when_to_use: The user asks to publish, share or hand over a report, snapshot, page, chart or set of files; a tool named artifacts_publish is about to be called; you are building an HTML page or static site that a person will open later.
 user-invocable: false
 version: "1"
 compatibility: Cinna Desktop or a cinna-core agent environment that exposes the `cinna` tool server with the artifacts_publish tool.
@@ -11,13 +11,15 @@ metadata:
 
 # Cinna artifacts
 
-An artifact is something you made that a person opens in Cinna: a Markdown report, a CSV, a PDF, a folder of files, or a small website such as a dashboard. You publish it from your workspace with `artifacts_publish`; Cinna copies the files, and the person opens them on the artifact's page. Your copy in the workspace is not touched and later edits to it do not show until you publish again.
+An artifact is something you made that a person opens in Cinna: a Markdown report, a CSV, a PDF, a folder of files, or a small website such as a report with charts. It is a snapshot: what you computed when you published. You publish it from your workspace with `artifacts_publish`; Cinna copies the files, and the person opens them on the artifact's page. Your copy in the workspace is not touched and later edits to it do not show until you publish again.
 
 Everything you publish is **private to your owner**. You cannot share it, make it public or delete it; a person does that from the artifact's page. Do not tell anyone a link will work for them; give the page address from the result to your owner as a plain link, never as code.
 
+**Live views are not artifacts.** When the owner wants to keep watching something (a pipeline, an inbox, a KPI row that should stay current), build a dashboard component under `dashboards/<name>/` with the `cinna-dashboards` skill: it stays in the agent and refreshes itself. A snapshot for people stays an artifact. When both are asked for, build both. Cinna Desktop shows dashboard components; an agent in the cloud has no dashboards yet, so there a page stays an artifact.
+
 ## Where to build it
 
-Build anything meant to be published under **`artifacts/<name>/`**, one subfolder per artifact (`artifacts/q3-dashboard/index.html`); a single file directly inside, `artifacts/summary.md`, is fine too. This is the same place for an agent on your owner's computer and an agent in the cloud. Then publish it with `artifacts_publish {path: "artifacts/<name>"}`.
+Build anything meant to be published under **`artifacts/<name>/`**, one subfolder per artifact (`artifacts/q3-report/index.html`); a single file directly inside, `artifacts/summary.md`, is fine too. This is the same place for an agent on your owner's computer and an agent in the cloud. Then publish it with `artifacts_publish {path: "artifacts/<name>"}`.
 
 `artifacts/` is one of the two places you may write at runtime, beside `app-data/`. Keep scratch work, caches and durable state in `app-data/`, which is never published; `artifacts/` holds only what you build to publish. Like `app-data/`, it stays with this one person: it is not committed, not shared with teammates and not copied to the cloud with the agent. Keep the same `artifacts/<name>` for the same artifact so republishing updates it.
 
@@ -53,4 +55,4 @@ Check it before publishing: open `index.html` from the folder with a local stati
 
 ## Starter
 
-`templates/artifact-sqlite-dashboard/` in the Local Agent Kit is a minimal dashboard: `index.html`, a script that reads `data.json`, and a note on adding sql.js. Copy it to `artifacts/<name>/`, replace the data, publish the folder.
+`templates/artifact-sqlite-report/` in the Local Agent Kit is a minimal report site: `index.html`, a script that reads `data.json`, and a note on adding sql.js. Copy it to `artifacts/<name>/`, replace the data, publish the folder.

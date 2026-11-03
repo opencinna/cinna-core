@@ -66,9 +66,12 @@ def test_schema_declares_the_cinna_server_and_one_tool(schema):
 def test_kit_snapshot_matches_the_authored_kit():
     if not _KIT_SOURCE.is_dir():
         pytest.skip("docs/local_agent_kit is not available (backend container)")
+    template_dir = _KIT_SOURCE / "templates" / "artifact-sqlite-report"
+    assert template_dir.is_dir(), "the template folder was renamed - update this test"
+    assert any(template_dir.rglob("*")), "the template folder is empty"
     relatives = ["protocols/artifacts.schema.json", "kit.json"] + [
         p.relative_to(_KIT_SOURCE).as_posix()
-        for root in ("skills/cinna-artifacts", "templates/artifact-sqlite-dashboard")
+        for root in ("skills/cinna-artifacts", "templates/artifact-sqlite-report")
         for p in (_KIT_SOURCE / root).rglob("*")
         if p.is_file()
     ]

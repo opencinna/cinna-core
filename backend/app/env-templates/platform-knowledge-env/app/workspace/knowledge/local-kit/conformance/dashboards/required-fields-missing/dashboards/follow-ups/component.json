@@ -1,0 +1,15 @@
+{
+  "source": {
+    "endpoint": "items"
+  },
+  "endpoints": {
+    "items": {
+      "script": "api/items.py",
+      "description": "Open follow-ups."
+    }
+  },
+  "refresh": {
+    "max_age": "15m",
+    "after_turn": true
+  }
+}

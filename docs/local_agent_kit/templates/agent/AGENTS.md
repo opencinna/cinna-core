@@ -16,7 +16,9 @@ instructions live in `docs/WORKFLOW_PROMPT.md` and nowhere else.
    the conversation. **Never print, echo or log a credential value.**
 5. Write runtime output to `app-data/storage/`. Disposable snapshots go to
    `app-data/cache/`. Build anything meant to be published as a Cinna artifact under
-   `artifacts/<name>/` (the `cinna-artifacts` skill). Never write to `docs/`, `skills/`, `scripts/`, `knowledge/`
+   `artifacts/<name>/` (the `cinna-artifacts` skill). A live view the owner keeps is a
+   dashboard component in `dashboards/<name>/` (the `cinna-dashboards` skill); its data
+   goes to `app-data/dashboards/<name>/`, never into `dashboards/`. Never write to `docs/`, `skills/`, `scripts/`, `knowledge/`
    or `files/` while acting as the agent.
 6. Read tunable parameters from `config/`, not from hardcoded values in scripts.
 

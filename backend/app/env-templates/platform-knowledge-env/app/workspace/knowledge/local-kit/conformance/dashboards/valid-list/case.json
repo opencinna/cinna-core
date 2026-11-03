@@ -1,0 +1,15 @@
+{
+  "description": "A valid native list component with a Python endpoint, run with its defaults: no finding at all.",
+  "component": "dashboards/follow-ups",
+  "run": true,
+  "expect": {
+    "errors": [],
+    "no_warnings": [
+      {
+        "path": "dashboards/follow-ups/api/items.py",
+        "code": "id_missing",
+        "field": "items.id"
+      }
+    ]
+  }
+}

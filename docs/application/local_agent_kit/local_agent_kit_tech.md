@@ -39,7 +39,7 @@ content sync, frontend surfaces, and tests.
   `publications.schema.json`), `templates/**` (`templates/root/*`,
   `templates/agent/*` — the scaffold). **Kit-only**: `START.md`, `README.md`
   (index + capability ladder), `VERSION` (a `{{KIT_VERSION}}` placeholder),
-  `guides/01`–`12-*.md`, `assistants/{claude-code,codex,other,cinna-desktop}.md`,
+  `guides/01`–`14-*.md`, `assistants/{claude-code,codex,other,cinna-desktop}.md`,
   `tools/kit.py`
 - `.cinna-core-kit/scripts/sync_platform_knowledge.py` — step 3, copies
   `docs/local_agent_kit/` → the knowledge-template snapshot below

@@ -21,6 +21,7 @@ from typing import Any
 from app.services.agents.skill_manifest import (
     DEFAULT_MAX_TOTAL_BYTES,
     SKIP_DIR_NAMES,
+    has_dashboard_components,
     parse_frontmatter,
     parse_skill_dir,
 )
@@ -179,7 +180,11 @@ def _has_scripts(skill_dir: Path) -> bool:
 def _skill(skill_dir: Path, fallback_name: str) -> dict[str, Any]:
     entry = parse_skill_dir(skill_dir)
     if entry.error is None:
-        return {"name": entry.name, "has_scripts": bool(entry.has_scripts)}
+        return {
+            "name": entry.name,
+            "has_scripts": bool(entry.has_scripts),
+            "has_dashboards": bool(entry.has_dashboards),
+        }
     # Listed even when the SKILL.md does not validate here (a root skill's
     # folder name is never its name): the desktop validates what it installs.
     name = fallback_name
@@ -191,7 +196,11 @@ def _skill(skill_dir: Path, fallback_name: str) -> dict[str, Any]:
             name = frontmatter["name"].strip()
     except (OSError, ValueError):
         pass
-    return {"name": name, "has_scripts": _has_scripts(skill_dir)}
+    return {
+        "name": name,
+        "has_scripts": _has_scripts(skill_dir),
+        "has_dashboards": has_dashboard_components(skill_dir),
+    }
 
 
 def _md_files(base: Path, *, recursive: bool) -> list[tuple[str, Path]]:

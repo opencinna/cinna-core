@@ -13015,8 +13015,8 @@ export class LlmPluginsService {
      * Give many entries of one marketplace the same access (superuser only).
      *
      * At most 500 ids. All or nothing: an id that is unknown or belongs to
-     * another marketplace is a 422 `foreign_ids` (`detail.ids`) and nothing is
-     * written. `updated` counts distinct entries; `visible` is what users see
+     * another marketplace is a 422 `foreign_ids` (`detail.ids` lists at most 50
+     * of them) and nothing is written. `updated` counts distinct entries; `visible` is what users see
      * afterwards under the current mode.
      * @param data The data for the request.
      * @param data.marketplaceId

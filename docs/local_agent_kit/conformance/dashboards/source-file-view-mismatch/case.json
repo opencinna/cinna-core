@@ -1,0 +1,14 @@
+{
+  "description": "A .csv source for a list view; a .csv feeds only a table.",
+  "component": "dashboards/follow-ups",
+  "run": false,
+  "expect": {
+    "errors": [
+      {
+        "path": "dashboards/follow-ups/component.json",
+        "code": "source_file_view",
+        "field": "source.file"
+      }
+    ]
+  }
+}

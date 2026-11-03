@@ -109,8 +109,10 @@ def indexed_docs(include_plans=False):
         if not include_plans and r.startswith("docs/plans"):
             dirnames[:] = []
             continue
-        # Vendored contract files (verbatim protocol/skill copies) with foreign frontmatter, not feature docs.
-        if r.startswith(("docs/local_agent_kit/skills", "docs/local_agent_kit/protocols")):
+        # Vendored contract files (verbatim protocol/skill copies) and conformance fixture trees
+        # (sample agents whose SKILL.md carry foreign frontmatter), not feature docs.
+        if r.startswith(("docs/local_agent_kit/skills", "docs/local_agent_kit/protocols",
+                         "docs/local_agent_kit/conformance/dashboards")):
             dirnames[:] = []
             continue
         for f in files:

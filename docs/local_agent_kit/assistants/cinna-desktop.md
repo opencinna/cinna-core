@@ -34,6 +34,12 @@ they do not have open.
   than assembling a folder by hand — that rule does not soften just because the tool has
   a different name in this host.
 
+## Dashboards
+
+This host shows dashboard components: a live view the user wants to keep goes in
+`dashboards/<name>/` (`guides/14-dashboards.md`), checked with the `cinna-dashboards`
+skill's `check_component.py --run` before the agent prints its reference.
+
 ## Never run `kit.py refresh`
 
 The desktop owns `.cinna-kit/`. It installs the kit from its bundled copy and replaces

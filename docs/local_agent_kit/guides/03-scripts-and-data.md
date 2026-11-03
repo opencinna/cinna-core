@@ -73,6 +73,7 @@ expensive.
 | `app-data/cache/` | runtime | disposable, rebuildable snapshots | yes, per install |
 | `app-data/uploads/` | runtime | files the user attached | yes, per install |
 | `artifacts/` | runtime | what the agent builds to publish as Cinna artifacts, one subfolder per artifact | yes, per install; never shared or copied to the cloud |
+| `dashboards/` | author | dashboard components, one folder per component (`guides/14-dashboards.md`); their data goes to `app-data/dashboards/<name>/` | replaced on update |
 
 The rule that matters: **`files/` is what the author ships; `app-data/storage/` is
 what the agent produces.** Writing runtime output to `files/` means it is silently

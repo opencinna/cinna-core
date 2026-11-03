@@ -908,3 +908,5 @@ sweep skips denylisted names — it simply never travels again.
 - 2026-10-10: Skills can be published from a desktop (preview + archive upload, additive grants, user-provided credential slots), and a revision pinned by a usable desktop agent can be downloaded and read without catalog visibility.
 - Desktop publish can name a publisher credential per slot, and a desktop install provisions those slots through `provision-local` as `skill_local_install` shares.
 - 2026-10-18: Desktop agents can install marketplace skills through snapshot archives and `marketplace_skills[]` pins.
+
+- `has_dashboards` flag beside `has_scripts` on skill summaries and index entries; `cinna-dashboards` reserved as a platform skill name (kit contract 1.19.0). Core does not host or render dashboards.

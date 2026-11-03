@@ -20,6 +20,9 @@ Commands
   refresh [--check]                    compare / update the kit from the platform
   export <path> --to DIR [--force] [--hash]
                                        produce the cloud-import tree
+  dashboards check [path] [--run] [--agent DIR] [--json]
+                                       check dashboard components (the
+                                       cinna-dashboards skill's check_component.py)
   chat <path> "<prompt>"               send one prompt to the agent through Cinna
                                        Desktop's local API, and print its answer
 
@@ -35,6 +38,7 @@ import argparse
 import fnmatch
 import functools
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -61,6 +65,9 @@ SCHEMA_PATH = KIT_DIR / "schema" / "cinna-agent.schema.json"
 TEMPLATE_DIR = KIT_DIR / "templates" / "agent"
 VERSION_PATH = KIT_DIR / "VERSION"
 CONTRACT_VERSION_PATH = KIT_DIR / "CONTRACT_VERSION"
+# The dashboards check ships inside the platform skill (contract 1.19.0), so an agent
+# can run it without this tool; `dashboards check` and `validate` import it from there.
+DASHBOARDS_CHECK_PATH = KIT_DIR / "skills" / "cinna-dashboards" / "scripts" / "check_component.py"
 LAST_REFRESH_CHECK = ".last_refresh_check"
 
 MANIFEST_NAME = "cinna-agent.json"
@@ -2691,7 +2698,7 @@ RESERVED_SKILL_NAMES = frozenset(
 
 # Skills the platform itself ships. `kit.json` → `platform_skills` is the
 # authority; this is the fallback when that file says nothing.
-DEFAULT_PLATFORM_SKILL_NAMES = frozenset({"cinna-tasks", "cinna-artifacts"})
+DEFAULT_PLATFORM_SKILL_NAMES = frozenset({"cinna-tasks", "cinna-artifacts", "cinna-dashboards"})
 
 # A credential slot a skill declares is a credential's `service_uri`.
 SKILL_CREDENTIAL_SLOT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$")
@@ -3493,6 +3500,63 @@ def _validate_skills(agent_dir: Path, manifest: dict, report: Report) -> None:
                 )
 
 
+@functools.lru_cache(maxsize=1)
+def dashboards_checker():
+    """The `cinna-dashboards` skill's `check_component` module, or None if the kit lacks it.
+
+    Imported, never forked: the skill's script is what agents run, and what Cinna
+    Desktop's parity test runs, so this tool must apply exactly its rules.
+    """
+    if not DASHBOARDS_CHECK_PATH.is_file():
+        return None
+    spec = importlib.util.spec_from_file_location("cinna_dashboards_check", DASHBOARDS_CHECK_PATH)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    # dataclasses resolve the module through sys.modules while the class is built.
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _validate_dashboards(agent_dir: Path, report: Report) -> None:
+    """Every `dashboards/*/` and `skills/*/dashboards/*/` component, statically."""
+    has_components = (agent_dir / "dashboards").is_dir() or any(
+        (child / "dashboards").is_dir()
+        for child in (agent_dir / "skills").glob("*")
+        if child.is_dir()
+    )
+    if not has_components:
+        return
+    checker = dashboards_checker()
+    if checker is None:
+        report.warn(
+            "dashboards/: not checked — this kit has no skills/cinna-dashboards/scripts/"
+            "check_component.py. Refresh the kit."
+        )
+        return
+    for problem in checker.check_agent(agent_dir):
+        if problem.severity == "error":
+            report.error(f"{problem.path}: {problem.message}")
+        else:
+            report.warn(f"{problem.path}: {problem.message}")
+
+
+def cmd_dashboards(args: argparse.Namespace) -> int:
+    """`dashboards check [path] [--run] [--agent DIR] [--json]` — the skill's check."""
+    checker = dashboards_checker()
+    if checker is None:
+        raise KitError(f"the dashboards check is missing from this kit ({DASHBOARDS_CHECK_PATH}).")
+    forwarded = [args.path]
+    if args.run:
+        forwarded.append("--run")
+    if args.agent:
+        forwarded += ["--agent", args.agent]
+    if args.json:
+        forwarded.append("--json")
+    return int(checker.main(forwarded))
+
+
 def template_description() -> str | None:
     """The scaffold's placeholder description, so validate can spot an unedited one."""
     template_manifest = TEMPLATE_DIR / MANIFEST_NAME
@@ -3699,6 +3763,7 @@ def validate_agent(agent_dir: Path, fix: bool, cloud_ready: bool = False) -> Rep
         lambda: _validate_scripts_catalog(agent_dir, report),
         lambda: _validate_status_file(agent_dir, report),
         lambda: _validate_skills(agent_dir, manifest, report),
+        lambda: _validate_dashboards(agent_dir, report),
         lambda: _validate_publications(agent_dir, report),
     )
     for check in checks:
@@ -3837,6 +3902,13 @@ def _rungs_present(agent_dir: Path, manifest: dict) -> list[str]:
 
     if manifest.get("handovers"):
         rungs.append("multi_agent")
+
+    # Only the agent's own components adopt the rung; one a skill ships is the skill's.
+    dashboards_dir = agent_dir / "dashboards"
+    if dashboards_dir.is_dir() and any(
+        (child / "component.json").is_file() for child in dashboards_dir.iterdir() if child.is_dir()
+    ):
+        rungs.append("dashboards")
 
     if is_published(agent_dir, manifest):
         rungs.append("go_cloud")
@@ -5213,6 +5285,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="also print the exported tree's content_hash on its own final line",
     )
     export_parser.set_defaults(func=cmd_export)
+
+    dashboards_parser = subparsers.add_parser(
+        "dashboards", help="check dashboard components (contract 1.19.0)"
+    )
+    dashboards_sub = dashboards_parser.add_subparsers(dest="dashboards_command", required=True)
+    dashboards_check = dashboards_sub.add_parser(
+        "check",
+        help="check dashboards/<name>, skills/<skill>/dashboards/<name>, or every component of an agent",
+    )
+    dashboards_check.add_argument(
+        "path", nargs="?", default=".", help="a component folder or an agent folder (default: .)"
+    )
+    dashboards_check.add_argument(
+        "--run",
+        action="store_true",
+        help="also run each source with its default params and check the result's shape",
+    )
+    dashboards_check.add_argument("--agent", help="the agent folder, when the component is not inside one")
+    dashboards_check.add_argument("--json", action="store_true", help="print the findings as JSON")
+    dashboards_check.set_defaults(func=cmd_dashboards)
 
     chat_parser = subparsers.add_parser(
         "chat",

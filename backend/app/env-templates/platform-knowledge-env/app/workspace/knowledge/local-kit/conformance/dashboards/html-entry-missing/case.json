@@ -1,0 +1,14 @@
+{
+  "description": "An html view whose entry page does not exist.",
+  "component": "dashboards/follow-ups",
+  "run": false,
+  "expect": {
+    "errors": [
+      {
+        "path": "dashboards/follow-ups/component.json",
+        "code": "entry_missing",
+        "field": "entry"
+      }
+    ]
+  }
+}

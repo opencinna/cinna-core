@@ -1,0 +1,14 @@
+{
+  "description": "--run: an endpoint that fails; the finding carries the stderr tail.",
+  "component": "dashboards/follow-ups",
+  "run": true,
+  "expect": {
+    "errors": [
+      {
+        "path": "dashboards/follow-ups/api/items.py",
+        "code": "run_failed",
+        "field": null
+      }
+    ]
+  }
+}

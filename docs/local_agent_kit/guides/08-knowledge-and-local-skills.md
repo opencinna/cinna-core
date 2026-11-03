@@ -346,7 +346,7 @@ not write them by hand. Updating a catalog skill is changing its pin, so the age
 always says exactly which version it runs, and sharing the agent shares the pins.
 
 A pin's `name` must not be the name of a folder under `skills/`, of a skill the
-platform provides (`cinna-tasks`), or of another pin: two skills with one name would
+platform provides (`cinna-tasks`, `cinna-artifacts`, `cinna-dashboards`), or of another pin: two skills with one name would
 leave the engine to pick one. `kit.py validate` reports each clash as an error. To
 change a catalog skill, publish a new version of it; to make a private variant,
 write a skill with a different name under `skills/`.
@@ -381,6 +381,45 @@ Skills this agent publishes are recorded in `publications.json` → `skills[]`
 (`platform_url`, `name`, `package_id`, `package_uuid`, `revision_number`,
 `content_hash`). The record travels with the agent, so anyone who can edit the agent
 and may publish the package can publish its next version.
+
+### Components inside a skill
+
+A skill can ship prebuilt dashboard components (contract 1.19.0) in its own
+`dashboards/<name>/` folder, with the same layout as an agent's
+(`guides/14-dashboards.md`):
+
+```
+skills/inbox-triage/
+├── SKILL.md
+├── scripts/
+│   └── rank_inbox.py
+└── dashboards/
+    └── inbox-by-priority/
+        ├── component.json
+        └── api/
+            └── items.py
+```
+
+- **Whose it is.** A component belongs to the agent that has the skill. Its
+  endpoints run with cwd at that agent's folder and with that agent's credentials, so
+  they call the skill's scripts by their agent-relative path
+  (`skills/inbox-triage/scripts/rank_inbox.py`). Its data goes to
+  `app-data/dashboards/<skill>/<name>/`, so the same skill in two agents gives two
+  components with separate data. `requires_credentials` names entries of the
+  installing agent's `credentials[]`: say in `SKILL.md` which ones the skill needs.
+- **Read-only.** A catalog or marketplace skill is read from a shared cache, and a
+  component never writes into its own folder anyway. Write `source.file` paths and
+  endpoint output under `app-data/dashboards/<skill>/<name>/`.
+- **It travels with the skill.** Publishing the skill to the catalog or a marketplace
+  carries `dashboards/` with it; updating the skill updates every tile that shows its
+  components. Hosts that know nothing of dashboards ignore the folder.
+- **Referencing it.** `cinna://component/<agent>/<skill>/<name>`. A skill's README
+  may print that reference with the agent segment the installing agent's host gives.
+- **Changing one.** An agent that needs a different version copies the folder into
+  its own `dashboards/` under a new name; the copy no longer follows the skill. Nobody
+  edits a skill's cache.
+- **Checking.** `check_component.py skills/<skill>/dashboards/<name> --run` from the
+  agent folder, or `kit.py validate`, which checks every skill's components.
 
 ### The legacy form: `docs/skill_<name>.md`
 

@@ -1,0 +1,14 @@
+{
+  "description": "--run: a list endpoint that returns a table's shape.",
+  "component": "dashboards/follow-ups",
+  "run": true,
+  "expect": {
+    "errors": [
+      {
+        "path": "dashboards/follow-ups/api/items.py",
+        "code": "shape_invalid",
+        "field": "items"
+      }
+    ]
+  }
+}

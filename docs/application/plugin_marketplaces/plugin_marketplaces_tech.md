@@ -76,7 +76,7 @@ Defined via `LLMPluginMarketplacePluginBase`:
 | `source_commit_hash` | Pinned commit from external repo (url plugins) |
 | `commit_hash` | Commit hash when this plugin config was last parsed |
 | `homepage` | Optional external link |
-| `config` | Full `plugin.json` stored as JSON blob. `codex`: the whole entry verbatim, including `policy` (stored, **not enforced**) and the `.codex-plugin/plugin.json` `interface` block, plus a `skills` list of the plugin's own skill folders. `skills` format: `{"skill": {name, description, has_scripts}}` |
+| `config` | Full `plugin.json` stored as JSON blob. `codex`: the whole entry verbatim, including `policy` (stored, **not enforced**) and the `.codex-plugin/plugin.json` `interface` block, plus a `skills` list of the plugin's own skill folders. `skills` format: `{"skill": {name, description, has_scripts, has_dashboards}}` |
 
 These rows are the source of git coordinates consumed by `LLMPluginService.build_plugin_manifest()` at agent plugin install time. There is no companion cache directory on disk.
 

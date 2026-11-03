@@ -114,6 +114,7 @@ def _reported(**overrides) -> dict:
         "plugin_ref": None,
         "path": "skills/pdf-report",
         "has_scripts": True,
+        "has_dashboards": False,
         "user_invocable": True,
         "model_invocable": True,
         "size_bytes": 4096,

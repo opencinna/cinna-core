@@ -1,0 +1,14 @@
+{
+  "description": "refresh.max_age is null: it has no null (leave it out for the 15m default), in the schema and the check alike.",
+  "component": "dashboards/follow-ups",
+  "run": false,
+  "expect": {
+    "errors": [
+      {
+        "path": "dashboards/follow-ups/component.json",
+        "code": "duration_invalid",
+        "field": "refresh.max_age"
+      }
+    ]
+  }
+}

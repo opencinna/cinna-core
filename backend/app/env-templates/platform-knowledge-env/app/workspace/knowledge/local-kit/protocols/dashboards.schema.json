@@ -1,0 +1,371 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cinna.dev/protocols/dashboards/v1/dashboards.schema.json",
+  "title": "Cinna Dashboards — components",
+  "description": "A dashboard component is a live, refreshable view an agent keeps for its owner: a folder `dashboards/<name>/` in the agent (contract 1.19.0), or `dashboards/<name>/` inside one of its skills. The folder name is the component's name; `component.json` describes it. A host shows components as tiles on the owner's dashboards and runs their endpoints only when someone is looking or the component asked at launch. This file is the contract for `component.json`, the data shapes a source returns, the endpoint convention, the page bridge and the component reference grammar. It defines no tool: an agent offers a component by printing its reference. `skills/cinna-dashboards/scripts/check_component.py` applies these rules; a host validating components applies the same ones and reports the same `x-check-codes`.",
+  "cinna_protocol": "dashboards/1",
+  "protocol_version": 1,
+  "$ref": "#/$defs/component",
+  "$defs": {
+    "component_name": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+      "description": "The component folder's name. There is no `name` field in component.json to drift from it."
+    },
+    "endpoint_name": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9_]+$"
+    },
+    "duration": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]*(s|m|h|d)$",
+      "examples": ["30s", "15m", "6h", "1d"]
+    },
+    "duration_1m_or_more": {
+      "type": "string",
+      "pattern": "^(([6-9][0-9]|[1-9][0-9]{2,})s|[1-9][0-9]*(m|h|d))$",
+      "description": "A duration of at least 1m (60s). Failing only this pattern, not `duration`, is `while_open_every_too_short`."
+    },
+    "component": {
+      "type": "object",
+      "description": "`dashboards/<name>/component.json`. Unknown keys are preserved and ignored.",
+      "required": ["schema_version", "title", "view", "source"],
+      "additionalProperties": true,
+      "allOf": [
+        {
+          "description": "A .csv source file feeds a table view (`source_file_view`).",
+          "if": { "required": ["source"], "properties": { "source": { "type": "object", "required": ["file"], "properties": { "file": { "type": "string", "pattern": "\\.csv$" } } } } },
+          "then": { "properties": { "view": { "const": "table" } } }
+        },
+        {
+          "description": "A .md source file feeds a markdown view (`source_file_view`).",
+          "if": { "required": ["source"], "properties": { "source": { "type": "object", "required": ["file"], "properties": { "file": { "type": "string", "pattern": "\\.md$" } } } } },
+          "then": { "properties": { "view": { "const": "markdown" } } }
+        }
+      ],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 120, "pattern": "\\S", "description": "The tile's title. Not blank." },
+        "description": { "type": "string", "maxLength": 1000, "description": "One sentence on what the view shows." },
+        "view": {
+          "enum": ["markdown", "table", "list", "metrics", "html"],
+          "description": "`markdown`, `table`, `list` and `metrics` are native views the host draws in its own design from the shapes in `$defs/data`. `html` is the agent's own page, run in a sandbox with no network (see `x-web-view`)."
+        },
+        "entry": {
+          "type": "string",
+          "default": "index.html",
+          "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(^|/)\\.\\.(/|$))[^\\\\]+\\.html$",
+          "description": "For `view: html` only: the page to open, relative to the component folder, ending in .html (lowercase). It must exist, and with symlinks resolved it must stay inside the component folder."
+        },
+        "source": {
+          "description": "Where the view's data comes from: one of the component's endpoints, or a file in the agent folder.",
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["endpoint"],
+              "additionalProperties": false,
+              "properties": { "endpoint": { "$ref": "#/$defs/endpoint_name", "description": "A key of `endpoints`." } }
+            },
+            {
+              "type": "object",
+              "required": ["file"],
+              "additionalProperties": false,
+              "properties": {
+                "file": {
+                  "type": "string",
+                  "pattern": "^(app-data|files)/(?!.*(^|/)\\.\\.(/|$))[^\\\\]+\\.(md|json|csv)$",
+                  "description": "Agent-relative path under `app-data/` (extension lowercase; with symlinks resolved it must stay inside the agent folder) (normally `app-data/dashboards/<name>/…`; for a skill's component `app-data/dashboards/<skill>/<name>/…`) or `files/`. A `.csv` feeds a `table`, a `.md` a `markdown` view, a `.json` any view. Re-reading a file costs nothing; `refresh.command` or `refresh.schedule` rewrites it."
+                }
+              }
+            }
+          ]
+        },
+        "endpoints": {
+          "type": "object",
+          "description": "The component's endpoints by name. Only these may be run for it: as its `source`, or from its page with `cinna.call`.",
+          "propertyNames": { "$ref": "#/$defs/endpoint_name" },
+          "additionalProperties": {
+            "type": "object",
+            "required": ["script"],
+            "additionalProperties": true,
+            "properties": {
+              "script": {
+                "type": "string",
+                "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(^|/)\\.\\.(/|$))[^\\\\]+\\.(py|js|mjs|cjs)$",
+                "description": "Relative to the component folder, normally `api/<endpoint>.<ext>`, extension lowercase. Must exist, and with symlinks resolved it must stay inside the component folder. The extension picks the runtime (`x-endpoint-convention`)."
+              },
+              "description": { "type": "string", "maxLength": 1000, "description": "What it returns and which params it reads." },
+              "timeout_s": { "type": "integer", "minimum": 1, "maximum": 300, "default": 60 }
+            }
+          }
+        },
+        "params": {
+          "type": "object",
+          "description": "Parameters the owner can change per tile. Native views draw controls for them; web views receive them in `ui/initialize`; the tile stores the current values; the source receives them on stdin.",
+          "propertyNames": { "pattern": "^[a-zA-Z0-9_]+$" },
+          "additionalProperties": {
+            "type": "object",
+            "required": ["type"],
+            "additionalProperties": true,
+            "if": { "properties": { "type": { "const": "enum" } } },
+            "then": { "required": ["values"] },
+            "properties": {
+              "type": { "enum": ["enum", "month", "date", "date_range", "text", "number", "boolean"] },
+              "label": { "type": "string", "minLength": 1, "maxLength": 120, "pattern": "\\S" },
+              "values": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1, "maxLength": 200, "pattern": "\\S" }, "description": "Required for `enum`." },
+              "default": {
+                "description": "Sent when the owner has chosen nothing. `enum`: one of `values`. `month`: `YYYY-MM` or `current`. `date`: `YYYY-MM-DD` or `today`. A host resolves `current` and `today` to a value before it runs the source, so an endpoint never sees the words."
+              }
+            }
+          }
+        },
+        "refresh": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "When a host recomputes the tile. Nothing runs unless the tile is on screen, the owner presses Refresh, or the component asked at launch.",
+          "properties": {
+            "max_age": { "$ref": "#/$defs/duration", "default": "15m", "description": "A visible tile whose cached result is older than this is recomputed. Never null: leave it out for the default." },
+            "while_open_every": { "oneOf": [{ "$ref": "#/$defs/duration_1m_or_more" }, { "type": "null" }], "default": null, "description": "Recompute on this period while the dashboard is on screen. At least `1m`." },
+            "after_turn": { "type": "boolean", "default": false, "description": "Recompute when this agent's turn ends and the tile is on screen. Without it the end of a turn only re-reads." },
+            "on_app_start": { "type": "boolean", "default": false, "description": "Warm up once after the app starts. It costs the owner at every launch: only for slow sources." },
+            "command": { "oneOf": [{ "type": "string", "pattern": "^/run:[A-Za-z0-9][A-Za-z0-9_-]*$" }, { "type": "null" }], "default": null, "description": "A `/run:<name>` command from docs/CLI_COMMANDS.yaml (the `status_refresh_command` grammar) run before the source is read: it rewrites the source file." },
+            "schedule": { "oneOf": [{ "type": "string", "minLength": 1, "maxLength": 255, "pattern": "\\S" }, { "type": "null" }], "default": null, "description": "The `schedules[].name` whose output the source reads. For data that needs model judgment, such as ranking by the owner's rules; the tile re-reads what the schedule wrote." }
+          }
+        },
+        "size": { "enum": ["s", "m", "l", "wide", "tall"], "description": "On a 12-column grid: `s` 3×2, `m` 6×2, `l` 6×4, `wide` 12×2, `tall` 3×4. The owner can change it." },
+        "requires_credentials": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Names from the agent manifest's `credentials[]` the source needs. A teammate without one sees \"Needs the <name> credential\" instead of a failed run. Every name must exist in the manifest."
+        },
+        "context": { "type": "string", "maxLength": 4000, "description": "How to read the view (units, what a row is, the order of stages), written for the owner's chat. Sent with the first context block of a chat." },
+        "prompts": {
+          "type": "array",
+          "maxItems": 10,
+          "description": "Questions the owner can ask about the view, in the owner's language. They fill the dashboard chat; they never stream inside the tile.",
+          "items": {
+            "type": "object",
+            "required": ["label", "prompt"],
+            "properties": {
+              "label": { "type": "string", "minLength": 1, "maxLength": 60, "pattern": "\\S" },
+              "prompt": { "type": "string", "minLength": 1, "maxLength": 1000, "pattern": "\\S" }
+            }
+          }
+        }
+      }
+    },
+    "data": {
+      "description": "What a source returns (stdout of an endpoint, or the content of a source file), per view. Any object shape may add `generated_at` (ISO 8601) and `notice` (one line, such as \"Gmail token expired\", shown as the tile's mark). `id`s make rows and items selectable and addressable in context; a missing `id` is a warning, not an error. `url` fields are drawn as links the owner clicks; only https, http and mailto.",
+      "common": {
+        "type": "object",
+        "properties": {
+          "generated_at": { "type": "string" },
+          "notice": { "type": "string", "pattern": "^[^\\n]*$" }
+        }
+      },
+      "table": {
+        "type": "object",
+        "required": ["columns", "rows"],
+        "description": "A `.csv` source file is accepted too; its columns come from the header row.",
+        "properties": {
+          "columns": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": ["key"],
+              "properties": {
+                "key": { "type": "string" },
+                "label": { "type": "string" },
+                "type": { "enum": ["text", "number", "money", "percent", "date", "badge"], "default": "text" }
+              }
+            }
+          },
+          "rows": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": ["string", "integer"] } } } }
+        }
+      },
+      "list": {
+        "type": "object",
+        "required": ["items"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["title"],
+              "properties": {
+                "id": { "type": ["string", "integer"] },
+                "title": { "type": "string" },
+                "subtitle": { "type": "string" },
+                "meta": { "type": "string" },
+                "time": { "type": "string", "description": "ISO 8601." },
+                "priority": { "enum": ["high", "medium", "low"] },
+                "badge": { "type": "string" },
+                "url": { "type": "string", "pattern": "^(https?://|mailto:)" }
+              }
+            }
+          }
+        }
+      },
+      "metrics": {
+        "type": "object",
+        "required": ["items"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["label", "value"],
+              "properties": {
+                "id": { "type": ["string", "integer"] },
+                "label": { "type": "string" },
+                "value": { "type": ["number", "string"] },
+                "unit": { "type": "string" },
+                "delta": { "type": ["number", "string"] },
+                "delta_good": { "enum": ["up", "down"] },
+                "status": { "enum": ["ok", "warning", "error"] },
+                "trend": { "type": "array", "items": { "type": "number" } }
+              }
+            }
+          }
+        }
+      },
+      "markdown": {
+        "type": "object",
+        "required": ["markdown"],
+        "description": "Or a `.md` source file.",
+        "properties": { "markdown": { "type": "string" } }
+      },
+      "html": { "description": "Any JSON value; it is handed to the page through `cinna.onData`." }
+    }
+  },
+  "x-endpoint-convention": {
+    "location": "dashboards/<component>/api/<endpoint>.<ext>; a component may mix runtimes.",
+    "runtimes": {
+      ".py": "python <script>, localized as commands are: `uv run python <script>` when the agent has a pyproject.toml; the host's managed uv. check_component.py --run without `uv` on PATH runs the checker's own Python and warns `uv_missing`.",
+      ".js": "node <script>: the user's `node` when one resolves on the command's PATH, otherwise the host's own Node runtime (Cinna Desktop: Electron as Node). A host passes that runtime's path to tools it runs in `CINNA_NODE`; check_component.py --run uses `CINNA_NODE`, then `node` on PATH, and with neither warns `runtime_missing` and skips the run.",
+      ".mjs": "as .js",
+      ".cjs": "as .js",
+      ".ts": "not yet: unknown extensions are refused."
+    },
+    "node_dependencies": "Built-ins and files in the agent folder. A package.json dependency works only when node_modules/ is already installed by the agent; a host never runs npm install.",
+    "cwd": "The agent root, also for a component a skill ships.",
+    "environment": "The agent's credential environment, the same as for /run: commands.",
+    "stdin": "The params object itself (not wrapped): the tile's values, or each param's default with `current`/`today` resolved.",
+    "stdout": "One JSON value. Logs go to stderr.",
+    "timeout_s": { "default": 60, "maximum": 300 },
+    "process_group": "The endpoint runs in its own process group (POSIX session); at the timeout, past the stdout cap, and once it exits, the whole group is killed, so nothing it started outlives the run.",
+    "max_stdout_bytes": 5242880,
+    "failure": "A non-zero exit fails the run with the last 2,000 characters of stderr; the tile keeps its last good data and shows a mark. Stdout is read only up to max_stdout_bytes: past that the run is killed and fails."
+  },
+  "x-web-view": {
+    "sandbox": "The page runs in a sandboxed frame whose CSP allows only the component's own files: no network, no CDN, no web fonts, no top navigation. Bundle every library into the folder and load it by relative path.",
+    "bridge": {
+      "description": "The host injects `window.cinna`, which speaks MCP Apps (2026-01-26) JSON-RPC over postMessage; Cinna-only methods are under `cinna/*`. Pages use the helper and never the wire.",
+      "cinna.ready": "Promise of {component, title, params, theme, size}. Wire: ui/initialize + ui/notifications/initialized.",
+      "cinna.onData(cb)": "cb(data, {stale, fetched_at}): the cached result first, then the fresh one. Wire: ui/notifications/tool-result.",
+      "cinna.call(endpoint, params)": "Promise of one of this component's own endpoints' result, for drill-downs; not cached. Wire: tools/call.",
+      "cinna.setParams(params)": "Stored on the tile; the source recomputes and the result arrives through onData. Wire: cinna/params-changed.",
+      "cinna.setContext({summary, selection, visible})": "What the owner's dashboard chat sees about this tile; `selection` and `visible` are row or item ids. The last call wins. Wire: ui/update-model-context.",
+      "cinna.ask(text)": "Fills the dashboard chat's composer; never sends. Wire: ui/message.",
+      "cinna.openLink(url)": "Opens the default browser after the owner confirms the full URL. Wire: ui/open-link.",
+      "cinna.onTheme(cb)": "Light/dark changes. Wire: ui/notifications/host-context-changed. The host also sets CSS variables named `--cinna-*`; a page uses them with fallbacks, e.g. `var(--cinna-bg, #fff)`."
+    }
+  },
+  "x-references": {
+    "description": "How any message names a component. A host renders a reference as a card that names the owning agent; rendering runs nothing. A reference inside backticks or a code block stays plain text.",
+    "forms": [
+      "cinna://component/<agent>/<name>  — a component in the agent's dashboards/",
+      "cinna://component/<agent>/<skill>/<name>  — a component shipped in a skill the agent has"
+    ],
+    "agent_segment": {
+      "id:<manifest id>": "The uuid in cinna-agent.json `id`. Survives folder moves and renames; teammates' copies keep it. What an agent prints when it has no bundle id.",
+      "bundle:<bundle_id>": "The catalog id cinna-core mints when the agent is shared (e.g. `io.example.cinna.ab12cd34`). The same on every machine and for every teammate. Read from cinna-agent.json `bundle.bundle_id`, or from app-data/desktop.json `shared_remote.bundle_id`; the manifest wins when both exist.",
+      "<slug>": "A bare manifest slug. Readable and typeable, but a folder rename breaks it. Accepted by a host, never printed by an agent."
+    },
+    "prefix_rule": "The prefix is always written: `bundle:` and `id:` are never guessed from the segment's shape. An agent prints the prefix its host's prompt gives it, never one it read from app-data/.",
+    "segment_patterns": {
+      "id": "^id:[0-9a-fA-F-]{36}$",
+      "bundle": "^bundle:[a-zA-Z0-9][a-zA-Z0-9.\\-]{1,253}$",
+      "slug": "^[a-z0-9][a-z0-9-]{1,62}$",
+      "skill": "^[a-z0-9]+(-[a-z0-9]+)*$",
+      "name": "^[a-z0-9][a-z0-9-]{0,63}$"
+    },
+    "where_a_card_renders": "A bare reference on a line of its own, or a markdown link whose target is a reference (the link text becomes the card's subtitle). Several references in one message render as a list of cards.",
+    "containment": "A host resolves a reference to a kit agent on its machine and a folder under that agent's dashboards/ role or one of its skills' dashboards/. It is never a path."
+  },
+  "x-skill-components": {
+    "description": "A skill may ship prebuilt components in `<skill>/dashboards/<name>/`, same layout, whether the skill is authored under skills/, from the catalog or from a marketplace. Other hosts ignore the folder.",
+    "owner": "The agent that has the skill: endpoints run with cwd at that agent's folder and with its credentials; data goes to the agent's app-data/dashboards/<skill>/<name>/. The same skill in two agents gives two components.",
+    "read_only": "The component is read from the skill's resolved folder (authored, catalog cache or marketplace cache) and writes nothing into it.",
+    "updates": "References follow the skill: updating it updates every tile; removing it leaves the tiles saying the component is gone.",
+    "customising": "To change a skill's component, copy it into the agent's own dashboards/, where it becomes the agent's and no longer follows the skill. Never edit a skill cache."
+  },
+  "x-script-only-checks": {
+    "description": "Rules JSON Schema cannot express. Everything else check_component.py enforces is in this schema (patterns are matched against the whole string, extensions are lowercase, text a person reads is non-blank), so a schema-valid component.json fails only these. A host validating with the schema hand-codes them and reports the code given.",
+    "checks": [
+      { "code": "component_name_invalid", "rule": "The component folder's name matches `$defs/component_name` (it is not a field of component.json)." },
+      { "code": "invalid_value", "field": "params.<name>.default", "rule": "A default fits its param's type: `enum` one of `values`; `month` YYYY-MM or `current`; `date` YYYY-MM-DD or `today`; `number` a number; `boolean` true/false; `text` a string. null means no default." },
+      { "code": "unknown_endpoint", "field": "source.endpoint", "rule": "source.endpoint is a key of `endpoints`." },
+      { "code": "script_missing", "field": "endpoints.<name>.script", "rule": "The script exists as a file." },
+      { "code": "entry_missing", "field": "entry", "rule": "The html entry exists as a file." },
+      { "code": "symlink_escape", "field": "endpoints.<name>.script | entry | source.file", "rule": "With symlinks resolved, a script and the entry stay inside the component folder and source.file inside the agent folder." },
+      { "code": "component_symlink", "rule": "A component folder is not a symlink." },
+      { "code": "credential_unknown", "field": "requires_credentials", "rule": "Each name is in cinna-agent.json `credentials[]`." },
+      { "code": "refresh_command_unknown", "severity": "warning", "field": "refresh.command", "rule": "The command is in docs/CLI_COMMANDS.yaml." },
+      { "code": "refresh_schedule_unknown", "severity": "warning", "field": "refresh.schedule", "rule": "The schedule is in cinna-agent.json `schedules[]`." },
+      { "code": "script_location", "severity": "warning", "field": "endpoints.<name>.script", "rule": "Scripts live in api/." },
+      { "code": "entry_ignored", "severity": "warning", "field": "entry", "rule": "entry is only read for view html." },
+      { "code": "network_reference", "severity": "warning", "rule": "No page asset loads from the network." },
+      { "code": "stray_file", "severity": "warning", "rule": "No plain file directly in dashboards/." }
+    ],
+    "schema_failures": "A schema failure reports the code x-check-codes gives for that field: `while_open_every` too short is `while_open_every_too_short`, other durations `duration_invalid`; a bad endpoint or param name `endpoint_name_invalid` / `param_name_invalid`; a script path `script_extension` when only the extension fails, else `script_outside_component`; source.file `source_file_extension` when only the extension fails, else `source_file_location`; a .csv/.md source with the wrong view `source_file_view`; source with neither, both or extra keys `source_invalid`; entry `entry_invalid`; refresh.command `refresh_command_invalid`; a missing required field `required`; a wrong JSON type `invalid_type`; anything else `invalid_value`."
+  },
+  "x-check-codes": {
+    "description": "Stable finding codes. check_component.py prints `path: message` lines and, with --json, {path, code, field, severity, message}. `path` is agent-relative; `field` is the component.json field (map keys written literally, e.g. `endpoints.deals.script`) or, for a result, the data field with array indices dropped (`items.title`).",
+    "errors": {
+      "not_a_directory": "the path is not a folder",
+      "not_in_dashboards": "the folder is not dashboards/<name>/ of an agent or a skill",
+      "component_name_invalid": "the folder name breaks the component name pattern",
+      "component_json_missing": "no component.json",
+      "component_json_invalid": "component.json is not one JSON object",
+      "required": "a required field is missing",
+      "invalid_type": "a field has the wrong JSON type",
+      "invalid_value": "a field is out of its enum, range or length",
+      "endpoint_name_invalid": "an endpoint name breaks ^[a-zA-Z0-9_]+$",
+      "param_name_invalid": "a param name breaks ^[a-zA-Z0-9_]+$",
+      "script_outside_component": "a script path is absolute or leaves the component folder",
+      "symlink_escape": "a script or entry resolves outside the component folder, or source.file outside the agent folder, through a symlink",
+      "component_symlink": "a component folder is a symlink (never followed)",
+      "script_extension": "a script is not .py, .js, .mjs or .cjs (lowercase)",
+      "script_missing": "a script does not exist",
+      "source_invalid": "source names neither or both of endpoint and file",
+      "unknown_endpoint": "source.endpoint is not a key of endpoints",
+      "source_file_location": "source.file is not under app-data/ or files/",
+      "source_file_extension": "source.file is not .md, .json or .csv",
+      "source_file_view": "a .csv with a view other than table, or a .md with a view other than markdown",
+      "entry_invalid": "entry is not an .html path inside the component",
+      "entry_missing": "the html entry does not exist",
+      "duration_invalid": "a refresh duration does not parse",
+      "while_open_every_too_short": "refresh.while_open_every is under 1m",
+      "refresh_command_invalid": "refresh.command is not /run:<name>",
+      "credential_unknown": "a requires_credentials name is not in the manifest's credentials[]",
+      "run_failed": "--run: the endpoint exited non-zero, timed out or could not start",
+      "run_output_invalid": "--run: stdout is not one JSON value, or is over 5 MB",
+      "shape_invalid": "--run: the result does not fit the view's shape"
+    },
+    "warnings": {
+      "script_location": "an endpoint script is outside api/",
+      "entry_ignored": "entry on a view other than html",
+      "refresh_command_unknown": "refresh.command names no command in docs/CLI_COMMANDS.yaml",
+      "refresh_schedule_unknown": "refresh.schedule names no schedule in the manifest",
+      "manifest_missing": "no cinna-agent.json above the component, so credentials were not checked and --run did not run",
+      "runtime_missing": "--run: no node (CINNA_NODE or PATH) for a Node endpoint, so it was not run; a host uses its own Node",
+      "uv_missing": "--run: the agent has a pyproject.toml but no uv is on PATH, so the endpoint ran with the checker's Python and may fail on imports",
+      "network_reference": "a page asset loads something from the network",
+      "stray_file": "a plain file directly in dashboards/",
+      "source_file_unwritten": "--run: the source file does not exist yet",
+      "id_missing": "--run: a row or item has no id, so it cannot be selected"
+    }
+  }
+}

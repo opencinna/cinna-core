@@ -1,0 +1,14 @@
+{
+  "description": "refresh.max_age written in words instead of a duration like 15m.",
+  "component": "dashboards/follow-ups",
+  "run": false,
+  "expect": {
+    "errors": [
+      {
+        "path": "dashboards/follow-ups/component.json",
+        "code": "duration_invalid",
+        "field": "refresh.max_age"
+      }
+    ]
+  }
+}

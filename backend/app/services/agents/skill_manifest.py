@@ -150,7 +150,9 @@ RESERVED_SKILL_NAMES: frozenset[str] = frozenset(
 #: parsed with ``source="platform"`` may carry one. Their frontmatter may hold
 #: keys this module does not interpret (``when_to_use``, ``compatibility``, a
 #: ``metadata`` map); like every unknown key they are kept verbatim.
-PLATFORM_SKILL_NAMES: frozenset[str] = frozenset({"cinna-tasks", "cinna-artifacts"})
+PLATFORM_SKILL_NAMES: frozenset[str] = frozenset(
+    {"cinna-tasks", "cinna-artifacts", "cinna-dashboards"}
+)
 
 #: ``SkillEntry.source`` of a platform-owned skill.
 PLATFORM_SKILL_SOURCE = "platform"
@@ -364,6 +366,10 @@ class SkillEntry:
     plugin_ref: str | None = None
     path: str = ""
     has_scripts: bool = False
+    #: The folder ships at least one dashboard component
+    #: (``dashboards/<name>/component.json``, Local Agent Kit
+    #: ``dashboards/1``). Informational: nothing here renders components.
+    has_dashboards: bool = False
     user_invocable: bool = True
     model_invocable: bool = True
     size_bytes: int = 0
@@ -413,6 +419,7 @@ class SkillEntry:
             "plugin_ref": self.plugin_ref,
             "path": self.path,
             "has_scripts": self.has_scripts,
+            "has_dashboards": self.has_dashboards,
             "user_invocable": self.user_invocable,
             "model_invocable": self.model_invocable,
             "size_bytes": self.size_bytes,
@@ -841,6 +848,28 @@ def _measure_tree(root: Path) -> tuple[int, list[str]]:
     return total, secrets
 
 
+def has_dashboard_components(skill_dir: Path) -> bool:
+    """True when ``skill_dir`` ships a ``dashboards/<name>/component.json``."""
+    dashboards = skill_dir / "dashboards"
+    try:
+        if dashboards.is_symlink() or not dashboards.is_dir():
+            return False
+        for child in dashboards.iterdir():
+            if (
+                child.name.startswith(".")
+                or child.name in SKIP_DIR_NAMES
+                or child.is_symlink()
+                or not child.is_dir()
+            ):
+                continue
+            component = child / "component.json"
+            if component.is_file() and not component.is_symlink():
+                return True
+    except OSError:
+        return False
+    return False
+
+
 def parse_skill_dir(
     path: str | Path,
     *,
@@ -946,6 +975,7 @@ def parse_skill_dir(
         plugin_ref=plugin_ref,
         path=entry_path,
         has_scripts=scripts_dir.is_dir() and any(scripts_dir.iterdir()),
+        has_dashboards=has_dashboard_components(skill_dir),
         user_invocable=frontmatter.get("user-invocable", True) is not False,
         model_invocable=frontmatter.get("disable-model-invocation", False) is not True,
         size_bytes=size_bytes,

@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Revenue by week</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <header>
+    <label>Month <input id="month" type="month"></label>
+    <span id="status" class="muted"></span>
+  </header>
+  <main>
+    <div id="chart" class="chart" role="img" aria-label="Revenue by week"></div>
+    <section id="detail" class="detail" hidden>
+      <h2 id="detail-title"></h2>
+      <ul id="detail-list"></ul>
+    </section>
+  </main>
+  <script src="./chart.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>

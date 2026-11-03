@@ -16,6 +16,98 @@ folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
 
+## 1.19.0 — dashboard components
+
+Additive for agent folders: every 1.x folder stays valid and needs no change, and a
+tool built against an earlier 1.x keeps operating a 1.19.0 folder, because the
+majors match. One kit path is removed: `templates/artifact-sqlite-dashboard/` is
+gone. Anything that copies it copies `templates/artifact-sqlite-report/` instead.
+
+An agent can now keep a live view for its owner: a **dashboard component**, a
+folder the owner adds to a dashboard in Cinna Desktop, where it refreshes while
+they look at it. An artifact stays what it was: a frozen copy to hand to people.
+
+### Added
+
+- **The `dashboards` role in `layout.json`** — directory `dashboards/`, one folder
+  per component, `dashboards/<name>/component.json` plus the endpoint scripts and
+  page files it names. Authored and committed: it travels to teammates and is
+  copied by cloud import, so it is **not** in `cloud_import_excludes` or
+  `shared_remote.never_travels`. A component's data goes under
+  `app-data/dashboards/<name>/`, which `app-data/` already excludes. The scaffold
+  creates no `dashboards/` folder; it appears with the first component.
+- **`protocols/dashboards.schema.json`** (`cinna_protocol: dashboards/1`): the
+  `component.json` schema (views `markdown`, `table`, `list`, `metrics`, `html`; a
+  source that is an endpoint or a `.md`/`.json`/`.csv` file under `app-data/` or
+  `files/`; params; refresh with `max_age`, `while_open_every` ≥ 1m, `after_turn`,
+  `on_app_start`, `command`, `schedule`; size; `requires_credentials`; `context`;
+  `prompts`), the data shape each native view takes, the endpoint convention
+  (params on stdin, one JSON value on stdout, cwd at the agent root, runtime by
+  extension `.py`/`.js`/`.mjs`/`.cjs`, 60 s default and 300 s maximum, 5 MB stdout),
+  the `window.cinna` page bridge, the component reference grammar
+  (`cinna://component/<agent>/<name>` and `…/<agent>/<skill>/<name>`, where
+  `<agent>` is `id:<manifest id>`, `bundle:<bundle_id>` or a bare slug), components
+  shipped inside a skill's own `dashboards/<name>/`, and the stable finding codes
+  every checker reports. It defines no tool: an agent offers a component by
+  printing its reference.
+- **`skills/cinna-dashboards/`** — the platform skill hosts deliver beside
+  `cinna-artifacts`: when a component beats an artifact, layout, choosing a view,
+  fast endpoints, refresh, web views, context and prompts, testing and offering.
+  `cinna-dashboards` joins `cinna-tasks` and `cinna-artifacts` as a reserved skill
+  name: a workspace or catalog skill may not take it.
+- **`skills/cinna-dashboards/scripts/check_component.py`** — standard library only,
+  Python 3.10+: `check_component.py <dashboards/name> [--run] [--agent DIR] [--json]`
+  prints `path: message` lines and exits 1 on an error. `--run` runs the source with
+  the default params and checks the result's shape against the view, the way a
+  host runs it: own process group killed at the timeout, stdout read up to 5 MB,
+  `node` from `CINNA_NODE` before `PATH` (none is a warning, a host has its own).
+  Symlinks never lead a script, the entry or `source.file` out of its folder. It
+  ships in the skill so an agent always has the check that matches its host.
+- **`kit.py dashboards check [path] [--run]`**, and `kit.py validate` checks every
+  `dashboards/*/` and `skills/*/dashboards/*/` component. Both import the skill's
+  script; neither keeps a copy of its rules. `kit.py list` reports the new
+  `dashboards` rung.
+- **`templates/dashboard-list/`** (a `list` view with `api/items.py`) and
+  **`templates/dashboard-html/`** (a web view with a dependency-free SVG bar and line
+  helper, `api/data.py` and a Node drill-down, using `onData`, `setParams`,
+  `setContext` and `call`).
+- **`conformance/dashboards/`** — one agent-shaped folder per case with a
+  `case.json` naming the component and the findings every checker must report.
+  See `conformance/README.md`.
+- **`guides/14-dashboards.md`** and a ladder rung `dashboards` in `kit.json`.
+- `kit.json` names the protocol under `protocols.dashboards` and the skill under
+  `platform_skills.cinna-dashboards`.
+
+### Changed
+
+- **`bundle` in `cinna-agent.json`** stays written only by cinna-core, but any host
+  may now **read** `bundle.bundle_id` to resolve `bundle:` references. It wins over
+  `app-data/desktop.json` `shared_remote.bundle_id` when both exist.
+- **Artifacts are snapshots.** `skills/cinna-artifacts/SKILL.md` and the
+  `artifacts_publish` description in `protocols/artifacts.schema.json` no longer
+  offer "a small dashboard": a live view the owner keeps goes to
+  `cinna-dashboards`, a snapshot for people stays an artifact.
+- **`templates/artifact-sqlite-dashboard/` is removed; copy
+  `templates/artifact-sqlite-report/`**, the same template apart from its title, so
+  "dashboard" means one thing in the kit. The old path is not kept as an alias.
+- Guide 03's folder table, guide 08 (components inside a skill), `START.md` and
+  `assistants/cinna-desktop.md` mention components.
+
+### For hosts
+
+- A host that shows components validates them with the same rules and reports
+  the same `x-check-codes`; run `check_component.py` and your validator over
+  `conformance/dashboards/` to prove it. A schema-valid `component.json` fails
+  only the rules listed in the schema's `x-script-only-checks`; hand-code those.
+- A host that reserves platform skill names adds `cinna-dashboards`.
+
+### Update by hand
+
+- Agent `AGENTS.md`: copy the dashboards sentence of rule 5 from
+  `templates/agent/AGENTS.md`.
+- Nothing to add to `.gitignore`: `dashboards/` is committed, and its data lives
+  under the already-ignored `app-data/`.
+
 ## 1.18.0 — no Makefile, uv inside the app, testing proportionate to the runtime
 
 Additive. Every 1.x folder stays valid and needs no change, and a tool built

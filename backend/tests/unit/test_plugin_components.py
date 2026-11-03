@@ -323,3 +323,19 @@ def test_backfill_reanalyses_the_stored_archive(tmp_path: Path) -> None:
     assert runs_code_from_archive(tmp_path / "missing.tar.gz", "p", None, "claude") is None
     # An archive whose tree no longer analyses (wrong prefix) is left alone.
     assert runs_code_from_archive(shell, "other", None, "claude") is None
+
+
+def test_skill_components_report_has_dashboards(tmp_path: Path) -> None:
+    """Each skill component carries ``has_dashboards`` next to ``has_scripts``."""
+    _put(
+        tmp_path,
+        {
+            "skills/with-dash/SKILL.md": _skill_md("with-dash"),
+            "skills/with-dash/dashboards/main/component.json": {},
+            "skills/plain/SKILL.md": _skill_md("plain"),
+        },
+    )
+    a = analyse_plugin_tree(tmp_path, {"name": "p"}, "claude")
+    by_name = {s["name"]: s for s in a.components["skills"]}
+    assert by_name["with-dash"]["has_dashboards"] is True
+    assert by_name["plain"]["has_dashboards"] is False

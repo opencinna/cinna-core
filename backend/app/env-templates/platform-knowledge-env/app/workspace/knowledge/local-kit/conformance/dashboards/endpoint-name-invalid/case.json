@@ -1,0 +1,14 @@
+{
+  "description": "An endpoint name with '-' breaks ^[a-zA-Z0-9_]+$ (and so the source names no usable endpoint).",
+  "component": "dashboards/follow-ups",
+  "run": false,
+  "expect": {
+    "errors": [
+      {
+        "path": "dashboards/follow-ups/component.json",
+        "code": "endpoint_name_invalid",
+        "field": "endpoints.open-items"
+      }
+    ]
+  }
+}

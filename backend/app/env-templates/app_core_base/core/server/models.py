@@ -327,6 +327,7 @@ class SkillEntry(BaseModel):
     plugin_ref: str | None = None  # "<marketplace>/<plugin>" for plugin skills
     path: str = ""
     has_scripts: bool = False
+    has_dashboards: bool = False
     user_invocable: bool = True
     model_invocable: bool = True
     size_bytes: int = 0

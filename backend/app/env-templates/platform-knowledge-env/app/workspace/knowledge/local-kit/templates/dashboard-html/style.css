@@ -1,0 +1,19 @@
+/* The host sets the --cinna-* variables to match light or dark; the fallbacks are for a
+   browser opened on the file directly. */
+:root {
+  color-scheme: light dark;
+  font: 13px/1.4 var(--cinna-font, system-ui, sans-serif);
+  color: var(--cinna-fg, #1f2328);
+  background: var(--cinna-bg, #ffffff);
+}
+body { margin: 0; padding: 8px 12px; }
+header { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; }
+.muted { color: var(--cinna-muted, #656d76); }
+.chart svg { width: 100%; height: auto; display: block; }
+.chart .bar { fill: var(--cinna-accent, #0969da); cursor: pointer; }
+.chart .bar.selected { fill: var(--cinna-fg, #1f2328); }
+.chart .line { fill: none; stroke: var(--cinna-muted, #656d76); stroke-width: 2; }
+.chart .axis { fill: var(--cinna-muted, #656d76); font-size: 11px; }
+.chart .grid { stroke: var(--cinna-border, #d0d7de); }
+.detail h2 { font-size: 13px; margin: 12px 0 4px; }
+.detail ul { margin: 0; padding-left: 18px; }

@@ -447,6 +447,7 @@ def test_a_skills_repository_lists_one_row_per_skill_in_either_layout(
         "name": "report-writer",
         "description": "Writes weekly reports.",
         "has_scripts": True,
+        "has_dashboards": False,
     }
 
     broken = rows["half-done"]

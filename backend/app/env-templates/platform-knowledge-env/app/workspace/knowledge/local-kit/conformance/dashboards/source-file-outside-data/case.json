@@ -1,0 +1,14 @@
+{
+  "description": "source.file inside dashboards/: data is never written there, only under app-data/ or files/.",
+  "component": "dashboards/follow-ups",
+  "run": false,
+  "expect": {
+    "errors": [
+      {
+        "path": "dashboards/follow-ups/component.json",
+        "code": "source_file_location",
+        "field": "source.file"
+      }
+    ]
+  }
+}

@@ -1,5 +1,5 @@
 {
-  "contract_version": "1.18.0",
+  "contract_version": "1.19.0",
   "description": "The folder model as data. Every host that creates, refreshes, exports or validates an agent folder reads its rules from here instead of hard-coding them.",
   "workshop": {
     "kit_dir": ".cinna-kit",
@@ -162,6 +162,13 @@
         "kind": "directory",
         "role": "artifacts",
         "description": "What the agent builds to publish as Cinna artifacts: one subfolder (or file) per artifact. Written at runtime; git-ignored, never travels, never imported to the cloud.",
+        "survives_update": true
+      },
+      {
+        "path": "dashboards",
+        "kind": "directory",
+        "role": "dashboards",
+        "description": "Dashboard components (contract 1.19.0): one folder per component, `dashboards/<name>/component.json` plus the endpoint scripts and page files it names (protocols/dashboards.schema.json). Authored, committed, shared with teammates and copied by cloud import. Never written at runtime: a component's data goes under `app-data/dashboards/<name>/`. The scaffold creates no `dashboards/` folder; it appears with the first component. A skill may ship components in its own `dashboards/<name>/`.",
         "survives_update": true
       },
       {

@@ -1,0 +1,14 @@
+{
+  "description": "An endpoint script path that leaves the component folder.",
+  "component": "dashboards/follow-ups",
+  "run": false,
+  "expect": {
+    "errors": [
+      {
+        "path": "dashboards/follow-ups/component.json",
+        "code": "script_outside_component",
+        "field": "endpoints.items.script"
+      }
+    ]
+  }
+}

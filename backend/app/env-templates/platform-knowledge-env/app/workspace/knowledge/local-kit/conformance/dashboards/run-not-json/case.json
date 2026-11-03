@@ -1,0 +1,14 @@
+{
+  "description": "--run: an endpoint that prints a log line before its JSON, so stdout is not one JSON value.",
+  "component": "dashboards/follow-ups",
+  "run": true,
+  "expect": {
+    "errors": [
+      {
+        "path": "dashboards/follow-ups/api/items.py",
+        "code": "run_output_invalid",
+        "field": null
+      }
+    ]
+  }
+}

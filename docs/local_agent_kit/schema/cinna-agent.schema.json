@@ -612,10 +612,20 @@
       }
     },
     "bundle": {
-      "description": "Revision metadata cinna-core writes when it exports an agent to a shared tree (contract 1.8.0): bundle_id, revision_number, version, published_at, content_hash, sdk, required_credential_specs, schedules, plugin_specs, metadata, release_notes. Read back by cinna-core when the tree is checked out; every other host preserves it and ignores it.",
+      "description": "Revision metadata cinna-core writes when it exports an agent to a shared tree (contract 1.8.0): bundle_id, revision_number, version, published_at, content_hash, sdk, required_credential_specs, schedules, plugin_specs, metadata, release_notes. Read back by cinna-core when the tree is checked out. Only cinna-core writes it; every other host preserves it unchanged and never writes it. Since contract 1.19.0 another host may READ `bundle.bundle_id`, the agent's catalog id, to resolve `cinna://component/bundle:<bundle_id>/…` references (protocols/dashboards.schema.json); when app-data/desktop.json `shared_remote.bundle_id` also exists, this field wins. Every other key stays cinna-core's alone.",
       "type": "object",
       "additionalProperties": true,
       "x-scope": "host:cinna-core",
+      "x-read-by": "any host: bundle.bundle_id only (contract 1.19.0); never written outside cinna-core",
+      "properties": {
+        "bundle_id": {
+          "type": "string",
+          "description": "The catalog id cinna-core minted when the agent was shared (e.g. `io.example.cinna.ab12cd34`). Readable by any host; written only by cinna-core.",
+          "x-scope": "host:cinna-core",
+          "x-import": "ignored",
+          "x-read-by": "any host (contract 1.19.0)"
+        }
+      },
       "x-import": "ignored"
     },
     "cloud": {

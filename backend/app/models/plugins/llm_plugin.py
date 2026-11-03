@@ -332,6 +332,8 @@ class PluginSkillSummary(SQLModel):
     name: str
     description: str = ""
     has_scripts: bool = False
+    #: Ships at least one ``dashboards/<name>/component.json``.
+    has_dashboards: bool = False
 
 
 class PluginSkillComponent(SQLModel):
@@ -339,6 +341,7 @@ class PluginSkillComponent(SQLModel):
 
     name: str
     has_scripts: bool = False
+    has_dashboards: bool = False
 
 
 class PluginMcpEnv(SQLModel):

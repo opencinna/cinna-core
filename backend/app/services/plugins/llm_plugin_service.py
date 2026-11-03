@@ -776,7 +776,13 @@ class LLMPluginService:
             snapshot_source_key=f"local:{plugin.get('source_path') or ''}",
             snapshot_at=datetime.now(UTC).replace(tzinfo=None),
             components={
-                "skills": [{"name": skill.get("name") or plugin["name"], "has_scripts": has_scripts}],
+                "skills": [
+                    {
+                        "name": skill.get("name") or plugin["name"],
+                        "has_scripts": has_scripts,
+                        "has_dashboards": bool(skill.get("has_dashboards")),
+                    }
+                ],
                 "commands": [],
                 "agents": [],
                 "hooks": None,
@@ -1354,6 +1360,7 @@ class LLMPluginService:
                             "name": child.name,
                             "description": entry.description if valid else "",
                             "has_scripts": bool(entry.has_scripts),
+                            "has_dashboards": bool(entry.has_dashboards),
                         }
                     },
                     "supported": valid,
@@ -2323,6 +2330,7 @@ class LLMPluginService:
             name=name,
             description=description if isinstance(description, str) else "",
             has_scripts=bool(block.get("has_scripts")),
+            has_dashboards=bool(block.get("has_dashboards")),
         )
 
     # ==========================================================================

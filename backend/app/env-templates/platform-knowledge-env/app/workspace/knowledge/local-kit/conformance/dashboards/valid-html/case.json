@@ -1,0 +1,13 @@
+{
+  "description": "A valid web view: entry page, relative assets, a Python source; run with its defaults.",
+  "component": "dashboards/follow-ups",
+  "run": true,
+  "expect": {
+    "errors": [],
+    "no_warnings": [
+      {
+        "code": "network_reference"
+      }
+    ]
+  }
+}

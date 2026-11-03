@@ -59,6 +59,7 @@ class SkillEntryPublic(SQLModel):
     plugin_ref: str | None = None  # "<marketplace>/<plugin>" for plugin skills
     path: str = ""                 # workspace-relative folder, e.g. "skills/pdf-report"
     has_scripts: bool = False
+    has_dashboards: bool = False   # ships a dashboards/<name>/component.json
     user_invocable: bool = True    # may a person invoke it with /<name>
     model_invocable: bool = True   # may the model reach for it unprompted
     size_bytes: int = 0            # whole folder, not just SKILL.md

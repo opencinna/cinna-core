@@ -1,0 +1,14 @@
+{
+  "description": "An endpoint names a script that does not exist.",
+  "component": "dashboards/follow-ups",
+  "run": false,
+  "expect": {
+    "errors": [
+      {
+        "path": "dashboards/follow-ups/component.json",
+        "code": "script_missing",
+        "field": "endpoints.items.script"
+      }
+    ]
+  }
+}

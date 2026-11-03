@@ -1,0 +1,14 @@
+{
+  "description": "refresh.while_open_every below the 1m floor.",
+  "component": "dashboards/follow-ups",
+  "run": false,
+  "expect": {
+    "errors": [
+      {
+        "path": "dashboards/follow-ups/component.json",
+        "code": "while_open_every_too_short",
+        "field": "refresh.while_open_every"
+      }
+    ]
+  }
+}

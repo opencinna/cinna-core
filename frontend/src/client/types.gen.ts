@@ -7187,6 +7187,7 @@ export type PluginMcpServer = {
 export type PluginSkillComponent = {
     name: string;
     has_scripts?: boolean;
+    has_dashboards?: boolean;
 };
 
 /**
@@ -7201,6 +7202,7 @@ export type PluginSkillSummary = {
     name: string;
     description?: string;
     has_scripts?: boolean;
+    has_dashboards?: boolean;
 };
 
 /**
@@ -8294,6 +8296,7 @@ export type SkillEntryPublic = {
     plugin_ref?: (string | null);
     path?: string;
     has_scripts?: boolean;
+    has_dashboards?: boolean;
     user_invocable?: boolean;
     model_invocable?: boolean;
     size_bytes?: number;

@@ -115,12 +115,14 @@ SKIP_DIR_NAMES         = {".git", ".venv", "__pycache__", ".mypy_cache",
 registry). `test_skill_manifest.py::test_every_registered_platform_command_is_reserved`
 guards the drift.
 
-`PLATFORM_SKILL_NAMES = frozenset({"cinna-tasks"})` and `PLATFORM_SKILL_SOURCE =
+`PLATFORM_SKILL_NAMES = frozenset({"cinna-tasks", "cinna-artifacts", "cinna-dashboards"})` and `PLATFORM_SKILL_SOURCE =
 "platform"` (both copies) reserve the platform skills' names: a skill parsed
 with any other `source` that takes one fails with `reserved_name` ("This name is
 reserved by a platform skill."). Only a skill scanned with
 `source="platform"` may carry it. Extra frontmatter keys such as `when_to_use`,
 `compatibility` and a `metadata` map are kept verbatim, like every unknown key.
+
+`has_dashboards` is true when the skill folder holds at least one regular, non-symlink `dashboards/<name>/component.json` (mirrors `has_scripts`; also in snapshot components, `PluginSkillSummary`/`PluginSkillComponent` and `SkillEntryPublic`). Rows stored before the flag read False until a marketplace re-sync, re-snapshot or env-core rebuild. Core only reports the flag: it does not host or render dashboard components (kit phase C2, not scheduled).
 
 `SKILL_CREDENTIAL_TYPES` mirrors `app.models.credentials.credential.CredentialType`
 for the same reason, minus `mcp_provider` — an MCP connector never reaches
@@ -163,6 +165,7 @@ class SkillEntry:
     plugin_ref: str | None = None   # "<marketplace>/<plugin>"
     path: str = ""                  # workspace-relative folder
     has_scripts: bool = False
+    has_dashboards: bool = False    # >=1 regular, non-symlink dashboards/<name>/component.json
     user_invocable: bool = True
     model_invocable: bool = True
     size_bytes: int = 0             # whole folder

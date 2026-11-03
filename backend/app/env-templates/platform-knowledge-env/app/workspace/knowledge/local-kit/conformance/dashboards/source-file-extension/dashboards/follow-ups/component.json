@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "title": "Follow-ups",
+  "view": "list",
+  "source": {
+    "file": "app-data/dashboards/follow-ups/items.txt"
+  },
+  "refresh": {
+    "max_age": "15m",
+    "after_turn": true
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "description": "source.file with an extension other than .md, .json or .csv.",
+  "component": "dashboards/follow-ups",
+  "run": false,
+  "expect": {
+    "errors": [
+      {
+        "path": "dashboards/follow-ups/component.json",
+        "code": "source_file_extension",
+        "field": "source.file"
+      }
+    ]
+  }
+}

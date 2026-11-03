@@ -1,0 +1,24 @@
+{
+  "description": "component.json without schema_version, title and view.",
+  "component": "dashboards/follow-ups",
+  "run": false,
+  "expect": {
+    "errors": [
+      {
+        "path": "dashboards/follow-ups/component.json",
+        "code": "required",
+        "field": "schema_version"
+      },
+      {
+        "path": "dashboards/follow-ups/component.json",
+        "code": "required",
+        "field": "title"
+      },
+      {
+        "path": "dashboards/follow-ups/component.json",
+        "code": "required",
+        "field": "view"
+      }
+    ]
+  }
+}

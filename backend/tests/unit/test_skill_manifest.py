@@ -1219,3 +1219,96 @@ class TestCredentialDeclarationsViaSkillDir:
         entry = skill_manifest.parse_skill_dir(skill_dir)
         assert entry.error is None
         assert entry.credentials == [{"slot": "x", "type": "api_token", "description": None}]
+
+
+class TestHasDashboardComponents:
+    """``has_dashboards``: a ``dashboards/<name>/component.json`` exists."""
+
+    def _skill(self, tmp_path: Path) -> Path:
+        return _write_skill(tmp_path, "pdf-report", frontmatter=_valid())
+
+    def test_component_json_present(self, tmp_path: Path):
+        skill_dir = self._skill(tmp_path)
+        (skill_dir / "dashboards" / "sales").mkdir(parents=True)
+        (skill_dir / "dashboards" / "sales" / "component.json").write_text("{}")
+        assert skill_manifest.has_dashboard_components(skill_dir) is True
+
+    def test_multiple_components_with_one_valid(self, tmp_path: Path):
+        skill_dir = self._skill(tmp_path)
+        (skill_dir / "dashboards" / "empty").mkdir(parents=True)
+        (skill_dir / "dashboards" / "ops").mkdir()
+        (skill_dir / "dashboards" / "ops" / "component.json").write_text("{}")
+        (skill_dir / "dashboards" / "sales").mkdir()
+        (skill_dir / "dashboards" / "sales" / "component.json").write_text("{}")
+        assert skill_manifest.has_dashboard_components(skill_dir) is True
+
+    def test_dashboards_dir_without_component_json(self, tmp_path: Path):
+        skill_dir = self._skill(tmp_path)
+        (skill_dir / "dashboards" / "sales").mkdir(parents=True)
+        (skill_dir / "dashboards" / "sales" / "readme.md").write_text("x")
+        (skill_dir / "dashboards" / "component.json").write_text("{}")  # not nested
+        assert skill_manifest.has_dashboard_components(skill_dir) is False
+
+    def test_component_json_that_is_a_directory(self, tmp_path: Path):
+        skill_dir = self._skill(tmp_path)
+        (skill_dir / "dashboards" / "sales" / "component.json").mkdir(parents=True)
+        assert skill_manifest.has_dashboard_components(skill_dir) is False
+
+    def test_dashboards_is_a_file(self, tmp_path: Path):
+        skill_dir = self._skill(tmp_path)
+        (skill_dir / "dashboards").write_text("not a dir")
+        assert skill_manifest.has_dashboard_components(skill_dir) is False
+
+    def test_no_dashboards_dir(self, tmp_path: Path):
+        assert skill_manifest.has_dashboard_components(self._skill(tmp_path)) is False
+
+    def test_parse_skill_dir_and_to_dict_round_trip(self, tmp_path: Path):
+        skill_dir = self._skill(tmp_path)
+        plain = skill_manifest.parse_skill_dir(skill_dir)
+        assert plain.has_dashboards is False
+        assert plain.to_dict()["has_dashboards"] is False
+
+        (skill_dir / "dashboards" / "sales").mkdir(parents=True)
+        (skill_dir / "dashboards" / "sales" / "component.json").write_text("{}")
+        entry = skill_manifest.parse_skill_dir(skill_dir)
+        assert entry.error is None
+        assert entry.has_dashboards is True
+        assert entry.has_scripts is False
+        assert entry.to_dict()["has_dashboards"] is True
+
+    def test_symlinked_dashboards_dir_is_rejected(self, tmp_path: Path):
+        skill_dir = self._skill(tmp_path)
+        real = tmp_path / "elsewhere" / "sales"
+        real.mkdir(parents=True)
+        (real / "component.json").write_text("{}")
+        (skill_dir / "dashboards").symlink_to(real.parent, target_is_directory=True)
+        assert skill_manifest.has_dashboard_components(skill_dir) is False
+
+    def test_symlinked_child_dir_is_rejected(self, tmp_path: Path):
+        skill_dir = self._skill(tmp_path)
+        real = tmp_path / "elsewhere"
+        real.mkdir()
+        (real / "component.json").write_text("{}")
+        (skill_dir / "dashboards").mkdir()
+        (skill_dir / "dashboards" / "sales").symlink_to(real, target_is_directory=True)
+        assert skill_manifest.has_dashboard_components(skill_dir) is False
+
+    def test_symlinked_component_json_is_rejected(self, tmp_path: Path):
+        skill_dir = self._skill(tmp_path)
+        target = tmp_path / "real.json"
+        target.write_text("{}")
+        (skill_dir / "dashboards" / "sales").mkdir(parents=True)
+        (skill_dir / "dashboards" / "sales" / "component.json").symlink_to(target)
+        assert skill_manifest.has_dashboard_components(skill_dir) is False
+
+    def test_dot_dir_child_is_skipped(self, tmp_path: Path):
+        skill_dir = self._skill(tmp_path)
+        (skill_dir / "dashboards" / ".hidden").mkdir(parents=True)
+        (skill_dir / "dashboards" / ".hidden" / "component.json").write_text("{}")
+        assert skill_manifest.has_dashboard_components(skill_dir) is False
+
+    def test_skip_dir_name_child_is_skipped(self, tmp_path: Path):
+        skill_dir = self._skill(tmp_path)
+        (skill_dir / "dashboards" / "__pycache__").mkdir(parents=True)
+        (skill_dir / "dashboards" / "__pycache__" / "component.json").write_text("{}")
+        assert skill_manifest.has_dashboard_components(skill_dir) is False

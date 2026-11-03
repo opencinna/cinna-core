@@ -1,0 +1,15 @@
+{
+  "description": "A web view that loads a script from a CDN; the sandbox blocks it, which the check reports as a warning.",
+  "component": "dashboards/follow-ups",
+  "run": false,
+  "expect": {
+    "errors": [],
+    "warnings": [
+      {
+        "path": "dashboards/follow-ups/index.html",
+        "code": "network_reference",
+        "field": null
+      }
+    ]
+  }
+}

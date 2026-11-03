@@ -1,0 +1,14 @@
+{
+  "description": "A whitespace-only title is refused, like an empty one.",
+  "component": "dashboards/follow-ups",
+  "run": false,
+  "expect": {
+    "errors": [
+      {
+        "path": "dashboards/follow-ups/component.json",
+        "code": "invalid_value",
+        "field": "title"
+      }
+    ]
+  }
+}

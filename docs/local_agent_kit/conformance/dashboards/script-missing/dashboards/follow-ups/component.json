@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "title": "Follow-ups",
+  "view": "list",
+  "source": {
+    "endpoint": "items"
+  },
+  "endpoints": {
+    "items": {
+      "script": "api/open_items.py"
+    }
+  },
+  "refresh": {
+    "max_age": "15m",
+    "after_turn": true
+  }
+}

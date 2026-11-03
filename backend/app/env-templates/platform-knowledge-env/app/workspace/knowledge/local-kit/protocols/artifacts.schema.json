@@ -8,7 +8,7 @@
   "$defs": {},
   "tools": {
     "artifacts_publish": {
-      "description": "Publish a file or folder from your workspace as an artifact: a page your owner opens in Cinna to read a report, browse files or run a small self-contained dashboard. A folder with `index.html` at its root (or the `entry` you name) becomes a site; a single `.md`, `.csv`, `.pdf`, image or `.html` is fine on its own. Publishing the same `path` again adds a revision to the same artifact instead of creating a new one; pass `artifact_id` to update a specific artifact you published before. The result is private to your owner. Sites run sandboxed: relative paths only, every library bundled into the folder (no CDN), no localStorage/sessionStorage/IndexedDB/cookies, no `new Worker(url)`. Paths the platform never publishes (`.env`, keys, `credentials/`, `.git/`, `node_modules/`) are dropped and listed in `excluded`.",
+      "description": "Publish a file or folder from your workspace as an artifact: a page your owner opens in Cinna to read a report or browse files, a snapshot to read or hand to people. A live, refreshable view the owner keeps is a dashboard component under `dashboards/<name>/` (cinna-dashboards skill), not an artifact; only Cinna Desktop shows dashboard components, and in the cloud there are no dashboards yet, so there an artifact is the answer. A folder with `index.html` at its root (or the `entry` you name) becomes a site; a single `.md`, `.csv`, `.pdf`, image or `.html` is fine on its own. Publishing the same `path` again adds a revision to the same artifact instead of creating a new one; pass `artifact_id` to update a specific artifact you published before. The result is private to your owner. Sites run sandboxed: relative paths only, every library bundled into the folder (no CDN), no localStorage/sessionStorage/IndexedDB/cookies, no `new Worker(url)`. Paths the platform never publishes (`.env`, keys, `credentials/`, `.git/`, `node_modules/`) are dropped and listed in `excluded`.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -18,7 +18,7 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 1024,
-            "description": "A file or folder, relative to the workspace root. Build what you publish under `artifacts/<name>/` (`artifacts/q3-dashboard`, `artifacts/summary.md`)."
+            "description": "A file or folder, relative to the workspace root. Build what you publish under `artifacts/<name>/` (`artifacts/q3-report`, `artifacts/summary.md`)."
           },
           "title": {
             "type": "string",
