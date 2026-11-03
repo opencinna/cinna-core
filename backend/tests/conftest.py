@@ -1,10 +1,11 @@
+import os
 from collections.abc import Generator
 
 import pytest
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
-from sqlalchemy import event, create_engine
+from sqlalchemy import create_engine, event, make_url, text
 from sqlmodel import Session
 
 from app.core.config import settings
@@ -15,6 +16,16 @@ from app.core.config import settings
 # isolation escape). Setting it here guarantees it is True at the time the
 # lifespan runs (when the per-test ``TestClient(app)`` context is entered).
 settings.TESTING = True
+
+# Under pytest-xdist every worker gets its own test database
+# (``app_test_gw0``, ``app_test_gw1``, ...). Workers cannot share one: the
+# per-test transaction never commits, so two workers inserting the same unique
+# value (the fixed test-user email, a seeded name) block on each other's row
+# locks until one rolls back. Set before anything reads the URI; ``setup_db``
+# creates the database on first use and migrates it like the serial one.
+_XDIST_WORKER = os.environ.get("PYTEST_XDIST_WORKER")
+if _XDIST_WORKER:
+    settings.TEST_DB_NAME = f"{settings.TEST_DB_NAME}_{_XDIST_WORKER}"
 
 from app.api.deps import get_db  # noqa: E402
 from app.core import security  # noqa: E402
@@ -99,9 +110,31 @@ def block_llm_provider() -> Generator[None, None, None]:
         yield
 
 
+def _ensure_worker_database() -> None:
+    """Create this xdist worker's test database if it does not exist yet.
+
+    Kept between runs on purpose: the next run's ``alembic upgrade head`` is
+    then a no-op instead of replaying every migration from an empty schema.
+    """
+    url = make_url(str(settings.TEST_SQLALCHEMY_DATABASE_URI))
+    admin = create_engine(url.set(database="postgres"), isolation_level="AUTOCOMMIT")
+    try:
+        with admin.connect() as connection:
+            exists = connection.execute(
+                text("SELECT 1 FROM pg_database WHERE datname = :name"),
+                {"name": url.database},
+            ).scalar()
+            if not exists:
+                connection.execute(text(f'CREATE DATABASE "{url.database}"'))
+    finally:
+        admin.dispose()
+
+
 @pytest.fixture(scope="session", autouse=True)
 def setup_db() -> Generator[None, None, None]:
     """Run Alembic migrations and seed the test database once per session."""
+    if _XDIST_WORKER:
+        _ensure_worker_database()
     engine = _ensure_test_engine()
 
     # Run Alembic migrations against the test DB

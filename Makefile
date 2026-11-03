@@ -230,6 +230,14 @@ migration: # create a new migration (will prompt for migration name)
 test-backend: # run backend pytest suite inside the backend container
 	docker compose exec backend python -m pytest tests/ -v
 
+# Parallel run: one worker per file (--dist loadfile keeps each file's scratch
+# databases and module-level caches on a single worker), each with its own
+# app_test_gw<N> database created on first use. ~8 min vs ~21 serial.
+TEST_WORKERS ?= 4
+.PHONY: test-backend-parallel
+test-backend-parallel: # run backend pytest suite across TEST_WORKERS xdist workers (default 4)
+	docker compose exec backend python -m pytest tests/ -q -n $(TEST_WORKERS) --dist loadfile
+
 .PHONY: backfill-router-trigger-prompts
 backfill-router-trigger-prompts: # one-time: generate router trigger prompts + auto App MCP routes for existing installs
 	docker compose exec backend python -m app.scripts.backfill_router_trigger_prompts

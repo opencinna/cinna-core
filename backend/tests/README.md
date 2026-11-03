@@ -8,6 +8,14 @@ make test-backend
 
 This executes `docker compose exec backend python -m pytest tests/ -v` inside the running backend container.
 
+For the whole suite, run it in parallel instead (about 8 minutes on 4 workers, against about 21 serially):
+
+```bash
+make test-backend-parallel            # TEST_WORKERS=6 make test-backend-parallel to change the count
+```
+
+Each pytest-xdist worker gets its own database, `app_test_gw0`, `app_test_gw1`, … (`TEST_DB_NAME` plus the worker id), created by `setup_db` on first use and kept between runs so the next run's migrations are a no-op. Workers cannot share `app_test`: the per-test transaction never commits, so two workers inserting the same unique value block on each other's row locks. `--dist loadfile` keeps every test of a file on one worker, which the migration and infra tests rely on (their scratch databases have fixed names) and which keeps module-level caches warm. Single-file and topic-group runs are usually faster serially — each worker pays the ~8s app import on its own.
+
 Prerequisites:
 - Docker services must be running (`make up` or `docker compose up -d`)
 - The `app_test` database must exist in the `db` container (created automatically on first `docker compose up` by `scripts/create-test-db.sh`)
