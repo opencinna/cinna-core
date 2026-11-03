@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any
 import base64
+import functools
 
 import httpx
 import jwt
@@ -19,20 +20,30 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 ALGORITHM = "HS256"
 
 
-# Initialize encryption cipher using the encryption key from settings
-def _get_cipher() -> Fernet:
-    """Get Fernet cipher instance using the configured encryption key."""
-    # Convert the URL-safe base64 key to proper Fernet key format
-    key_bytes = settings.ENCRYPTION_KEY.encode()
-    # Use PBKDF2 to derive a proper 32-byte key
+@functools.lru_cache(maxsize=4)
+def _cipher_for_key(encryption_key: str) -> Fernet:
+    """Derive the Fernet cipher for ``encryption_key`` (memoized).
+
+    The derivation is deterministic (static salt), so its result depends on the
+    key alone — and at 100k PBKDF2 iterations it costs ~10ms, which every
+    ``encrypt_field`` / ``decrypt_field`` call used to pay. Keyed on the key
+    string, so a changed ``settings.ENCRYPTION_KEY`` derives a fresh cipher
+    rather than reusing a stale one. ``Fernet`` holds no per-call state, so one
+    instance is safe to share across threads.
+    """
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
         length=32,
         salt=b"credentials_salt",  # Static salt for deterministic key derivation
         iterations=100000,
     )
-    key = base64.urlsafe_b64encode(kdf.derive(key_bytes))
+    key = base64.urlsafe_b64encode(kdf.derive(encryption_key.encode()))
     return Fernet(key)
+
+
+def _get_cipher() -> Fernet:
+    """Get the Fernet cipher for the configured encryption key."""
+    return _cipher_for_key(settings.ENCRYPTION_KEY)
 
 
 def encrypt_field(value: str) -> str:

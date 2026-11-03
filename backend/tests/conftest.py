@@ -17,11 +17,21 @@ from app.core.config import settings
 settings.TESTING = True
 
 from app.api.deps import get_db  # noqa: E402
+from app.core import security  # noqa: E402
 from app.core.db import init_db  # noqa: E402
 from app.main import app  # noqa: E402
 from tests.utils.fixtures import blocked_llm_provider  # noqa: E402
 from tests.utils.user import authentication_token_from_email  # noqa: E402
 from tests.utils.utils import get_superuser_token_headers  # noqa: E402
+
+# bcrypt's minimum work factor for the whole suite. passlib's default (12 rounds,
+# ~77ms per hash *or* verify) was the single largest cost in the API tests —
+# every created user, login, recovery code and trusted device pays it, and it
+# accounted for roughly half of an API test's wall-clock. Nothing under test
+# depends on the work factor: the hash embeds its own rounds, so verification
+# of rows hashed at any cost still works. Mutated in place (not rebound) so every
+# holder of ``pwd_context`` sees it. Test-only; production keeps the default.
+security.pwd_context.update(bcrypt__rounds=4)
 
 
 def _get_test_engine():
