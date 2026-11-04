@@ -16,6 +16,46 @@ folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
 
+## 1.20.0 — an agent acts on its own tiles, and pages draw what it highlights
+
+Additive. Every 1.x folder stays valid, and a tool built against an earlier 1.x
+keeps operating a 1.20.0 folder, because the majors match. No component needs to
+change: a web view without `cinna.onHighlight` keeps working, and the host tells
+the agent that it cannot highlight.
+
+### Added
+
+- **`protocols/dashboards-tools.schema.json`** — two tools on the `cinna` MCP
+  server, for a chat opened from a dashboard. They reach only that dashboard's
+  tiles whose component belongs to the calling agent; any other `tile_id`
+  answers `not_found`. Only Cinna Desktop registers them; a host without
+  dashboards registers neither. `kit.json` names the file as
+  `protocols.dashboards_tools`.
+  - `dashboards_tiles` (no input) → `{dashboard: {id, name}, tiles: [{tile_id,
+    component, skill?, title, view, params, param_specs, can_highlight,
+    summary?, selection?, visible?}]}`.
+  - `dashboards_update_tile({tile_id, params?, highlight?})` → `{tile_id,
+    params, recomputing, highlighted}`. `params` merge over the stored ones
+    (`null` restores the default) and count against the tile's 30 runs a minute;
+    `highlight` replaces the tile's highlight (`[]` clears).
+  - A failure is `isError: true` with `structuredContent` `{error: {code,
+    message, field?, retry_after_s?}}`; codes `not_found`, `invalid_input`,
+    `rate_limited`, `no_dashboard`.
+- **`cinna.onHighlight(cb)`** in `protocols/dashboards-bridge.js`: `cb(ids)` with
+  the ids a page passes to `setContext`. Wire: the host sends the notification
+  `cinna/highlight` `{ids}`; the page's first `onHighlight` sends the
+  notification `cinna/highlight-ready` `{}`, once, so the host knows the page
+  draws highlights. A highlight that arrives before any listener is kept and
+  replayed on registration, the last one winning.
+- **`cinna/collect-context`**, a host request the bridge answers itself:
+  `{source, summary, selection, visible, microdata, selected_text}` from the
+  page's `itemscope`/`itemprop`/`itemid` microdata and its text selection, or the
+  last `setContext` values when the page has called it (`source: set_context`).
+  Before 1.20.0 the bridge answered it with -32601.
+- The cinna-dashboards skill describes the two tools and `onHighlight`; the
+  `dashboard-html` template wires `onHighlight` to `chart.js`, whose `selected`
+  now takes one id or a list.
+
 ## 1.19.1 — the web-view sandbox, stated exactly, and the reference bridge
 
 Additive. Every 1.x folder stays valid, and a tool built against an earlier 1.x

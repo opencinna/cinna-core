@@ -4,9 +4,11 @@ An `html` component (`cinna_protocol: dashboards/1`): a page in the host's sandb
 that draws revenue as bars and a line with the dependency-free helper in `chart.js`.
 Copy this folder to `dashboards/<name>/` in the agent, rename it, then change it.
 
-- `app.js` shows the four calls a page needs: `cinna.onData`, `cinna.setParams`,
-  `cinna.setContext` and `cinna.call` (which resolves to the endpoint's JSON value
-  itself and rejects with `{message}`). The host injects `window.cinna` (the kit's
+- `app.js` shows the calls a page needs: `cinna.onData`, `cinna.setParams`,
+  `cinna.setContext`, `cinna.call` (which resolves to the endpoint's JSON value
+  itself and rejects with `{message}`) and `cinna.onHighlight`, which draws the
+  weeks the agent highlights from the dashboard chat with the chart's `selected`
+  style until the owner clicks a week. The host injects `window.cinna` (the kit's
   `protocols/dashboards-bridge.js`); never copy it into the folder. Opened outside a
   host, the page only says where to open it.
 - `api/data.py` is the source (Python); `api/week_detail.mjs` is a drill-down (Node,

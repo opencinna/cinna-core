@@ -4,7 +4,7 @@
 //   CinnaChart.barLine(element, {
 //     points: [{ id, label, value }],      // one bar per point
 //     line: [number],                       // optional, same length as points
-//     selected: id,                         // optional, drawn highlighted
+//     selected: id or [id],                 // optional, drawn highlighted
 //     onSelect: (point) => {},              // optional, a bar was clicked
 //   });
 (function () {
@@ -28,6 +28,7 @@
     const max = Math.max(1, ...points.map((p) => p.value), ...line);
     const y = (v) => pad.top + plotH - (v / max) * plotH;
     const step = points.length ? plotW / points.length : plotW;
+    const selected = new Set([].concat(options.selected == null ? [] : options.selected));
 
     container.textContent = "";
     const svg = el("svg", { viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: "xMidYMid meet" }, container);
@@ -43,7 +44,7 @@
       const barW = Math.max(2, step * 0.6);
       const x = pad.left + step * i + (step - barW) / 2;
       const bar = el("rect", {
-        class: point.id === options.selected ? "bar selected" : "bar",
+        class: selected.has(point.id) ? "bar selected" : "bar",
         x, y: y(point.value), width: barW, height: Math.max(0, pad.top + plotH - y(point.value)),
       }, svg);
       el("title", {}, bar).textContent = `${point.label}: ${point.value.toLocaleString()}`;

@@ -611,3 +611,221 @@ def test_the_bridge_proceeds_without_a_nonce_and_drops_timed_out_queued_requests
     assert sent[4]["params"]["_meta"]["cinna"] == {"nonce": "n2"}
     assert sent[5]["id"] == 77
     assert sent[5]["error"]["data"]["_meta"]["cinna"] == {"nonce": "n2"}
+
+
+# ── tile tools and highlight (contract 1.20.0) ────────────────────────────
+
+TOOLS_SCHEMA = KIT_DIR / "protocols" / "dashboards-tools.schema.json"
+DASHBOARDS_SCHEMA = KIT_DIR / "protocols" / "dashboards.schema.json"
+_needs_tools = pytest.mark.skipif(not TOOLS_SCHEMA.is_file(), reason="kit has no tile tools (pre-1.20.0)")
+
+
+def _tools_doc() -> dict:
+    return json.loads(TOOLS_SCHEMA.read_text(encoding="utf-8"))
+
+
+def _tool_validator(schema: dict):
+    """A validator for one tool's inputSchema/result, resolving `#/$defs/...` in the file."""
+    jsonschema = pytest.importorskip("jsonschema")
+    doc = _tools_doc()
+    wrapped = {"$schema": doc["$schema"], "$defs": doc["$defs"], **schema}
+    jsonschema.Draft202012Validator.check_schema(wrapped)
+    return jsonschema.Draft202012Validator(wrapped)
+
+
+@_needs_tools
+def test_the_tile_tools_schema_is_a_cinna_binding_like_artifacts() -> None:
+    doc = _tools_doc()
+    assert doc["server"] == "cinna"
+    assert doc["protocol_version"] == 1
+    assert set(doc["tools"]) == {"dashboards_tiles", "dashboards_update_tile"}
+    for name, spec in doc["tools"].items():
+        assert set(spec) == {"description", "inputSchema", "result"}, name
+        schema = spec["inputSchema"]
+        assert schema["type"] == "object" and schema["additionalProperties"] is False, name
+        # Engines refuse a combinator at the top of a tool's input schema.
+        assert not {"anyOf", "oneOf", "allOf", "not", "if"} & set(schema), name
+        # The descriptions say where the tools exist, as artifacts_publish does.
+        assert "Cinna Desktop" in spec["description"] and "cloud" in spec["description"], name
+        _tool_validator(schema)
+        _tool_validator(spec["result"])
+    codes = doc["$defs"]["error"]["properties"]["error"]["properties"]["code"]["enum"]
+    assert set(codes) == {"not_found", "invalid_input", "rate_limited", "no_dashboard"}
+    assert set(doc["errors"]) - {"description"} == set(codes)
+
+
+@_needs_tools
+def test_the_tile_tools_accept_and_answer_the_documented_shapes() -> None:
+    tools = _tools_doc()["tools"]
+    tiles_result = _tool_validator(tools["dashboards_tiles"]["result"])
+    update_input = _tool_validator(tools["dashboards_update_tile"]["inputSchema"])
+    update_result = _tool_validator(tools["dashboards_update_tile"]["result"])
+    error = _tool_validator(_tools_doc()["$defs"]["error"])
+
+    assert not list(_tool_validator(tools["dashboards_tiles"]["inputSchema"]).iter_errors({}))
+    assert not list(tiles_result.iter_errors({
+        "dashboard": {"id": "d1", "name": "Sales"},
+        "tiles": [{
+            "tile_id": "t1", "component": "deals", "skill": "crm", "title": "Deals pipeline",
+            "view": "list", "params": {"stage": "open", "month": "2026-11"},
+            "param_specs": {"stage": {"type": "enum", "values": ["open", "won"], "default": "open"}},
+            "can_highlight": True, "selection": ["d-12"], "visible": ["d-12", "d-14"],
+        }],
+    }))
+    assert list(tiles_result.iter_errors({"dashboard": {"id": "d1", "name": "x"},
+                                          "tiles": [{"tile_id": "t1"}]}))
+
+    assert not list(update_input.iter_errors({"tile_id": "t1", "params": {"stage": "won", "month": None}}))
+    assert not list(update_input.iter_errors({"tile_id": "t1", "highlight": []}))
+    for bad in ({"params": {}}, {"tile_id": "t1", "params": {"x": [1]}},
+                {"tile_id": "t1", "highlight": [""]}, {"tile_id": "t1", "extra": 1}):
+        assert list(update_input.iter_errors(bad)), bad
+
+    assert not list(update_result.iter_errors(
+        {"tile_id": "t1", "params": {"stage": "won"}, "recomputing": True, "highlighted": False}))
+    assert not list(error.iter_errors(
+        {"error": {"code": "rate_limited", "message": "Try again in 20 s.", "retry_after_s": 20}}))
+    assert list(error.iter_errors({"error": {"code": "forbidden", "message": "no"}}))
+
+
+@_needs_tools
+def test_the_kit_bundle_exports_the_tile_tools() -> None:
+    from app.services.cli.local_agent_kit_service import LocalAgentKitService
+
+    kit = json.loads((KIT_DIR / "kit.json").read_text(encoding="utf-8"))
+    assert kit["protocols"]["dashboards_tools"] == "protocols/dashboards-tools.schema.json"
+    for rel in kit["protocols"].values():
+        assert (KIT_DIR / rel).is_file(), rel
+        assert LocalAgentKitService._is_contract_member(rel), rel
+    snapshot = (Path(__file__).resolve().parents[2] / "app" / "env-templates" / "platform-knowledge-env"
+                / "app" / "workspace" / "knowledge" / "local-kit")
+    if snapshot.is_dir():
+        for rel in ("protocols/dashboards-tools.schema.json", "protocols/dashboards-bridge.js",
+                    "protocols/dashboards.schema.json", "kit.json"):
+            assert (snapshot / rel).read_bytes() == (KIT_DIR / rel).read_bytes(), (
+                f"{rel} differs from docs/local_agent_kit — run `make sync-platform-knowledge`")
+
+
+@_needs_tools
+def test_x_bridge_documents_highlight_and_collect_context() -> None:
+    bridge = json.loads(DASHBOARDS_SCHEMA.read_text(encoding="utf-8"))["x-web-view"]["bridge"]
+    host = bridge["host_contract"]
+    assert "cinna/highlight" in bridge["cinna.onHighlight(cb)"]
+    assert "cinna/highlight-ready" in host["notifications_sent"]
+    assert "cinna/highlight" in host["notifications_received"]
+    assert set(host["cinna/collect-context"]) == {"description", "params", "result"}
+    text = BRIDGE_JS.read_text(encoding="utf-8")
+    for method in ("cinna/highlight", "cinna/highlight-ready", "cinna/collect-context"):
+        assert f'"{method}"' in text, method
+    assert "onHighlight:" in text
+
+
+_HIGHLIGHT_HARNESS = r"""
+const listeners = [];
+const sent = [];
+const parent = { postMessage: (m) => sent.push(JSON.parse(JSON.stringify(m))) };
+global.setTimeout = () => 0;
+global.clearTimeout = () => {};
+console.warn = () => {};
+
+// A minimal DOM: two microdata rows, one on screen and touched by the text selection.
+function node(tag, attrs, text, kids) {
+  const n = { tagName: tag.toUpperCase(), attrs, textContent: text || "", children: kids || [],
+              parentElement: null, rect: { width: 10, height: 10, top: 0, left: 0, bottom: 10, right: 10 } };
+  n.children.forEach((c) => { c.parentElement = n; });
+  n.getAttribute = (k) => (k in n.attrs ? n.attrs[k] : null);
+  n.hasAttribute = (k) => k in n.attrs;
+  n.getBoundingClientRect = () => n.rect;
+  n.closest = (sel) => {
+    for (let at = n; at; at = at.parentElement) if (sel === "[itemscope]" && at.hasAttribute("itemscope")) return at;
+    return null;
+  };
+  n.querySelectorAll = (sel) => {
+    const key = sel.slice(1, -1), out = [];
+    const walk = (x) => x.children.forEach((c) => { if (c.hasAttribute(key)) out.push(c); walk(c); });
+    walk(n);
+    return out;
+  };
+  return n;
+}
+const rowA = node("li", { itemscope: "", itemid: "d-12", itemtype: "Deal" }, "", [
+  node("span", { itemprop: "name" }, "  Acme \n renewal "),
+  node("data", { itemprop: "value", value: "1200" }, "1,200 EUR"),
+]);
+const rowB = node("li", { itemscope: "", itemid: "d-14" }, "", [node("span", { itemprop: "name" }, "Globex")]);
+rowB.rect = { width: 10, height: 10, top: 900, left: 0, bottom: 910, right: 10 };
+const body = node("body", {}, "", [rowA, rowB]);
+global.document = {
+  title: "Deals", documentElement: { style: { setProperty() {} }, setAttribute() {}, clientHeight: 600, clientWidth: 800 },
+  querySelectorAll: (sel) => body.querySelectorAll(sel),
+};
+global.window = {
+  parent, innerHeight: 600, innerWidth: 800,
+  addEventListener: (name, fn) => listeners.push(fn),
+  getSelection: () => ({ isCollapsed: false, toString: () => "Acme   renewal", containsNode: (n) => n === rowA }),
+};
+require(process.argv[2]);
+const fire = (data) => listeners.forEach((fn) => fn({ source: parent, data }));
+const tick = () => new Promise((r) => setImmediate(r));
+(async () => {
+  const seen = { early: [], late: [] };
+  fire({ jsonrpc: "2.0", method: "cinna/highlight", params: { ids: ["w1"] } });   // before any listener
+  fire({ jsonrpc: "2.0", method: "cinna/highlight", params: { ids: ["w2", 3, ""] } });  // last one wins
+  window.cinna.onHighlight((ids) => seen.early.push(ids));   // before the handshake: ready is queued
+  window.cinna.onHighlight(() => {});                         // a second listener sends nothing more
+  fire({ jsonrpc: "2.0", id: 1, result: { _meta: { cinna: { nonce: "n1" } }, hostContext: { theme: "light" } } });
+  await window.cinna.ready;
+  await tick();
+  fire({ jsonrpc: "2.0", method: "cinna/highlight", params: { ids: "w9" } });  // not a list: ignored
+  fire({ jsonrpc: "2.0", method: "cinna/highlight", params: { ids: [] } });    // clears
+  const off = window.cinna.onHighlight((ids) => seen.late.push(ids));
+  await tick();
+  off();
+  fire({ jsonrpc: "2.0", method: "cinna/highlight", params: { ids: ["w4"] } });
+  fire({ jsonrpc: "2.0", id: 50, method: "cinna/collect-context", params: {} });
+  window.cinna.setContext({ summary: "Two deals", selection: ["d-14"], visible: ["d-12", "d-14"] });
+  fire({ jsonrpc: "2.0", id: 51, method: "cinna/collect-context", params: {} });
+  process.stdout.write(JSON.stringify({ sent, seen }));
+})();
+"""
+
+
+@pytest.mark.skipif(not (TOOLS_SCHEMA.is_file() and HAVE_NODE), reason="needs node and 1.20.0")
+def test_the_bridge_replays_highlights_signals_once_and_collects_context(tmp_path: Path) -> None:
+    harness = tmp_path / "harness.js"
+    harness.write_text(_HIGHLIGHT_HARNESS, encoding="utf-8")
+    result = subprocess.run(["node", str(harness), str(BRIDGE_JS)], capture_output=True,
+                            text=True, timeout=60, check=False)
+    assert result.returncode == 0, result.stderr
+    out = json.loads(result.stdout)
+    sent, seen = out["sent"], out["seen"]
+
+    # The page signals once, after the handshake, with the nonce.
+    methods = [m.get("method") for m in sent]
+    assert methods[:3] == ["ui/initialize", "ui/notifications/initialized", "cinna/highlight-ready"]
+    assert methods.count("cinna/highlight-ready") == 1
+    assert sent[2]["params"]["_meta"]["cinna"] == {"nonce": "n1"}
+    assert "id" not in sent[2]
+
+    # Early highlight replayed (last wins, bad ids dropped); a non-list is ignored; [] clears;
+    # a late listener gets the last value; an unsubscribed one gets nothing more.
+    assert seen["early"] == [["w2"], [], ["w4"]]
+    assert seen["late"] == [[]]
+
+    replies = {m["id"]: m for m in sent if m.get("id") in (50, 51)}
+    collected = replies[50]["result"]
+    assert collected["_meta"]["cinna"] == {"nonce": "n1"}
+    assert collected["source"] == "collected"
+    assert collected["summary"] == "Deals"
+    assert collected["selected_text"] == "Acme renewal"
+    assert collected["selection"] == ["d-12"]
+    assert collected["visible"] == ["d-12"]
+    assert collected["microdata"] == [
+        {"id": "d-12", "type": "Deal", "properties": {"name": "Acme renewal", "value": "1200"}},
+        {"id": "d-14", "properties": {"name": "Globex"}},
+    ]
+    from_page = replies[51]["result"]
+    assert from_page["source"] == "set_context"
+    assert from_page["summary"] == "Two deals"
+    assert from_page["selection"] == ["d-14"]
+    assert from_page["microdata"] == collected["microdata"]

@@ -5,6 +5,8 @@
 //   cinna.setContext({ summary, selection, visible }) -> what the owner's chat sees; last call wins
 //   await cinna.call(endpoint, params) -> one of this component's own endpoints (drill-downs):
 //                                         its JSON value itself; rejects with { message }
+//   cinna.onHighlight(cb)        -> cb(ids): rows the agent highlights from the dashboard chat;
+//                                   the ids you pass to setContext, [] clears
 // The helper is the kit's protocols/dashboards-bridge.js, injected by the host; never copy it here.
 // Relative paths only, every library in this folder, no network.
 (function () {
@@ -17,6 +19,7 @@
 
   let weeks = [];
   let selected = null;
+  let highlighted = []; // the agent's highlight, kept until the owner selects a week
 
   if (!window.cinna) {
     status.textContent = "Open this component in Cinna Desktop to see its data.";
@@ -38,13 +41,14 @@
     CinnaChart.barLine(chart, {
       points: weeks,
       line: weeks.map((_, i) => weeks.slice(0, i + 1).reduce((s, w) => s + w.value, 0) / (i + 1)),
-      selected,
+      selected: selected ? [selected, ...highlighted] : highlighted,
       onSelect: selectWeek,
     });
   }
 
   async function selectWeek(week) {
     selected = week.id;
+    highlighted = [];
     draw();
     tellContext();
     detailTitle.textContent = `Deals in ${week.label}`;
@@ -69,6 +73,11 @@
     if (!weeks.some((w) => w.id === selected)) selected = null;
     draw();
     tellContext();
+  });
+
+  cinna.onHighlight((ids) => {
+    highlighted = ids;
+    draw();
   });
 
   month.addEventListener("change", () => {

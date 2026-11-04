@@ -1,6 +1,6 @@
 {
   "kit_version": "{{KIT_VERSION}}",
-  "contract_version": "1.19.1",
+  "contract_version": "1.20.0",
   "platform_url": "{{PLATFORM_URL}}",
   "kit_base_url": "{{KIT_BASE_URL}}",
   "start_url": "{{START_URL}}",
@@ -20,7 +20,8 @@
     "tasks": "protocols/tasks.schema.json",
     "artifacts": "protocols/artifacts.schema.json",
     "dashboards": "protocols/dashboards.schema.json",
-    "dashboards_bridge": "protocols/dashboards-bridge.js"
+    "dashboards_bridge": "protocols/dashboards-bridge.js",
+    "dashboards_tools": "protocols/dashboards-tools.schema.json"
   },
   "platform_skills": {
     "cinna-tasks": "skills/cinna-tasks",

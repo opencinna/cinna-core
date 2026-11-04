@@ -14,8 +14,10 @@ A **dashboard component** is a folder in the agent, `dashboards/<name>/`, with a
 `component.json` that says what to show and where the data comes from. The owner
 adds it to a dashboard in Cinna Desktop as a tile; the tile refreshes while they
 look at it, and a chat docked beside the dashboard asks the agent about what is on
-screen. The contract is `protocols/dashboards.schema.json`
-(`cinna_protocol: dashboards/1`).
+screen. In that chat the agent can also change its own tiles, their params and
+what they highlight, with the `dashboards_tiles` and `dashboards_update_tile` tools
+(`protocols/dashboards-tools.schema.json`, contract 1.20.0). The contract is
+`protocols/dashboards.schema.json` (`cinna_protocol: dashboards/1`).
 
 | | Component | Artifact |
 |---|---|---|
@@ -119,8 +121,8 @@ component reads.
 - `templates/dashboard-list/`: a `list` view and `api/items.py`.
 - `templates/dashboard-html/`: a web view with `index.html`, `app.js`, a
   dependency-free SVG bar and line helper (`chart.js`), `api/data.py` and a Node
-  drill-down. It shows `cinna.onData`, `cinna.setParams`, `cinna.setContext` and
-  `cinna.call`. No CDN, relative paths only: web views get no network.
+  drill-down. It shows `cinna.onData`, `cinna.setParams`, `cinna.setContext`,
+  `cinna.call` and `cinna.onHighlight`. No CDN, relative paths only: web views get no network.
 
 A web view runs in a sandbox scoped to its own folder: relative paths without a
 leading slash (the page sits under a per-tile path prefix), no `fetch` of `api/`
