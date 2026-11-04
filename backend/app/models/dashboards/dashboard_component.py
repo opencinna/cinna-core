@@ -117,6 +117,8 @@ class DashboardComponentPlacement(SQLModel):
     dashboard_id: uuid.UUID
     dashboard_name: str
     block_id: uuid.UUID
+    # ``desktop``: a Cinna Desktop backing dashboard (not shown on the web).
+    origin: str = "web"
 
 
 class DashboardComponentPublic(SQLModel):

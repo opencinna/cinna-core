@@ -76,11 +76,21 @@ from app.services.a2a.a2a_event_mapper import (
 )
 from app.services.a2a.a2a_task_store import DatabaseTaskStore
 from app.services.a2a.access_token_service import AccessTokenService
+from app.services.dashboards import dashboard_context
 
 logger = logging.getLogger(__name__)
 
 # Longest client ``messageId`` kept for dedupe; longer ids are ignored.
 CLIENT_MESSAGE_ID_MAX_LENGTH = 255
+
+
+class A2ARequestError(ValueError):
+    """A message request refused with a JSON-RPC error code (both A2A surfaces)."""
+
+    def __init__(self, message: str, jsonrpc_code: int) -> None:
+        super().__init__(message)
+        self.message = message
+        self.jsonrpc_code = jsonrpc_code
 
 
 class A2ARequestHandler:
@@ -242,11 +252,46 @@ class A2ARequestHandler:
     ) -> Optional[str]:
         """Optionally render a scope-violation exception as an inline SSE error.
 
-        Default: returns ``None`` — the exception propagates out of the
-        async generator (current core A2A behavior). Subclasses can return
-        a formatted SSE string to keep the stream well-formed instead.
+        Default: an ``A2ARequestError`` becomes an SSE error; anything else
+        returns ``None`` and propagates out of the async generator. Subclasses
+        can return a formatted SSE string to keep the stream well-formed instead.
         """
+        if isinstance(exc, A2ARequestError):
+            return self._format_sse_error(request_id, exc.jsonrpc_code, exc.message)
         return None
+
+    def _check_message_session(
+        self, thread_key: UUID | None, message_data: dict[str, Any]
+    ) -> str | None:
+        """Checks on the session a message resumes; returns its dashboard context.
+
+        - A resumed session must be this agent's (the task id names a session
+          of another agent: ``-32001``).
+        - ``message.metadata.cinna_dashboard_context`` follows the messages
+          route: dropped silently unless the session has a ``dashboard_id``
+          (a new session never has one), else sanitised, a bad one refused
+          with ``-32602``. Returns the text to store, or ``None``.
+        """
+        if thread_key is None:
+            return None
+        raw = dashboard_context.from_a2a_metadata(message_data.get("metadata"))
+        with self.get_db_session() as db:
+            session = SessionService.get_session(db, thread_key)
+            if session is None:
+                return None  # resolve reports (or replaces) a missing session
+            if session.agent_id is not None:
+                belongs = session.agent_id == self.agent.id
+            else:
+                belongs = session.environment_id == self.environment.id
+            if not belongs:
+                raise A2ARequestError("Task does not belong to this agent", -32001)
+            has_dashboard = session.dashboard_id is not None
+        if raw is None or not has_dashboard:
+            return None
+        try:
+            return dashboard_context.sanitize(raw)
+        except dashboard_context.DashboardContextError as e:
+            raise A2ARequestError(str(e), -32602) from None
 
     # ------------------------------------------------------------------
     # Shared dispatch methods
@@ -271,6 +316,7 @@ class A2ARequestHandler:
 
         task_id = message_data.get("taskId") or message_data.get("task_id")
         thread_key = self._parse_session_scope(task_id)
+        safe_dashboard_context = self._check_message_session(thread_key, message_data)
 
         # For existing sessions, ensure environment is ready before sending
         # (For new sessions, we check after creation)
@@ -375,6 +421,7 @@ class A2ARequestHandler:
                 backend_base_url=self.backend_base_url,
                 extra_session_kwargs=extra_kwargs or None,
                 client_message_id=client_message_id,
+                dashboard_context=safe_dashboard_context,
             )
 
         if ingestion.action == "error":
@@ -499,6 +546,7 @@ class A2ARequestHandler:
         task_id = message_data.get("taskId") or message_data.get("task_id")
         try:
             thread_key = self._parse_session_scope(task_id)
+            safe_dashboard_context = self._check_message_session(thread_key, message_data)
         except Exception as e:
             sse = self._stream_scope_error(e, request_id)
             if sse is not None:
@@ -561,6 +609,7 @@ class A2ARequestHandler:
             integration_type=None,
             backend_base_url=self.backend_base_url,
             client_message_id=client_message_id,
+            dashboard_context=safe_dashboard_context,
         )
 
         if result["action"] == "error":

@@ -273,7 +273,12 @@ class ComponentService:
             config = block.config or {}
             key = (str(config.get("component") or ""), config.get("skill") or None)
             found.setdefault(key, []).append(
-                {"dashboard_id": dashboard.id, "dashboard_name": dashboard.name, "block_id": block.id}
+                {
+                    "dashboard_id": dashboard.id,
+                    "dashboard_name": dashboard.name,
+                    "block_id": block.id,
+                    "origin": dashboard.origin,
+                }
             )
         return found
 

@@ -1,5 +1,5 @@
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -67,6 +67,7 @@ def _dashboard_to_public(dashboard: Any) -> UserDashboardPublic:
         name=dashboard.name,
         description=dashboard.description,
         sort_order=dashboard.sort_order,
+        origin=dashboard.origin,
         created_at=dashboard.created_at,
         updated_at=dashboard.updated_at,
         blocks=[_block_to_public(b) for b in dashboard.blocks],
@@ -104,10 +105,19 @@ def list_agent_env_files(
 
 
 @router.get("/", response_model=list[UserDashboardPublic])
-def list_dashboards(session: SessionDep, current_user: CurrentUser) -> Any:
-    """List all dashboards for the current user, with their blocks."""
+def list_dashboards(
+    session: SessionDep,
+    current_user: CurrentUser,
+    origin: Literal["web", "desktop", "all"] = Query(
+        "web",
+        description="Which dashboards: web (default), desktop (Cinna Desktop's backing dashboards) or all",
+    ),
+) -> Any:
+    """List the current user's dashboards of one origin, with their blocks."""
     dashboards = UserDashboardService.list_dashboards(
-        session=session, owner_id=current_user.id
+        session=session,
+        owner_id=current_user.id,
+        origin=None if origin == "all" else origin,
     )
     return [_dashboard_to_public(d) for d in dashboards]
 

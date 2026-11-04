@@ -4060,6 +4060,7 @@ export type ComponentRefComponent = {
 export type ComponentRefPlacement = {
     dashboard_id: string;
     name: string;
+    origin?: string;
 };
 
 export type ComponentRefResolved = {
@@ -4585,6 +4586,7 @@ export type DashboardComponentPlacement = {
     dashboard_id: string;
     dashboard_name: string;
     block_id: string;
+    origin?: string;
 };
 
 export type DashboardComponentPublic = {
@@ -9429,6 +9431,7 @@ export type UserDashboardBlockUpdate = {
 export type UserDashboardCreate = {
     name: string;
     description?: (string | null);
+    origin?: 'web' | 'desktop';
 };
 
 export type UserDashboardPublic = {
@@ -9436,6 +9439,7 @@ export type UserDashboardPublic = {
     name: string;
     description: (string | null);
     sort_order: number;
+    origin?: string;
     created_at: string;
     updated_at: string;
     blocks?: Array<UserDashboardBlockPublic>;
@@ -12430,6 +12434,13 @@ export type DashboardsListAgentEnvFilesData = {
 };
 
 export type DashboardsListAgentEnvFilesResponse = (Array<(string)>);
+
+export type DashboardsListDashboardsData = {
+    /**
+     * Which dashboards: web (default), desktop (Cinna Desktop's backing dashboards) or all
+     */
+    origin?: 'web' | 'desktop' | 'all';
+};
 
 export type DashboardsListDashboardsResponse = (Array<UserDashboardPublic>);
 

@@ -186,6 +186,12 @@ class UserDashboardBlockPublic(SQLModel):
 # Dashboard models
 # ---------------------------------------------------------------------------
 
+# Who owns the dashboard's layout: the web app, or Cinna Desktop (a backing
+# dashboard for a desktop dashboard's cloud tiles; hidden from the web list).
+DashboardOrigin = Literal["web", "desktop"]
+DASHBOARD_ORIGINS: tuple[str, ...] = ("web", "desktop")
+
+
 class UserDashboardBase(SQLModel):
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(default=None)
@@ -203,6 +209,8 @@ class UserDashboard(UserDashboardBase, table=True):
         foreign_key="user.id", nullable=False, ondelete="CASCADE"
     )
     sort_order: int = Field(default=0)
+    # Set on create only (``UserDashboardCreate.origin``); never updated.
+    origin: str = Field(default="web", max_length=16, sa_column_kwargs={"server_default": "web"})
     created_at: datetime = Field(default_factory=_utc_now)
     updated_at: datetime = Field(default_factory=_utc_now)
 
@@ -213,7 +221,7 @@ class UserDashboard(UserDashboardBase, table=True):
 
 
 class UserDashboardCreate(UserDashboardBase):
-    pass
+    origin: DashboardOrigin = "web"
 
 
 class UserDashboardUpdate(SQLModel):
@@ -227,6 +235,7 @@ class UserDashboardPublic(SQLModel):
     name: str
     description: str | None
     sort_order: int
+    origin: str = "web"
     created_at: datetime
     updated_at: datetime
     blocks: list[UserDashboardBlockPublic] = []

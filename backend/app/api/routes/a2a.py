@@ -29,7 +29,7 @@ from app.core.db import create_session
 from app.models import Agent, User, A2ATokenPayload
 from app.models.environments.environment import AgentEnvironment
 from app.services.a2a.a2a_service import A2AService
-from app.services.a2a.a2a_request_handler import A2ARequestHandler
+from app.services.a2a.a2a_request_handler import A2ARequestError, A2ARequestHandler
 from app.services.a2a.a2a_task_store import DatabaseTaskStore
 from app.services.a2a.access_token_service import AccessTokenService
 from app.services.a2a.a2a_v1_adapter import A2AV1Adapter
@@ -316,7 +316,10 @@ async def _handle_jsonrpc(
                     )
 
             # Synchronous message handling
-            task = await handler.handle_message_send(params)
+            try:
+                task = await handler.handle_message_send(params)
+            except A2ARequestError as e:
+                return _error_response(request_id, e.jsonrpc_code, e.message)
             result = task.model_dump(by_alias=True, exclude_none=True)
             if use_v1:
                 result = A2AV1Adapter.transform_task_outbound(result)

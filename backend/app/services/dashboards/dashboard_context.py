@@ -8,6 +8,10 @@ It is stored in ``message_metadata.dashboard_context`` (never rendered) and
 that carries one and whenever its sha256 changed; when unchanged it is
 omitted. It is data the page and the owner's records produced, never
 instructions, and the block says so.
+
+Over A2A (Cinna Desktop's dashboard panel) the same context rides in
+``message.metadata.cinna_dashboard_context`` as a JSON object (a JSON string
+is taken too); ``from_a2a_metadata`` turns it into the text ``sanitize`` takes.
 """
 import hashlib
 import json
@@ -19,6 +23,7 @@ from sqlmodel import Session, col, select
 from app.models.sessions.session import SessionMessage
 
 METADATA_KEY = "dashboard_context"
+A2A_METADATA_KEY = "cinna_dashboard_context"
 MAX_CHARS = 12_000
 SUMMARY_MAX_CHARS = 8_000
 SELECTED_TEXT_MAX_CHARS = 2_000
@@ -74,6 +79,24 @@ def digest(stored: str) -> str:
 
 def block(stored: str) -> str:
     return f"{BLOCK_HEADER}\n{stored}\n{BLOCK_FOOTER}"
+
+
+def from_a2a_metadata(metadata: Any) -> str | None:
+    """The raw context text of an A2A message's ``metadata``, or ``None`` when absent.
+
+    An object (or any other JSON value) is serialised compactly, so the cap in
+    ``sanitize`` measures the canonical text; a string is passed on as sent.
+    Empty values count as absent, as an empty ``dashboard_context`` does on the
+    messages route.
+    """
+    if not isinstance(metadata, dict):
+        return None
+    value = metadata.get(A2A_METADATA_KEY)
+    if value is None or value == "" or value == {}:
+        return None
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
 def from_metadata(metadata: dict | None) -> str | None:

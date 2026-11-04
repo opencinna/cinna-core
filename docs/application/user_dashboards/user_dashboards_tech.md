@@ -29,10 +29,13 @@ Cascade: `ondelete="CASCADE"` on block_id FK — deleting a block removes all it
 | `name` | VARCHAR(255) | NOT NULL | — |
 | `description` | TEXT | nullable | NULL |
 | `sort_order` | INTEGER | NOT NULL | 0 |
+| `origin` | VARCHAR(16) | NOT NULL | `'web'` (server default) — `web` or `desktop`, set on create only |
 | `created_at` | DATETIME | NOT NULL | utcnow |
 | `updated_at` | DATETIME | NOT NULL | utcnow |
 
 Indexes: `ix_user_dashboard_owner_id` (owner_id), `ix_user_dashboard_owner_sort` (owner_id, sort_order)
+
+`origin` was added by migration `backend/app/alembic/versions/7c1d4e8a2b90_add_user_dashboard_origin.py` (existing rows are `web`).
 
 ### `user_dashboard_block` table
 
@@ -72,9 +75,9 @@ The `view_type` field differs between the DB model and the Pydantic schemas:
 ```
 UserDashboardBase           — name, description
 UserDashboard               — DB table; has blocks: List[UserDashboardBlock]
-UserDashboardCreate         — inherits Base
-UserDashboardUpdate         — name|None, description|None, sort_order|None
-UserDashboardPublic         — id, name, description, sort_order, created_at, updated_at, blocks
+UserDashboardCreate         — inherits Base; origin: DashboardOrigin ("web" | "desktop", default "web")
+UserDashboardUpdate         — name|None, description|None, sort_order|None (no origin: it never changes)
+UserDashboardPublic         — id, name, description, sort_order, origin, created_at, updated_at, blocks
 
 UserDashboardBlockBase      — agent_id, view_type (Literal), title, show_border, show_header, grid_x/y/w/h
 UserDashboardBlock          — DB table; view_type as plain str; belongs to UserDashboard; has prompt_actions
@@ -102,7 +105,7 @@ UserDashboardBlockPromptActionPublic — id, block_id, prompt_text, label, sort_
 
 | Method | Path | Description | Response |
 |--------|------|-------------|----------|
-| GET | `/` | List user's dashboards with blocks | `list[UserDashboardPublic]` |
+| GET | `/` | List user's dashboards with blocks; `?origin=web` (default), `desktop` or `all` | `list[UserDashboardPublic]` |
 | POST | `/` | Create dashboard | `UserDashboardPublic` |
 | GET | `/{dashboard_id}` | Get dashboard with blocks | `UserDashboardPublic` |
 | PUT | `/{dashboard_id}` | Update dashboard metadata | `UserDashboardPublic` |
@@ -159,7 +162,7 @@ Cookie is set via `Response.set_cookie()` with `httponly=True`, `samesite="stric
 | 400 | Path traversal attempt (`..` or absolute path) in env-file request |
 | 400 | Fallback path: environment not running when adapter lacks local file access |
 | 404 | File not found on local filesystem (env-file endpoint) |
-| 409 | Max dashboards (10) or max blocks (20) limit reached |
+| 409 | Max dashboards (10 web, 50 desktop, counted per origin) or max blocks (20) limit reached |
 | 422 | Validation error: invalid view_type, negative grid values, name too long |
 
 ---
@@ -200,12 +203,13 @@ class UserDashboardService:
         # Fetches action ensuring it belongs to block; raises PromptActionNotFoundError
 
     # -- Dashboard CRUD --
-    list_dashboards(session, owner_id) -> list[UserDashboard]
-        # Ordered by sort_order; eager loads blocks + prompt_actions via chained selectinload
+    list_dashboards(session, owner_id, origin="web") -> list[UserDashboard]
+        # One origin (None: all); ordered by sort_order; eager loads blocks + prompt_actions via chained selectinload
 
     create_dashboard(session, owner_id, data) -> UserDashboard
-        # Enforces MAX_DASHBOARDS_PER_USER = 10
-        # sort_order = max existing + 1
+        # Limit per origin: DASHBOARD_LIMITS = {"web": MAX_DASHBOARDS_PER_USER (10),
+        #   "desktop": MAX_DESKTOP_DASHBOARDS_PER_USER (50)}
+        # sort_order = max existing of the same origin + 1
 
     get_dashboard(session, dashboard_id, owner_id) -> UserDashboard
         # Raises DashboardNotFoundError / DashboardPermissionError
@@ -454,6 +458,7 @@ Creates `user_dashboard` and `user_dashboard_block` tables with all columns, for
   - Agent access validation (other user's agent → 400)
   - Webapp view_type validation (webapp_enabled=False → 400, True → 200)
   - Invalid view_type string → 422
+- `test_desktop_dashboards.py` — origin on create and the web-list default, per-origin limits, the block limit on a desktop dashboard, and a component block end to end on one (data, refresh, params, tile tool, placements)
   - Prompt action full CRUD lifecycle (create, list, update, delete, cascade with block delete)
   - Prompt action ownership guards (cross-user access, unauthenticated, ghost IDs)
   - Prompt action input validation (empty text, oversized text/label → 422)

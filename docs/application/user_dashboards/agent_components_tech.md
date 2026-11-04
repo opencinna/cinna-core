@@ -42,6 +42,10 @@ Auth is `CurrentUser` unless noted. Errors share one body, `{"error": {"code", "
 
 The messages route (`backend/app/api/routes/messages.py`) sanitises `dashboard_context` (400 on bad JSON or more than 12,000 chars) and silently drops it when the session has no `dashboard_id`.
 
+Over A2A (both `/a2a/{agent_id}/` and `/external/a2a/agent/{agent_id}/`; Cinna Desktop's dashboard panel uses the latter with the user's JWT and the chat session id as the task id), the same context rides in `message.metadata.cinna_dashboard_context` (a JSON object, or a JSON string). `A2ARequestHandler._check_message_session` (`backend/app/services/a2a/a2a_request_handler.py`) applies the same rules through `dashboard_context.from_a2a_metadata` and `sanitize`: dropped unless the resumed session has a `dashboard_id` (a new session never does), a bad one is JSON-RPC `-32602` on stream and send, and the text is passed to `send_session_message(dashboard_context=)` (through `ChannelIngestionService.ingest_inbound_message` for `message/send`), so storage and the sha256 dedupe are the messages route's. The same check refuses a task id that names another agent's session (`-32001`).
+
+Placements (`ComponentService.placements`, component list and get, and component-ref `placements`) carry the dashboard's `origin`, so a desktop dashboard (`origin: "desktop"`, see [User Dashboards tech](user_dashboards_tech.md)) can be named as Cinna Desktop; `ComponentReferenceCard` shows those once, unlinked.
+
 ## Services (`backend/app/services/dashboards/`)
 
 | Module | Role |
@@ -123,4 +127,4 @@ Socket handlers (`useEventSubscription`), matching on `event.meta.block_id`: `da
 
 ## Tests
 
-`backend/tests/api/dashboards/` (agent component, frame, chat, tile tool, refs scenarios); unit tests `backend/tests/unit/test_dashboard_frame_content.py`, `test_env_endpoint_runner.py`, `test_env_dashboards_routes.py`, `test_cinna_dashboards_tools.py`, `test_local_kit_dashboards.py`.
+`backend/tests/api/dashboards/` (agent component, frame, chat, tile tool, refs, desktop dashboard scenarios), `backend/tests/api/external/external_a2a_dashboard_chat_test.py` and `backend/tests/api/a2a_integration/test_a2a_dashboard_context.py` (dashboard context over A2A); unit tests `backend/tests/unit/test_dashboard_frame_content.py`, `test_env_endpoint_runner.py`, `test_env_dashboards_routes.py`, `test_cinna_dashboards_tools.py`, `test_local_kit_dashboards.py`.

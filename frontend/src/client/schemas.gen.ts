@@ -17707,6 +17707,11 @@ export const ComponentRefPlacementSchema = {
         name: {
             type: 'string',
             title: 'Name'
+        },
+        origin: {
+            type: 'string',
+            title: 'Origin',
+            default: 'web'
         }
     },
     type: 'object',
@@ -19762,6 +19767,11 @@ export const DashboardComponentPlacementSchema = {
             type: 'string',
             format: 'uuid',
             title: 'Block Id'
+        },
+        origin: {
+            type: 'string',
+            title: 'Origin',
+            default: 'web'
         }
     },
     type: 'object',
@@ -39922,6 +39932,12 @@ export const UserDashboardCreateSchema = {
                 }
             ],
             title: 'Description'
+        },
+        origin: {
+            type: 'string',
+            enum: ['web', 'desktop'],
+            title: 'Origin',
+            default: 'web'
         }
     },
     type: 'object',
@@ -39954,6 +39970,11 @@ export const UserDashboardPublicSchema = {
         sort_order: {
             type: 'integer',
             title: 'Sort Order'
+        },
+        origin: {
+            type: 'string',
+            title: 'Origin',
+            default: 'web'
         },
         created_at: {
             type: 'string',

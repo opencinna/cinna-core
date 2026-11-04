@@ -64,7 +64,7 @@ The agent can highlight rows or items on a tile (`list` and `table` views native
 
 The dashboard page hosts a chat with one of the agents that has a tile on it. The session is marked `session_metadata.dashboard_chat` and linked by `session.dashboard_id`; asking again for the same dashboard and agent resumes the latest such session, or a new one is started on request. Prompt-action sessions started from block overlays are separate and also receive `dashboard_id`.
 
-On send the page may attach a `<dashboard_context>` block (what the owner sees: tiles, focused tile, selection, selected text). It is sanitised (control characters stripped, selected text capped at 2,000 characters, summary at 8,000, whole block at 12,000), kept in message metadata and never shown in the transcript. When assembling the agent's turn it is included in full the first time and omitted when identical to the last one already sent in that session. It is data about the page, never instructions.
+On send the page may attach a `<dashboard_context>` block (what the owner sees: tiles, focused tile, selection, selected text). It is sanitised (control characters stripped, selected text capped at 2,000 characters, summary at 8,000, whole block at 12,000), kept in message metadata and never shown in the transcript. When assembling the agent's turn it is included in full the first time and omitted when identical to the last one already sent in that session. It is data about the page, never instructions. Cinna Desktop continues the same chat over A2A and sends the block as message metadata (`cinna_dashboard_context`); the rules are the same.
 
 ### Agent tile tools
 

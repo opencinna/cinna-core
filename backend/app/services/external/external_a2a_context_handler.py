@@ -233,7 +233,7 @@ class ExternalA2AContextHandler(A2ARequestHandler):
         """Render caller-scope violations as inline SSE errors."""
         if isinstance(exc, (TaskScopeViolationError, IdentityBindingRevokedError)):
             return self._format_sse_error(request_id, exc.jsonrpc_code, exc.message)
-        return None
+        return super()._stream_scope_error(exc, request_id)
 
     # ------------------------------------------------------------------
     # Session-matching helper used by _authorize_existing_session + _task_list_filter

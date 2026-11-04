@@ -15,19 +15,25 @@ def create_dashboard(
     token_headers: dict[str, str],
     name: str | None = None,
     description: str | None = None,
+    origin: str | None = None,
 ) -> dict:
     """Create a dashboard via POST /dashboards/ and return response JSON."""
     payload = {"name": name or f"Dashboard {random_lower_string()[:8]}"}
     if description is not None:
         payload["description"] = description
+    if origin is not None:
+        payload["origin"] = origin
     r = client.post(f"{_BASE}/", headers=token_headers, json=payload)
     assert r.status_code == 200, f"Create dashboard failed: {r.text}"
     return r.json()
 
 
-def list_dashboards(client: TestClient, token_headers: dict[str, str]) -> list[dict]:
-    """List dashboards via GET /dashboards/."""
-    r = client.get(f"{_BASE}/", headers=token_headers)
+def list_dashboards(
+    client: TestClient, token_headers: dict[str, str], origin: str | None = None
+) -> list[dict]:
+    """List dashboards via GET /dashboards/ (``origin``: web, desktop or all)."""
+    params = {"origin": origin} if origin is not None else None
+    r = client.get(f"{_BASE}/", headers=token_headers, params=params)
     assert r.status_code == 200, f"List dashboards failed: {r.text}"
     return r.json()
 

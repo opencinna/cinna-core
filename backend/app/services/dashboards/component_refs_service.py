@@ -179,7 +179,11 @@ class ComponentRefsService:
         for placement in ComponentService.placements(db, user.id, agent.id).get((parsed.name, parsed.skill), []):
             placements.setdefault(
                 placement["dashboard_id"],
-                {"dashboard_id": placement["dashboard_id"], "name": placement["dashboard_name"]},
+                {
+                    "dashboard_id": placement["dashboard_id"],
+                    "name": placement["dashboard_name"],
+                    "origin": placement["origin"],
+                },
             )
         title, view = spec.get("title"), spec.get("view")
         return _result(

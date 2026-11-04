@@ -225,6 +225,7 @@ The active dashboard is highlighted with an accent background and check icon in 
 ## Business Rules
 
 - **Max 10 dashboards** per user. The 11th creation attempt returns HTTP 409.
+- **Cinna Desktop dashboards**: a dashboard created with `origin: "desktop"` backs a Cinna Desktop dashboard's cloud tiles (the desktop owns the layout; core owns the blocks, their params, cached data and chat). The origin is set on create only. Such dashboards are left out of the web list (`GET /dashboards/` lists web ones unless `?origin=desktop` or `all`), do not count toward the 10, and have their own limit of 50 per user. Blocks on them follow every other rule, including the 20-block limit; grid fields are stored but mean nothing there. Where the web names a component's placements, desktop ones read "Cinna Desktop", unlinked.
 - **Max 20 blocks** per dashboard. The 21st addition attempt returns HTTP 409.
 - **Ownership-based access**: Users can only read/write their own dashboards and blocks.
 - **Agent access**: When adding a block, the agent must be owned by the current user. Shared agents are not currently eligible.

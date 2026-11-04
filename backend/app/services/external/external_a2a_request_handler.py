@@ -23,6 +23,7 @@ from sqlmodel import Session as DBSession
 
 from app.models import Agent, Session as ChatSession, User
 from app.models.environments.environment import AgentEnvironment
+from app.services.a2a.a2a_request_handler import A2ARequestError
 from app.services.a2a.a2a_v1_adapter import A2AV1Adapter
 from app.services.a2a.jsonrpc_utils import (
     jsonrpc_error,
@@ -230,7 +231,7 @@ class ExternalA2ARequestHandler:
             return JSONRPCOutcome(
                 result_envelope=jsonrpc_error(request_id, e.jsonrpc_code, e.message)
             )
-        except InvalidExternalParamsError as e:
+        except (InvalidExternalParamsError, A2ARequestError) as e:
             return JSONRPCOutcome(
                 result_envelope=jsonrpc_error(request_id, e.jsonrpc_code, e.message)
             )

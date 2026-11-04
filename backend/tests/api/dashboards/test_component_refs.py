@@ -83,7 +83,7 @@ def test_bundle_ref_resolves_to_the_viewers_agent_with_skill_and_placements(
     assert plain["component"]["name"] == "sales" and plain["component"]["view"] == "table"
     assert plain["component"]["title"] == "Sales" and plain["from_skill"] is None
     assert plain["findings"] == []
-    assert plain["placements"] == [{"dashboard_id": dash["id"], "name": "Ops board"}]
+    assert plain["placements"] == [{"dashboard_id": dash["id"], "name": "Ops board", "origin": "web"}]
 
     assert skilled["status"] == "ok"
     assert skilled["from_skill"] == "reporting" and skilled["component"]["skill"] == "reporting"

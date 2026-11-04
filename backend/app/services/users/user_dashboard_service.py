@@ -28,7 +28,11 @@ from app.services.environments.adapters.base import LocalFilesAccessInterface
 ALLOWED_VIEW_TYPES = {"webapp", "latest_session", "latest_tasks", "agent_env_file", "agent_component"}
 AGENT_COMPONENT_VIEW_TYPE = "agent_component"
 MAX_DASHBOARDS_PER_USER = 10
+# Cinna Desktop's backing dashboards (one per desktop dashboard and device);
+# they never count toward the web limit above.
+MAX_DESKTOP_DASHBOARDS_PER_USER = 50
 MAX_BLOCKS_PER_DASHBOARD = 20
+DASHBOARD_LIMITS = {"web": MAX_DASHBOARDS_PER_USER, "desktop": MAX_DESKTOP_DASHBOARDS_PER_USER}
 
 
 def _utc_now() -> datetime:
@@ -68,9 +72,10 @@ class PromptActionNotFoundError(UserDashboardError):
 
 
 class DashboardLimitExceededError(UserDashboardError):
-    def __init__(self) -> None:
+    def __init__(self, origin: str = "web") -> None:
+        kind = "Cinna Desktop dashboards" if origin == "desktop" else "dashboards"
         super().__init__(
-            f"Maximum of {MAX_DASHBOARDS_PER_USER} dashboards allowed per user",
+            f"Maximum of {DASHBOARD_LIMITS.get(origin, MAX_DASHBOARDS_PER_USER)} {kind} allowed per user",
             status_code=409,
         )
 
@@ -164,11 +169,16 @@ class UserDashboardService:
     # ── Dashboard CRUD ───────────────────────────────────────────────────
 
     @staticmethod
-    def list_dashboards(session: Session, owner_id: UUID) -> list[UserDashboard]:
-        """List all dashboards for a user, ordered by sort_order, with blocks and prompt_actions eagerly loaded."""
+    def list_dashboards(
+        session: Session, owner_id: UUID, origin: str | None = "web"
+    ) -> list[UserDashboard]:
+        """List a user's dashboards of one origin (``None``: all), ordered by sort_order,
+        with blocks and prompt_actions eagerly loaded."""
+        statement = select(UserDashboard).where(UserDashboard.owner_id == owner_id)
+        if origin is not None:
+            statement = statement.where(UserDashboard.origin == origin)
         statement = (
-            select(UserDashboard)
-            .where(UserDashboard.owner_id == owner_id)
+            statement
             .order_by(UserDashboard.sort_order)
             .options(
                 selectinload(UserDashboard.blocks).selectinload(UserDashboardBlock.prompt_actions)  # type: ignore[attr-defined]
@@ -180,12 +190,15 @@ class UserDashboardService:
     def create_dashboard(
         session: Session, owner_id: UUID, data: UserDashboardCreate
     ) -> UserDashboard:
-        """Create a new dashboard for a user."""
+        """Create a new dashboard for a user; each origin has its own limit."""
+        origin = data.origin
         existing = session.exec(
-            select(UserDashboard).where(UserDashboard.owner_id == owner_id)
+            select(UserDashboard).where(
+                UserDashboard.owner_id == owner_id, UserDashboard.origin == origin
+            )
         ).all()
-        if len(existing) >= MAX_DASHBOARDS_PER_USER:
-            raise DashboardLimitExceededError()
+        if len(existing) >= DASHBOARD_LIMITS[origin]:
+            raise DashboardLimitExceededError(origin)
 
         sort_order = max((d.sort_order for d in existing), default=-1) + 1
         dashboard = UserDashboard(
@@ -193,6 +206,7 @@ class UserDashboardService:
             description=data.description,
             owner_id=owner_id,
             sort_order=sort_order,
+            origin=origin,
         )
         session.add(dashboard)
         session.commit()

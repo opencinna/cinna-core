@@ -122,6 +122,7 @@ class ChannelIngestionService:
         external_message_id: str | None = None,
         channel_reply_target: dict[str, Any] | None = None,
         client_message_id: str | None = None,
+        dashboard_context: str | None = None,
     ) -> IngestionResult:
         """Run the full inbound ingestion flow (plan §4.1).
 
@@ -138,6 +139,9 @@ class ChannelIngestionService:
         ``_STAMPABLE_COLUMNS``. Ignored on resume.
 
         Args:
+            dashboard_context: Already sanitised dashboard context
+                (``dashboard_context.sanitize``), passed to
+                ``send_session_message``; only for a session with a dashboard.
             uploader_user_id: Who actually uploaded the files in ``file_ids``,
                 when that is not the session owner. **Never request data and
                 never a value a caller computes from a payload.** There is
@@ -208,6 +212,7 @@ class ChannelIngestionService:
             external_message_id=external_message_id,
             channel_reply_target=channel_reply_target,
             client_message_id=client_message_id,
+            dashboard_context=dashboard_context,
         )
 
         # Step 4: map the dict return into `IngestionResult`. `message` is a

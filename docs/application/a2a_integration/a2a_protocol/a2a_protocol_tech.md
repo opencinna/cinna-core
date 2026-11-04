@@ -126,7 +126,8 @@ Hook methods — subclasses override to customize access control and session sta
 - `_task_list_access_token_filter()` - DB-level `access_token_id` filter for tasks/list
 - `_task_list_filter(session)` - In-memory filter for tasks/list results
 - `_wrap_env_error(exc)` - Shape env-readiness errors for the caller
-- `_stream_scope_error(exc, request_id)` - Optionally surface scope violations as inline SSE errors (default: propagate)
+- `_stream_scope_error(exc, request_id)` - Optionally surface scope violations as inline SSE errors (default: an `A2ARequestError` becomes an SSE error, anything else propagates)
+- `_check_message_session(thread_key, message_data)` - Not a hook; runs on `message/send` and `message/stream` right after `_parse_session_scope` on both surfaces. A resumed session must be this agent's (else `A2ARequestError`, `-32001`), and `message.metadata.cinna_dashboard_context` is returned sanitised for a session with a `dashboard_id` (else dropped; a bad one is `-32602`), see [Agent Components tech](../../user_dashboards/agent_components_tech.md). `A2ARequestError` carries its `jsonrpc_code`; the default `_stream_scope_error` renders it as an SSE error and both dispatchers map it on `message/send`
 - `_extract_client_message_id(message_data)` - Reads `messageId`/`message_id`; keeps it only if it's a non-blank string of at most 255 characters, else `None` (logged at debug level)
 
 Uses `SessionService` for session operations (no direct DB queries); streaming delegated to unified `SessionStreamProcessor`.

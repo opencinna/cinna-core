@@ -432,6 +432,7 @@ def test_agent_scoped_list_get_run_and_frame(
         "dashboard_id": t["dashboard"]["id"],
         "dashboard_name": t["dashboard"]["name"],
         "block_id": t["block"]["id"],
+        "origin": "web",
     }]
     assert by_name["page"]["placements"] == []
 

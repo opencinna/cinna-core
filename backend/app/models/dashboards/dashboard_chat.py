@@ -131,6 +131,8 @@ class ComponentRefComponent(SQLModel):
 class ComponentRefPlacement(SQLModel):
     dashboard_id: uuid.UUID
     name: str
+    # ``desktop``: a Cinna Desktop backing dashboard (not shown on the web).
+    origin: str = "web"
 
 
 class ComponentRefResolved(SQLModel):

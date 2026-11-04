@@ -248,13 +248,27 @@ function AddButton({
   )
 }
 
-/** "On Ops and Home", "On Ops, Home and 3 more"; nothing when it is on none. */
+/**
+ * "On Ops and Home", "On Ops, Home and 3 more"; nothing when it is on none.
+ * Cinna Desktop's dashboards are not on the web: they show once, unlinked,
+ * as "Cinna Desktop".
+ */
 function Placements({
   placements,
 }: {
   placements: ComponentRefResolved["placements"]
 }) {
-  const list = placements ?? []
+  const all = placements ?? []
+  const list: { key: string; name: string; dashboardId?: string }[] = all
+    .filter((p) => p.origin !== "desktop")
+    .map((p) => ({
+      key: p.dashboard_id,
+      name: p.name,
+      dashboardId: p.dashboard_id,
+    }))
+  if (all.some((p) => p.origin === "desktop")) {
+    list.push({ key: "desktop", name: "Cinna Desktop" })
+  }
   if (list.length === 0) return null
   const shown = list.slice(0, 2)
   const more = list.length - shown.length
@@ -262,15 +276,19 @@ function Placements({
     <p className="mt-1 truncate text-xs text-muted-foreground">
       On{" "}
       {shown.map((p, i) => (
-        <Fragment key={p.dashboard_id}>
+        <Fragment key={p.key}>
           {i > 0 && (more > 0 ? ", " : " and ")}
-          <Link
-            to="/dashboards/$dashboardId"
-            params={{ dashboardId: p.dashboard_id }}
-            className="text-foreground hover:underline"
-          >
-            {p.name}
-          </Link>
+          {p.dashboardId ? (
+            <Link
+              to="/dashboards/$dashboardId"
+              params={{ dashboardId: p.dashboardId }}
+              className="text-foreground hover:underline"
+            >
+              {p.name}
+            </Link>
+          ) : (
+            <span className="text-foreground">{p.name}</span>
+          )}
         </Fragment>
       ))}
       {more > 0 && ` and ${more} more`}
