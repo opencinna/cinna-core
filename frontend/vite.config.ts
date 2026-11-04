@@ -26,6 +26,11 @@ export default defineConfig(({ mode }) => {
           target: apiUrl,
           changeOrigin: true,
         },
+        // Dashboard component frames (/d/v/<cap>/…), same content host as /a/.
+        "^/d/": {
+          target: apiUrl,
+          changeOrigin: true,
+        },
       },
     },
     resolve: {

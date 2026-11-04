@@ -337,6 +337,61 @@ class EnvironmentTestAdapter(EnvironmentAdapter):
         import json
         return 200, json.dumps({"result": "ok", "endpoint": endpoint}).encode()
 
+    # --- Dashboard components (env-core /dashboards/*) ---
+    #
+    # Scenario tests set these to drive the dashboards services:
+    #   dashboard_components    — the ``components`` list ``/dashboards/components`` returns
+    #   dashboard_files         — {(component, skill, path): (content_type, bytes)}
+    #   dashboard_source_files  — {(component, skill): (content_type, bytes)}
+    #   dashboard_run_results   — {(component, endpoint): body dict, or a callable
+    #                              (params) -> body dict}; default ``{"ok": True,
+    #                              "value": {"markdown": "ok"}}``
+    # and read ``dashboard_run_calls`` to assert what ran (and with which params).
+    # Add "/dashboards/components" or "/dashboards/run" to
+    # ``unsupported_endpoints`` for a pre-feature container.
+
+    async def list_dashboard_components(self) -> dict:
+        self._require_endpoint("/dashboards/components")
+        return {"components": list(getattr(self, "dashboard_components", None) or [])}
+
+    async def read_dashboard_file(
+        self, component: str, skill: str | None, path: str
+    ) -> tuple[int, str | None, bytes]:
+        files = getattr(self, "dashboard_files", None) or {}
+        hit = files.get((component, skill, path))
+        if hit is None:
+            return 404, "application/json", b'{"detail":"Not found"}'
+        return 200, hit[0], hit[1]
+
+    async def run_dashboard_endpoint(
+        self,
+        component: str,
+        skill: str | None,
+        endpoint: str,
+        params: dict,
+        timeout: int | None = None,
+    ) -> dict:
+        self._require_endpoint("/dashboards/run")
+        if not hasattr(self, "dashboard_run_calls"):
+            self.dashboard_run_calls = []
+        self.dashboard_run_calls.append(
+            {"component": component, "skill": skill, "endpoint": endpoint, "params": dict(params)}
+        )
+        results = getattr(self, "dashboard_run_results", None) or {}
+        result = results.get((component, endpoint))
+        if result is None:
+            return {"ok": True, "value": {"markdown": "ok"}}
+        return result(params) if callable(result) else result
+
+    async def read_dashboard_source_file(
+        self, component: str, skill: str | None
+    ) -> tuple[int, str | None, bytes]:
+        files = getattr(self, "dashboard_source_files", None) or {}
+        hit = files.get((component, skill))
+        if hit is None:
+            return 404, "application/json", b'{"detail":"Not found"}'
+        return 200, hit[0], hit[1]
+
     # --- Agent REST API (cinna_api) ---
 
     agent_api_state: str = "running"

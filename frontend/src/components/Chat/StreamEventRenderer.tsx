@@ -8,9 +8,11 @@ import type { StreamEvent } from "@/hooks/useSessionStreaming"
 interface StreamEventRendererProps {
   events: StreamEvent[]
   conversationModeUi?: string
+  /** `false` while the text is still streaming: component references stay plain text. */
+  refCards?: boolean
 }
 
-export function StreamEventRenderer({ events, conversationModeUi = "detailed" }: StreamEventRendererProps) {
+export function StreamEventRenderer({ events, conversationModeUi = "detailed", refCards = true }: StreamEventRendererProps) {
   if (!events || events.length === 0) {
     return null
   }
@@ -35,6 +37,7 @@ export function StreamEventRenderer({ events, conversationModeUi = "detailed" }:
             <MarkdownRenderer
               key={key}
               content={event.content}
+              refCards={refCards}
               className="prose dark:prose-invert max-w-none prose-p:leading-normal prose-p:my-2 prose-ul:my-2 prose-li:my-0"
             />
           )

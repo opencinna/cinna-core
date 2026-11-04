@@ -55,7 +55,9 @@ Indexes: `ix_user_dashboard_owner_id` (owner_id), `ix_user_dashboard_owner_sort`
 
 Indexes: `ix_user_dashboard_block_dashboard_id` (dashboard_id), `ix_user_dashboard_block_agent_id` (agent_id)
 
-Note: `config` stores view-type-specific settings. For `agent_env_file` blocks: `{"file_path": "<relative-path>"}` — the environment is resolved automatically from the agent's `active_environment_id` (no `env_id` stored in config). For other view types, `config` is currently unused.
+Note: `config` stores view-type-specific settings. For `agent_env_file` blocks: `{"file_path": "<relative-path>"}` — the environment is resolved automatically from the agent's `active_environment_id` (no `env_id` stored in config). For `agent_component` blocks: `AgentComponentBlockConfig` (`component`, `skill`, `params`, `refresh` overrides). For other view types, `config` is currently unused. `view_type` is `latest_session`, `latest_tasks`, `webapp`, `agent_env_file` or `agent_component`.
+
+Agent-component blocks add the `user_dashboard_block_result` and `dashboard_tile_runtime` tables and a `session.dashboard_id` column; see [Agent Components tech](agent_components_tech.md).
 
 Note: The `agent_id` foreign key (`foreign_key="agent.id"` with `ondelete="CASCADE"`) was added via a separate migration after initial table creation.
 
@@ -117,6 +119,8 @@ UserDashboardBlockPromptActionPublic — id, block_id, prompt_text, label, sort_
 | GET | `/agent-env-files` | List workspace files by agent_id (query: `agent_id`, `subfolder`) — no block required | `list[str]` |
 | GET | `/{dashboard_id}/blocks/{block_id}/env-files` | List workspace files in a subfolder (query: `subfolder`, default `files`) | `list[str]` |
 | GET | `/{dashboard_id}/blocks/{block_id}/env-file` | Stream workspace file content for an agent_env_file block | `StreamingResponse` (text/plain) |
+
+Agent-component tile routes (`/{dashboard_id}/blocks/{block_id}/component/*`), the dashboard chat routes (`/{dashboard_id}/chat`, `/component-refs/resolve`) and the agent-scoped component routes are documented in [Agent Components tech](agent_components_tech.md). On add/update of a block, `UserDashboardService.add_block_checked` / `update_block_checked` validate `agent_component` config (component present, params fit, credentials) and the routes are async.
 
 The `/latest-session` route path uses the literal segment `/latest-session` to avoid conflicting with the `/{action_id}` prompt-action routes. It verifies dashboard ownership, then calls `SessionService.get_recent_block_session()` which queries sessions by `dashboard_block_id`, `user_id`, and `last_message_at >= now - 12h`. Returns 404 if no qualifying session is found.
 
@@ -429,6 +433,8 @@ Creates `user_dashboard` and `user_dashboard_block` tables with all columns, for
 **`b8c9d0e1f2g3`**: Adds `show_header` boolean column (NOT NULL, server default `false`) to `user_dashboard_block`.
 
 **`361c33705d15`**: Creates `user_dashboard_block_prompt_action` table with `id`, `block_id` (FK CASCADE), `prompt_text`, `label`, `sort_order`, `created_at`, `updated_at`. Creates index on `block_id`.
+
+**`056d6b9d9f87`**: `add_dashboard_components`. Creates `dashboard_tile_runtime` and `user_dashboard_block_result`, adds `session.dashboard_id` (FK SET NULL, indexed) and backfills it from `dashboard_block_id`.
 
 **`b3029a8e84ac`**: Adds `dashboard_block_id` (UUID, nullable) to the `session` table with FK → `user_dashboard_block.id` (`ondelete="SET NULL"`) and index `ix_session_dashboard_block_id`. This column tags sessions created from prompt actions so the latest-session endpoint can retrieve them efficiently.
 

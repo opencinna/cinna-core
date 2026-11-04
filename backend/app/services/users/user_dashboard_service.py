@@ -17,13 +17,16 @@ from app.models.users.user_dashboard import (
     UserDashboardBlockPromptAction,
     UserDashboardBlockPromptActionCreate,
     UserDashboardBlockPromptActionUpdate,
+    AgentComponentBlockConfig,
 )
+from pydantic import ValidationError
 from app.models.agents.agent import Agent
 from app.models.environments.environment import AgentEnvironment
 from app.services.environments.environment_service import EnvironmentService
 from app.services.environments.adapters.base import LocalFilesAccessInterface
 
-ALLOWED_VIEW_TYPES = {"webapp", "latest_session", "latest_tasks", "agent_env_file"}
+ALLOWED_VIEW_TYPES = {"webapp", "latest_session", "latest_tasks", "agent_env_file", "agent_component"}
+AGENT_COMPONENT_VIEW_TYPE = "agent_component"
 MAX_DASHBOARDS_PER_USER = 10
 MAX_BLOCKS_PER_DASHBOARD = 20
 
@@ -104,6 +107,11 @@ class EnvironmentNotReadyError(UserDashboardError):
             f"Environment must be running to access this file (current status: {status})",
             status_code=400,
         )
+
+
+class InvalidComponentConfigError(UserDashboardError):
+    def __init__(self, message: str):
+        super().__init__(message, status_code=400)
 
 
 class InvalidPathError(UserDashboardError):
@@ -267,6 +275,10 @@ class UserDashboardService:
                 "Web App is not enabled for this agent. Enable it in agent settings first."
             )
 
+        config = data.config
+        if data.view_type == AGENT_COMPONENT_VIEW_TYPE:
+            config = UserDashboardService.normalize_agent_component_config(config)
+
         if data.view_type == "agent_env_file":
             if not agent.active_environment_id:
                 raise AgentAccessError(
@@ -284,12 +296,126 @@ class UserDashboardService:
             grid_y=data.grid_y,
             grid_w=data.grid_w,
             grid_h=data.grid_h,
-            config=data.config,
+            config=config,
         )
         session.add(block)
         session.commit()
         session.refresh(block)
         return block
+
+    @staticmethod
+    def normalize_agent_component_config(config: dict | None) -> dict:
+        """Validate an ``agent_component`` block's config shape; returns it as stored.
+
+        ``refresh`` keeps only the overrides that are set (``on_app_start`` is
+        refused: it is never stored).
+        """
+        try:
+            parsed = AgentComponentBlockConfig.model_validate(config or {})
+        except ValidationError as e:
+            first = e.errors()[0]
+            where = ".".join(str(part) for part in first.get("loc", ()))
+            raise InvalidComponentConfigError(
+                f"Invalid component config{f' ({where})' if where else ''}: {first.get('msg')}"
+            )
+        stored = parsed.model_dump(exclude={"refresh"})
+        stored["refresh"] = parsed.refresh.model_dump(exclude_none=True)
+        return stored
+
+    @staticmethod
+    async def check_agent_component_block(
+        session: Session, owner_id: UUID, agent_id: UUID, config: dict | None
+    ) -> dict:
+        """Full check of an ``agent_component`` block before it is stored.
+
+        The agent is the owner's, the component exists in it, and the config
+        and its params are valid. Wakes a suspended environment (the add
+        dialog lists components first, so it normally runs already).
+        """
+        from app.services.dashboards import component_params
+        from app.services.dashboards.component_service import (
+            ComponentService,
+            DashboardComponentError,
+        )
+
+        stored = UserDashboardService.normalize_agent_component_config(config)
+        agent = session.get(Agent, agent_id)
+        if not agent or agent.owner_id != owner_id:
+            raise AgentAccessError()
+        try:
+            entry = await ComponentService.get_component(
+                session, agent, stored["component"], stored.get("skill")
+            )
+        except DashboardComponentError as e:
+            if e.code == "not_found":
+                raise InvalidComponentConfigError(
+                    f"The agent has no component {stored['component']}."
+                )
+            raise InvalidComponentConfigError(e.message)
+        spec = ComponentService.spec(entry)
+        errors = component_params.validate(spec.get("params"), stored["params"])
+        if errors:
+            raise InvalidComponentConfigError(errors[0].message)
+        stored["params"] = component_params.clean(stored["params"])
+        return stored
+
+    @staticmethod
+    async def add_block_checked(
+        session: Session,
+        dashboard_id: UUID,
+        owner_id: UUID,
+        data: UserDashboardBlockCreate,
+    ) -> UserDashboardBlock:
+        """``add_block``, with the async component check for ``agent_component`` blocks."""
+        if data.view_type == AGENT_COMPONENT_VIEW_TYPE:
+            # Limits and dashboard ownership first: no environment call for a refused add.
+            dashboard = UserDashboardService.get_dashboard(session, dashboard_id, owner_id)
+            if len(dashboard.blocks) >= MAX_BLOCKS_PER_DASHBOARD:
+                raise BlockLimitExceededError()
+            config = await UserDashboardService.check_agent_component_block(
+                session, owner_id, data.agent_id, data.config
+            )
+            data = data.model_copy(update={"config": config})
+        return UserDashboardService.add_block(session, dashboard_id, owner_id, data)
+
+    @staticmethod
+    async def update_block_checked(
+        session: Session,
+        dashboard_id: UUID,
+        block_id: UUID,
+        owner_id: UUID,
+        data: UserDashboardBlockUpdate,
+    ) -> UserDashboardBlock:
+        """``update_block``, re-checking an ``agent_component`` block's config when it changes."""
+        UserDashboardService.get_dashboard(session, dashboard_id, owner_id)
+        block = UserDashboardService._get_block(session, dashboard_id, block_id)
+        fields = data.model_fields_set
+        view_type = data.view_type if "view_type" in fields and data.view_type else block.view_type
+        if view_type == AGENT_COMPONENT_VIEW_TYPE and (
+            "config" in fields or block.view_type != AGENT_COMPONENT_VIEW_TYPE
+        ):
+            config = data.config if "config" in fields else block.config
+            checked = await UserDashboardService.check_agent_component_block(
+                session, owner_id, block.agent_id, config
+            )
+            data = data.model_copy(update={"config": checked})
+            previous = block.config if isinstance(block.config, dict) else {}
+            if block.view_type != AGENT_COMPONENT_VIEW_TYPE or (
+                (previous.get("component"), previous.get("skill") or None)
+                != (checked["component"], checked.get("skill") or None)
+            ):
+                # Another component: the cached result is not its data.
+                UserDashboardService._drop_component_result(session, block.id)
+        return UserDashboardService.update_block(session, dashboard_id, block_id, owner_id, data)
+
+    @staticmethod
+    def _drop_component_result(session: Session, block_id: UUID) -> None:
+        from app.models.dashboards.dashboard_component import UserDashboardBlockResult
+
+        row = session.get(UserDashboardBlockResult, block_id)
+        if row is not None:
+            session.delete(row)
+            session.flush()
 
     @staticmethod
     def update_block(

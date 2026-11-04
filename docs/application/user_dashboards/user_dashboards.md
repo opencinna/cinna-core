@@ -9,7 +9,7 @@ docs:
 
 ## Overview
 
-User Dashboards provide a customizable grid-based control panel where users can monitor multiple agents at a glance. Each dashboard is a named collection of **blocks**, where each block is tied to a specific agent and renders one of three view types: embedded webapp, latest session summary, or latest tasks list.
+User Dashboards provide a customizable grid-based control panel where users can monitor multiple agents at a glance. Each dashboard is a named collection of **blocks**, where each block is tied to a specific agent and renders one of several view types: embedded webapp, latest session summary, latest tasks list, an agent env file, or one of the agent's own dashboard components.
 
 Dashboards are intentionally **workspace-independent** — any agent a user owns can be added to any dashboard regardless of which workspace it belongs to.
 
@@ -126,7 +126,11 @@ Blocks have two visual modes:
 | `webapp` | Embeds the agent's web application in an iframe using the authenticated owner preview route. Only available when the agent has `webapp_enabled = true`. |
 | `agent_env_file` | Displays the content of a workspace file from the agent's active environment (resolved automatically from `active_environment_id`). The user selects a file path from the file picker; no environment selector is needed. Supports CSV, Markdown, JSON, TXT, and LOG files with syntax-appropriate viewers; other file types render as plain text. File content is read directly from the local filesystem (no running container required for DockerEnvironmentAdapter). |
 
-Block content auto-refreshes every 30 seconds.
+| `agent_component` | Shows a dashboard component the agent ships (markdown, table, list, metrics or an html page) with cached, refreshable data and agent-driven highlights. See **[Agent Components](agent_components.md)**. |
+
+Block content auto-refreshes every 30 seconds, except `agent_component` tiles, which follow their own refresh rules.
+
+A dashboard that holds component tiles also hosts a **dashboard chat** with the agents behind them, in which the agent can read and change those tiles; see [Agent Components](agent_components.md#dashboard-chat-and-the-context-block). The panel is a docked right column on the dashboard page (a sheet on narrow screens), hidden in edit mode and on fullscreen.
 
 ---
 
@@ -264,4 +268,5 @@ The active dashboard is highlighted with an accent background and check icon in 
 - **Chat interface aspect docs**: Full prompt actions behavior documented in **[Dashboard Prompt Actions](../chat_interface/dashboard_prompt_actions.md)** (business logic) and **[tech](../chat_interface/dashboard_prompt_actions_tech.md)**
 - **Agent Env File — file listing**: `AddBlockDialog` and `EditBlockDialog` call `GET /api/v1/dashboards/{id}/blocks/{block_id}/env-files?subfolder=files` to list available workspace files for the file picker
 - **Agent Env File — file streaming**: `AgentEnvFileView` calls `GET /api/v1/dashboards/{id}/blocks/{block_id}/env-file?path={filePath}` to stream workspace file content. Uses `refetchInterval: 30000` (React Query key: `["dashboardBlockEnvFile", dashboardId, blockId, filePath]`)
+- **Agent components**: `agent_component` blocks, the dashboard chat and the `/d/` frame host are documented in [Agent Components](agent_components.md) and its [tech reference](agent_components_tech.md)
 - **Agent Env File — environment resolution**: The backend resolves the agent's active environment automatically via `agent.active_environment_id` — no environment selector is needed in the frontend dialogs

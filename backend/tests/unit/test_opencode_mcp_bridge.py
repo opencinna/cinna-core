@@ -557,3 +557,64 @@ class TestOpenCodeConfigMaterialization:
         ad._materialize_opencode_config(mode_cfg)
         assert not (ad._runtime_dir / "command" / "old.md").exists()  # stale removed
         assert (ad._runtime_dir / "command" / "new.md").exists()  # fresh present
+
+
+# ---------------------------------------------------------------------------
+# cinna_server.py — dashboard tile tools (Dashboards C2, P5)
+# ---------------------------------------------------------------------------
+
+class TestCinnaServerDashboardTools:
+    """The `cinna` bridge lists the tile tools in conversation mode only and
+    returns their JSON as text plus structuredContent."""
+
+    _DASH = ("dashboards_tiles", "dashboards_update_tile")
+
+    @staticmethod
+    def _load():
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "cinna_server_dashboards_bridge", _BRIDGE_DIR / "cinna_server.py"
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    @staticmethod
+    def _request(server, request_type, request):
+        import asyncio
+        return asyncio.run(server.request_handlers[request_type](request)).root
+
+    def _list(self, mod):
+        import mcp.types as t
+        result = self._request(mod.build_server(), t.ListToolsRequest, t.ListToolsRequest(method="tools/list"))
+        return [tool.name for tool in result.tools]
+
+    def test_conversation_mode_lists_the_tile_tools(self, monkeypatch):
+        monkeypatch.setenv("CINNA_OPENCODE_MODE", "conversation")
+        assert set(self._DASH) <= set(self._list(self._load()))
+
+    def test_building_mode_lists_no_tile_tools(self, monkeypatch):
+        monkeypatch.setenv("CINNA_OPENCODE_MODE", "building")
+        assert not set(self._DASH) & set(self._list(self._load()))
+
+    def test_success_result_has_text_and_structured_content(self, monkeypatch, tmp_path):
+        import mcp.types as t
+        monkeypatch.setenv("CINNA_OPENCODE_MODE", "conversation")
+        ctx = tmp_path / "session_context.json"
+        ctx.write_text(json.dumps({"backend_session_id": "sess-1", "dashboard_id": "d1"}))
+        mod = self._load()
+        monkeypatch.setattr(mod, "SESSION_CONTEXT_PATH", ctx)
+
+        body = {"tiles": [{"tile_id": "t1"}]}
+        client = MagicMock()
+        client.call_result.return_value = MagicMock(text=json.dumps(body), is_error=False, structured=body)
+        server = mod.build_server(dashboards_client=client)
+        result = self._request(
+            server, t.CallToolRequest,
+            t.CallToolRequest(method="tools/call", params=t.CallToolRequestParams(name="dashboards_tiles", arguments={})),
+        )
+
+        client.call_result.assert_called_once_with("dashboards_tiles", {}, "sess-1")
+        assert result.isError is False
+        assert result.structuredContent == body
+        assert json.loads(result.content[0].text) == body

@@ -82,12 +82,14 @@ from .opencode_event_transformer import (
 )
 from .tool_name_registry import (
     CINNA_ARTIFACT_TOOL_NAMES_CLAUDE,
+    CINNA_DASHBOARD_TOOL_NAMES_CLAUDE,
     CINNA_TASK_TOOL_NAMES_CLAUDE,
     normalize_tool_name,
 )
 from ..prompt_generator import PromptGenerator
 from ..active_session_manager import active_session_manager
 from ..agent_env_service import AgentEnvService
+from ..tools.cinna_dashboards_protocol import dashboards_schema_path, verified_dashboard_id
 
 
 # ---------------------------------------------------------------------------
@@ -125,11 +127,46 @@ OPENCODE_PROGRESS_TIMEOUT = 120  # seconds
 OPENCODE_RUNTIME_DIR_TEMPLATE = "/tmp/.opencode_{mode}"
 OPENCODE_AGENTS_MD_FILENAME = "AGENTS.md"
 
+# Per-OpenCode-session copies of session_context.json, keyed by session id
+# (resolved by the cinna bridge from the id the session plugin stamps on a call).
+SESSION_CONTEXT_DIRNAME = "session_context"
+
+# The OpenCode plugin that stamps the calling session id onto dashboard tile
+# calls (see the file's header).
+CINNA_SESSION_PLUGIN_PATH = (
+    Path(__file__).resolve().parents[1] / "tools" / "mcp_bridge" / "cinna_session_plugin.js"
+)
+
 # OpenCode built-in tools exposed to users
 OPENCODE_BUILTIN_TOOLS = [
     "bash", "read", "write", "edit", "glob", "grep",
     "list", "patch", "webfetch", "websearch",
 ]
+
+
+def _is_safe_session_id(session_id: Optional[str]) -> bool:
+    """An OpenCode session id usable as a file name (``ses_…``: letters, digits, ``_``, ``-``)."""
+    return bool(session_id) and all((ch.isascii() and ch.isalnum()) or ch in "_-" for ch in session_id) and len(session_id) <= 128
+
+
+def _prune_session_contexts(runtime_dir: Path) -> int:
+    """Remove every per-session context file under ``runtime_dir``; returns how many.
+
+    Called when this mode's ``opencode serve`` starts: no turn of this mode is
+    in flight then, and every message rewrites its session's file before it is
+    posted, so none of the old files is still needed.
+    """
+    removed = 0
+    directory = runtime_dir / SESSION_CONTEXT_DIRNAME
+    if not directory.is_dir():
+        return 0
+    for path in directory.glob("*.json"):
+        try:
+            path.unlink()
+            removed += 1
+        except OSError as exc:
+            logger.warning("Could not remove %s: %s", path.name, exc)
+    return removed
 
 
 # ---------------------------------------------------------------------------
@@ -249,6 +286,7 @@ class OpenCodeAdapter(BaseSDKAdapter):
         # Ensure the runtime directory exists (writable, unlike OPENCODE_CONFIG_DIR
         # which is mounted read-only via the /app/core:ro volume).
         self._runtime_dir.mkdir(parents=True, exist_ok=True)
+        _prune_session_contexts(self._runtime_dir)
 
         # Symlink static config files from the read-only per-mode config dir
         # into the writable runtime dir so opencode finds everything in one place.
@@ -290,6 +328,8 @@ class OpenCodeAdapter(BaseSDKAdapter):
             "OPENCODE_SKIP_UPDATE": "1",
             "OPENCODE_CONFIG": str(self._runtime_dir / "opencode.json"),
             "CINNA_SESSION_CONTEXT_PATH": str(self._runtime_dir / "session_context.json"),
+            # The cinna bridge serves the dashboard tile tools in conversation only.
+            "CINNA_OPENCODE_MODE": self._mode,
         }
 
         # cwd stays at the runtime dir (where the adapter writes opencode.json,
@@ -579,6 +619,7 @@ class OpenCodeAdapter(BaseSDKAdapter):
         self,
         opencode_session_id: str,
         backend_session_id: Optional[str],
+        session_state: Optional[dict] = None,
     ) -> None:
         """
         Write session context for MCP bridge servers.
@@ -586,14 +627,26 @@ class OpenCodeAdapter(BaseSDKAdapter):
         The MCP bridge servers (knowledge_server.py, cinna_server.py)
         read this file at tool-call time to obtain the
         current backend_session_id without needing to be passed it at startup.
+        ``dashboard_id`` is the chat's dashboard from the HMAC-verified session
+        context ("" when unverified or absent); the backend re-checks it on
+        every dashboard tool call.
         """
         context = {
             "opencode_session_id": opencode_session_id,
             "backend_session_id": backend_session_id or "",
+            "dashboard_id": verified_dashboard_id(session_state) or "",
         }
         context_path = self._runtime_dir / "session_context.json"
         self._runtime_dir.mkdir(parents=True, exist_ok=True)
-        context_path.write_text(json.dumps(context, indent=2), encoding="utf-8")
+        payload = json.dumps(context, indent=2)
+        context_path.write_text(payload, encoding="utf-8")
+        # The same context under this session's id, so a call stamped by the
+        # cinna session plugin reaches its own chat even while another
+        # conversation has overwritten the shared file.
+        if _is_safe_session_id(opencode_session_id):
+            per_session_dir = self._runtime_dir / SESSION_CONTEXT_DIRNAME
+            per_session_dir.mkdir(parents=True, exist_ok=True)
+            (per_session_dir / f"{opencode_session_id}.json").write_text(payload, encoding="utf-8")
         logger.debug(
             "Wrote session_context.json (opencode=%s, backend=%s)",
             opencode_session_id,
@@ -705,6 +758,18 @@ class OpenCodeAdapter(BaseSDKAdapter):
                 "OpenCode %s: registered %d plugin skills path(s)",
                 self._mode, len(plugin_skill_dirs),
             )
+
+        # 2b) The cinna session plugin: stamps the calling OpenCode session id
+        #     onto dashboard tile calls so the bridge resolves that session's
+        #     context, not whichever chat wrote session_context.json last.
+        if CINNA_SESSION_PLUGIN_PATH.is_file():
+            plugins = config.get("plugin")
+            if not isinstance(plugins, list):
+                plugins = []
+            spec = CINNA_SESSION_PLUGIN_PATH.as_uri()
+            if spec not in plugins:
+                plugins.append(spec)
+            config["plugin"] = plugins
 
         # 3) Copy plugin command markdown into the runtime command dir.
         self._copy_plugin_commands(artifacts.get("command_files") or [])
@@ -954,7 +1019,7 @@ class OpenCodeAdapter(BaseSDKAdapter):
             await active_session_manager.register_session(session_id, None)
 
             # 4. Write session context so MCP bridge servers can find backend_session_id
-            await self._write_session_context(session_id, backend_session_id)
+            await self._write_session_context(session_id, backend_session_id, session_state)
 
             # 5. Resolve system prompt and write AGENTS.md
             if system_prompt:
@@ -999,6 +1064,12 @@ class OpenCodeAdapter(BaseSDKAdapter):
                 *CINNA_TASK_TOOL_NAMES_CLAUDE,
                 *CINNA_ARTIFACT_TOOL_NAMES_CLAUDE,
             ]
+            # The bridge lists the tile tools in every conversation chat
+            # (OpenCode caches its tool list per bridge process), so they are
+            # advertised the same way; outside a dashboard chat they answer
+            # no_dashboard. A core without the schema serves none.
+            if mode == "conversation" and dashboards_schema_path().is_file():
+                mcp_tool_names.extend(CINNA_DASHBOARD_TOOL_NAMES_CLAUDE)
             for key in self._active_plugin_mcp_keys():
                 mcp_tool_names.append(f"mcp__{key}")
             all_tools.extend(mcp_tool_names)

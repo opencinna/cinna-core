@@ -10,6 +10,8 @@ from app.api.main import api_router
 from app.api.routes.agent_hooks import router as agent_hooks_router
 from app.api.routes.git_http import router as git_http_router
 from app.api.routes.artifact_content import router as artifact_content_router
+from app.api.routes.dashboard_frame_content import router as dashboard_frame_content_router
+from app.core.access_log_filter import install_access_log_filter
 from app.core.artifact_content_middleware import ArtifactContentMiddleware
 from app.core.artifact_upload_limit_middleware import ArtifactUploadLimitMiddleware
 from app.core.robots_middleware import RobotsTagMiddleware
@@ -49,7 +51,15 @@ def custom_generate_unique_id(route: APIRoute) -> str:
 
 
 if settings.SENTRY_DSN and settings.ENVIRONMENT != "local":
-    sentry_sdk.init(dsn=str(settings.SENTRY_DSN), enable_tracing=True)
+    # Content URLs (/a/, /d/) carry a capability and page data: never sent.
+    from app.core.access_log_filter import sentry_before_send, sentry_before_send_transaction
+
+    sentry_sdk.init(
+        dsn=str(settings.SENTRY_DSN),
+        enable_tracing=True,
+        before_send=sentry_before_send,
+        before_send_transaction=sentry_before_send_transaction,
+    )
 
 
 # ── Desktop app instance discovery endpoint ────────────────────────────────
@@ -221,6 +231,8 @@ from app.services.system.status_repair_scheduler import (
 async def lifespan(app: FastAPI):
     """Manage application startup and shutdown."""
     # --- Startup ---
+    # Dashboard frame URLs (/d/…) carry a capability and page data: never log them.
+    install_access_log_filter()
     # Desktop agents (git): a missing / non-executable pre-receive hook means every
     # share is refused (503); say so loudly at boot rather than on first push.
     from app.services.library.git_http_service import GitHttpService
@@ -537,6 +549,11 @@ app.include_router(git_http_router)
 # Artifact content (/a/v/<cap>/<path>, /a/z/<cap>) — no /api/v1 prefix, not in the
 # OpenAPI schema; the view capability in the path is the credential.
 app.include_router(artifact_content_router)
+
+# Dashboard component frames (/d/v/<cap>/<path>) — no /api/v1 prefix, not in the
+# OpenAPI schema; the frame capability in the path is the credential. Shares
+# ArtifactContentMiddleware (CORS, error headers) with /a/.
+app.include_router(dashboard_frame_content_router)
 
 # CLI setup bootstrap endpoint (top-level, short URL for curl oneliner)
 app.include_router(cli_setup_router)

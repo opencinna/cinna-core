@@ -24,6 +24,7 @@ import {
 } from "@/client"
 import { MessageInput } from "@/components/Chat/MessageInput"
 import { MessageList } from "@/components/Chat/MessageList"
+import { ComponentRefChatContext } from "@/components/Chat/componentRefContext"
 import { SubTasksPanel } from "@/components/Chat/SubTasksPanel"
 import { AnimatedPlaceholder } from "@/components/Common/AnimatedPlaceholder"
 import NotFound from "@/components/Common/NotFound"
@@ -902,6 +903,9 @@ function ChatInterface() {
   // Errors are now saved as system messages in the chat and will appear in the message list.
 
   return (
+    <ComponentRefChatContext.Provider
+      value={{ sessionId, seedComposer: restoreMessageText }}
+    >
     <div className="flex flex-col h-full min-h-0">
       <div className="flex flex-col flex-1 min-h-0 relative">
         <MessageList
@@ -945,5 +949,6 @@ function ChatInterface() {
         seed={seed}
       />
     </div>
+    </ComponentRefChatContext.Provider>
   )
 }

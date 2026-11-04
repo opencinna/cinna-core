@@ -1514,6 +1514,53 @@ export type AgentCredentialLinkRequest = {
     credential_id: string;
 };
 
+export type AgentDashboardRef = {
+    id: string;
+    name: string;
+};
+
+export type AgentDashboardTile = {
+    tile_id: string;
+    component: string;
+    skill?: (string | null);
+    title: string;
+    view: string;
+    params: {
+        [key: string]: unknown;
+    };
+    param_specs: {
+        [key: string]: unknown;
+    };
+    can_highlight: boolean;
+    summary?: (string | null);
+    selection?: (Array<(string)> | null);
+};
+
+export type AgentDashboardTilesRequest = {
+    session_id: string;
+};
+
+export type AgentDashboardTilesResult = {
+    dashboard: AgentDashboardRef;
+    tiles: Array<AgentDashboardTile>;
+};
+
+export type AgentDashboardUpdateTileRequest = {
+    session_id: string;
+    tile_id?: unknown;
+    params?: unknown;
+    highlight?: unknown;
+};
+
+export type AgentDashboardUpdateTileResult = {
+    tile_id: string;
+    params: {
+        [key: string]: unknown;
+    };
+    recomputing: boolean;
+    highlighted: boolean;
+};
+
 export type AgentDelegationReport = {
     status: 'in_progress' | 'blocked' | 'done' | 'failed';
     summary: string;
@@ -2129,6 +2176,19 @@ export type AgentTaskStatusUpdate = {
     task?: (string | null);
     source_session_id?: (string | null);
 };
+
+export type AgentTileToolError = {
+    error: AgentTileToolErrorDetail;
+};
+
+export type AgentTileToolErrorDetail = {
+    code: 'not_found' | 'invalid_input' | 'rate_limited' | 'no_dashboard';
+    message: string;
+    field?: (string | null);
+    retry_after_s?: (number | null);
+};
+
+export type code = 'not_found' | 'invalid_input' | 'rate_limited' | 'no_dashboard';
 
 export type AgentUpdate = {
     name?: (string | null);
@@ -3985,6 +4045,46 @@ export type CLITokensPublic = {
     count: number;
 };
 
+export type ComponentRefAgent = {
+    id: string;
+    name: string;
+};
+
+export type ComponentRefComponent = {
+    name: string;
+    skill?: (string | null);
+    title?: (string | null);
+    view?: (string | null);
+};
+
+export type ComponentRefPlacement = {
+    dashboard_id: string;
+    name: string;
+};
+
+export type ComponentRefResolved = {
+    ref: string;
+    status: 'ok' | 'ambiguous' | 'not_installed' | 'gone' | 'invalid' | 'env_asleep' | 'adapter_unsupported';
+    message?: (string | null);
+    agent?: (ComponentRefAgent | null);
+    component?: (ComponentRefComponent | null);
+    from_skill?: (string | null);
+    findings?: Array<DashboardComponentFinding>;
+    placements?: Array<ComponentRefPlacement>;
+    catalog_name?: (string | null);
+};
+
+export type status2 = 'ok' | 'ambiguous' | 'not_installed' | 'gone' | 'invalid' | 'env_asleep' | 'adapter_unsupported';
+
+export type ComponentRefsResolved = {
+    results: Array<ComponentRefResolved>;
+};
+
+export type ComponentRefsResolveRequest = {
+    refs: Array<(string)>;
+    session_id?: (string | null);
+};
+
 /**
  * POST body for ``/confirm-email/`` — the token from the email link.
  */
@@ -4435,6 +4535,149 @@ export type CredentialWithData = {
     };
 };
 
+export type DashboardChatCreate = {
+    agent_id: string;
+    new?: boolean;
+};
+
+/**
+ * The (dashboard, agent) chat session; ``None`` before the first one exists.
+ */
+export type DashboardChatPublic = {
+    session?: (SessionPublic | null);
+};
+
+/**
+ * Error body of every agent-component route: ``{error: {code, message, …}}``.
+ */
+export type DashboardComponentErrorBody = {
+    error: DashboardComponentErrorDetail;
+};
+
+export type DashboardComponentErrorDetail = {
+    code: 'rate_limited' | 'needs_credentials' | 'call_failed' | 'invalid_input' | 'not_found' | 'env_unavailable' | 'adapter_unsupported';
+    message: string;
+    retry_after_s?: (number | null);
+    field?: (string | null);
+};
+
+export type code2 = 'rate_limited' | 'needs_credentials' | 'call_failed' | 'invalid_input' | 'not_found' | 'env_unavailable' | 'adapter_unsupported';
+
+export type DashboardComponentFinding = {
+    path: string;
+    code: string;
+    field?: (string | null);
+    severity: 'error' | 'warning';
+    message: string;
+};
+
+export type severity = 'error' | 'warning';
+
+export type DashboardComponentFrameRequest = {
+    skill?: (string | null);
+    tile_key?: (string | null);
+};
+
+/**
+ * A block on one of the owner's dashboards that shows the component.
+ */
+export type DashboardComponentPlacement = {
+    dashboard_id: string;
+    dashboard_name: string;
+    block_id: string;
+};
+
+export type DashboardComponentPublic = {
+    name: string;
+    skill?: (string | null);
+    title?: (string | null);
+    view?: (string | null);
+    component_json?: ({
+    [key: string]: unknown;
+} | null);
+    findings?: Array<DashboardComponentFinding>;
+    has_errors?: boolean;
+    size_bytes?: number;
+    placements?: Array<DashboardComponentPlacement>;
+};
+
+export type DashboardComponentRunRequest = {
+    skill?: (string | null);
+    endpoint?: (string | null);
+    params?: {
+        [key: string]: unknown;
+    };
+    tile_key?: (string | null);
+};
+
+export type DashboardComponentRunResult = {
+    value?: unknown;
+    fetched_at: string;
+    notice?: (string | null);
+    params_resolved?: {
+        [key: string]: unknown;
+    };
+};
+
+export type DashboardComponentsPublic = {
+    components: Array<DashboardComponentPublic>;
+};
+
+export type DashboardFramePublic = {
+    frame_url: string;
+    expires_at: string;
+};
+
+export type DashboardTileCallRequest = {
+    endpoint: string;
+    params?: {
+        [key: string]: unknown;
+    };
+};
+
+export type DashboardTileCallResult = {
+    value?: unknown;
+};
+
+/**
+ * A tile's cached data and what the page needs to draw it.
+ */
+export type DashboardTileDataPublic = {
+    data?: unknown;
+    stale?: boolean;
+    fetched_at?: (string | null);
+    mark?: (string | null);
+    mark_at?: (string | null);
+    notice?: (string | null);
+    params_resolved?: {
+        [key: string]: unknown;
+    };
+    missing_credentials?: Array<(string)>;
+    skipped?: (string | null);
+};
+
+export type DashboardTilePageStateRequest = {
+    page_doc?: (string | null);
+    highlight_ready?: boolean;
+    seq?: (number | null);
+    if_page_doc?: (string | null);
+};
+
+/**
+ * The tile's whole param set: keys left out (or cleared) go back to their default.
+ */
+export type DashboardTileParamsRequest = {
+    params?: {
+        [key: string]: unknown;
+    };
+};
+
+export type DashboardTileRefreshRequest = {
+    reason: 'open' | 'reshow' | 'manual' | 'interval' | 'after_turn' | 'params';
+};
+
+export type reason2 = 'open' | 'reshow' | 'manual' | 'interval' | 'after_turn' | 'params';
+
 /**
  * Request to execute SQL query on SQLite database
  */
@@ -4604,7 +4847,7 @@ export type DesktopCredentialRefusal = {
     key_status?: (string | null);
 };
 
-export type reason2 = 'not_found' | 'no_access' | 'not_local_category' | 'local_use_not_allowed' | 'unsupported_type' | 'pending_authorization' | 'reauthorization_required' | 'token_unavailable' | 'key_revoked' | 'key_expired' | 'key_paused';
+export type reason3 = 'not_found' | 'no_access' | 'not_local_category' | 'local_use_not_allowed' | 'unsupported_type' | 'pending_authorization' | 'reauthorization_required' | 'token_unavailable' | 'key_revoked' | 'key_expired' | 'key_paused';
 
 export type DesktopMaterializedCredential = {
     id: string;
@@ -4741,7 +4984,7 @@ export type DirectoryEntry = {
 
 export type kind4 = 'skill' | 'plugin' | 'mcp';
 
-export type status2 = 'ready' | 'pending' | 'unsupported';
+export type status3 = 'ready' | 'pending' | 'unsupported';
 
 export type DirectoryMcpInstall = {
     mcp: McpConnectDescriptor;
@@ -6798,6 +7041,7 @@ export type MessageCreate = {
     answers_to_message_id?: (string | null);
     file_ids?: Array<(string)>;
     page_context?: (string | null);
+    dashboard_context?: (string | null);
 };
 
 export type MessagePublic = {
@@ -8017,6 +8261,7 @@ export type SessionPublic = {
     mcp_connector_id?: (string | null);
     mcp_session_id?: (string | null);
     dashboard_block_id?: (string | null);
+    dashboard_id?: (string | null);
     caller_id?: (string | null);
     created_at: string;
     updated_at: string;
@@ -8051,6 +8296,7 @@ export type SessionPublicExtended = {
     mcp_connector_id?: (string | null);
     mcp_session_id?: (string | null);
     dashboard_block_id?: (string | null);
+    dashboard_id?: (string | null);
     caller_id?: (string | null);
     created_at: string;
     updated_at: string;
@@ -8135,7 +8381,7 @@ export type SetupStatusMissingItem = {
     is_ai?: boolean;
 };
 
-export type reason3 = 'placeholder_empty' | 'publisher_credential_missing' | 'publisher_credential_unshared';
+export type reason4 = 'placeholder_empty' | 'publisher_credential_missing' | 'publisher_credential_unshared';
 
 /**
  * Response of ``GET /agents/{agent_id}/setup-status``.
@@ -8150,7 +8396,7 @@ export type SetupStatusResponse = {
     setup_url?: (string | null);
 };
 
-export type status3 = 'ready' | 'needs_setup' | 'publisher_broken';
+export type status4 = 'ready' | 'needs_setup' | 'publisher_broken';
 
 /**
  * Response model for AI credentials shared with the current user.
@@ -8701,7 +8947,7 @@ export type SyncPushResult = {
     server_record?: (SyncRecordPublic | null);
 };
 
-export type status4 = 'applied' | 'conflict' | 'unchanged' | 'rejected';
+export type status5 = 'applied' | 'conflict' | 'unchanged' | 'rejected';
 
 export type SyncRecordPublic = {
     collection: string;
@@ -9110,7 +9356,7 @@ export type UserCreate = {
 
 export type UserDashboardBlockCreate = {
     agent_id: string;
-    view_type?: 'webapp' | 'latest_session' | 'latest_tasks' | 'agent_env_file';
+    view_type?: 'webapp' | 'latest_session' | 'latest_tasks' | 'agent_env_file' | 'agent_component';
     title?: (string | null);
     show_border?: boolean;
     show_header?: boolean;
@@ -9123,7 +9369,7 @@ export type UserDashboardBlockCreate = {
 } | null);
 };
 
-export type view_type = 'webapp' | 'latest_session' | 'latest_tasks' | 'agent_env_file';
+export type view_type = 'webapp' | 'latest_session' | 'latest_tasks' | 'agent_env_file' | 'agent_component';
 
 export type UserDashboardBlockPromptActionCreate = {
     prompt_text: string;
@@ -9167,7 +9413,7 @@ export type UserDashboardBlockPublic = {
 };
 
 export type UserDashboardBlockUpdate = {
-    view_type?: ('webapp' | 'latest_session' | 'latest_tasks' | 'agent_env_file' | null);
+    view_type?: ('webapp' | 'latest_session' | 'latest_tasks' | 'agent_env_file' | 'agent_component' | null);
     title?: (string | null);
     show_border?: (boolean | null);
     show_header?: (boolean | null);
@@ -10336,6 +10582,50 @@ export type AgentCredentialsAgentCredentialAccessTokenData = {
 };
 
 export type AgentCredentialsAgentCredentialAccessTokenResponse = (AgentCredentialAccessTokenResponse);
+
+export type AgentDashboardsListAgentDashboardComponentsData = {
+    agentId: string;
+};
+
+export type AgentDashboardsListAgentDashboardComponentsResponse = (DashboardComponentsPublic);
+
+export type AgentDashboardsGetAgentDashboardComponentData = {
+    agentId: string;
+    name: string;
+    skill?: (string | null);
+};
+
+export type AgentDashboardsGetAgentDashboardComponentResponse = (DashboardComponentPublic);
+
+export type AgentDashboardsRunAgentDashboardComponentData = {
+    agentId: string;
+    name: string;
+    requestBody: DashboardComponentRunRequest;
+};
+
+export type AgentDashboardsRunAgentDashboardComponentResponse = (DashboardComponentRunResult);
+
+export type AgentDashboardsMintAgentDashboardComponentFrameData = {
+    agentId: string;
+    name: string;
+    requestBody: DashboardComponentFrameRequest;
+};
+
+export type AgentDashboardsMintAgentDashboardComponentFrameResponse = (DashboardFramePublic);
+
+export type AgentDashboardsAgentDashboardTilesData = {
+    requestBody: AgentDashboardTilesRequest;
+    xAgentEnvId?: (string | null);
+};
+
+export type AgentDashboardsAgentDashboardTilesResponse = ((AgentDashboardTilesResult | AgentTileToolError));
+
+export type AgentDashboardsAgentDashboardUpdateTileData = {
+    requestBody: AgentDashboardUpdateTileRequest;
+    xAgentEnvId?: (string | null);
+};
+
+export type AgentDashboardsAgentDashboardUpdateTileResponse = ((AgentDashboardUpdateTileResult | AgentTileToolError));
 
 export type AgentGitCheckoutAgentData = {
     requestBody: AgentCheckoutRequest;
@@ -12108,6 +12398,26 @@ export type CredentialsRefreshOauthTokenData = {
 
 export type CredentialsRefreshOauthTokenResponse = (OAuthRefreshResponse);
 
+export type DashboardChatResolveComponentRefsData = {
+    requestBody: ComponentRefsResolveRequest;
+};
+
+export type DashboardChatResolveComponentRefsResponse = (ComponentRefsResolved);
+
+export type DashboardChatGetDashboardChatData = {
+    agentId: string;
+    dashboardId: string;
+};
+
+export type DashboardChatGetDashboardChatResponse = (DashboardChatPublic);
+
+export type DashboardChatOpenDashboardChatData = {
+    dashboardId: string;
+    requestBody: DashboardChatCreate;
+};
+
+export type DashboardChatOpenDashboardChatResponse = (DashboardChatPublic);
+
 export type DashboardsListAgentEnvFilesData = {
     /**
      * Agent ID to list files for
@@ -12237,6 +12547,52 @@ export type DashboardsGetBlockEnvFileData = {
 };
 
 export type DashboardsGetBlockEnvFileResponse = (unknown);
+
+export type DashboardTilesGetDashboardTileDataData = {
+    blockId: string;
+    dashboardId: string;
+};
+
+export type DashboardTilesGetDashboardTileDataResponse = (DashboardTileDataPublic);
+
+export type DashboardTilesRefreshDashboardTileData = {
+    blockId: string;
+    dashboardId: string;
+    requestBody: DashboardTileRefreshRequest;
+};
+
+export type DashboardTilesRefreshDashboardTileResponse = (DashboardTileDataPublic);
+
+export type DashboardTilesSetDashboardTileParamsData = {
+    blockId: string;
+    dashboardId: string;
+    requestBody: DashboardTileParamsRequest;
+};
+
+export type DashboardTilesSetDashboardTileParamsResponse = (DashboardTileDataPublic);
+
+export type DashboardTilesCallDashboardTileEndpointData = {
+    blockId: string;
+    dashboardId: string;
+    requestBody: DashboardTileCallRequest;
+};
+
+export type DashboardTilesCallDashboardTileEndpointResponse = (DashboardTileCallResult);
+
+export type DashboardTilesMintDashboardTileFrameData = {
+    blockId: string;
+    dashboardId: string;
+};
+
+export type DashboardTilesMintDashboardTileFrameResponse = (DashboardFramePublic);
+
+export type DashboardTilesSetDashboardTilePageStateData = {
+    blockId: string;
+    dashboardId: string;
+    requestBody: DashboardTilePageStateRequest;
+};
+
+export type DashboardTilesSetDashboardTilePageStateResponse = (void);
 
 export type DesktopAuthListDesktopClientsResponse = (Array<DesktopOAuthClientPublic>);
 

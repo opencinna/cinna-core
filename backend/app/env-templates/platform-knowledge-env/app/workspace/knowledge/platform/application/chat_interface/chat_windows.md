@@ -107,6 +107,14 @@ One-click chat shortcuts embedded inside dashboard blocks. Clicking a prompt act
 
 Shared component providing GitHub-flavored markdown display with custom code block styling. See **[Markdown Rendering](markdown_rendering.md)** for details.
 
+### Component References
+
+An agent message can mention a dashboard component with a `cinna://component/...` link; it is resolved by the backend and rendered as a card instead of a plain link (grammar and resolve statuses: [Agent Components](../user_dashboards/agent_components.md#references-and-cards)). Rendering a card never wakes an environment.
+
+A paragraph that consists only of a reference (bare on its own line, or a markdown link to one) renders as a `ComponentReferenceCard`. A reference inside running text keeps its words and is not a link; inside backticks or a code block it stays plain code. The markdown renderer's `urlTransform` lets exactly one extra scheme through, `cinna://component/...`; every other URL still goes through the default transform, so `javascript:` and similar stay stripped.
+
+Cards appear only in a chat that provides the reference context (session page and dashboard chat), so never on guest pages or other markdown. They are not drawn while the text is still streaming, because a half-written name is a valid prefix. A message shows cards for the first 20 reference-only paragraphs by document position (a rehype plugin marks them); further references stay plain text. The renderer's component overrides are memoised per mode, so a re-render does not remount cards or close an open Preview or Add dialog. Resolve calls are batched: one queue per session, flushed at the end of each tick, up to 20 refs per request. The card offers Preview and "Add to dashboard..."; on a session page Ask to fix fills that chat's composer. Details: [Agent Components](../user_dashboards/agent_components.md#frontend).
+
 ### Tool Call Blocks
 
 14+ specialized tool renderers dispatched by tool name, with compact mode variants. See **[Tool Rendering](tool_rendering.md)** for the full registry and dispatch logic.
@@ -175,3 +183,4 @@ Key behaviors:
 - **[Ask User Question Widget](tool_answer_questions_widget.md)** — Detailed question answering flow documentation
 - **[Tool Approval Widget](tool_approval_widget.md)** — Tool approval flow from chat messages
 - **[Dashboard Prompt Actions](dashboard_prompt_actions.md)** — In-place chat shortcuts on dashboard blocks, streaming overlay, session reuse
+- **[Agent Components](../user_dashboards/agent_components.md)** — Component reference cards and the dashboard chat 

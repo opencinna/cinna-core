@@ -11,6 +11,9 @@ from .skills_projection import DEFAULT_PLATFORM_SKILLS_DIR
 PLATFORM_TASKS_SKILL = "cinna-tasks"
 PLATFORM_TASKS_SKILL_VERSION = "1"
 
+# The platform-owned dashboards skill; its presence turns on the Dashboards section.
+PLATFORM_DASHBOARDS_SKILL = "cinna-dashboards"
+
 logger = logging.getLogger(__name__)
 
 # Scaffolding files that sit in a ``scripts/`` folder without being a script.
@@ -733,6 +736,37 @@ class PromptGenerator:
             "instead of pasting its contents."
         )
 
+    def _get_dashboards_section(self, session_context: dict | None) -> Optional[str]:
+        """A short Dashboards section, only when the ``cinna-dashboards`` skill is projected.
+
+        The skill explains components; this says how a reference is printed
+        (with this agent's own ``bundle_id`` when the session context has it),
+        that tiles refresh on open, and where the tile tools exist.
+        """
+        if not (self.platform_skills_dir / PLATFORM_DASHBOARDS_SKILL / "SKILL.md").is_file():
+            return None
+        bundle_id = (session_context or {}).get("bundle_id")
+        if bundle_id:
+            reference = (
+                f"- To point the owner at one of your dashboard components, print its reference as "
+                f"plain text: cinna://component/bundle:{bundle_id}/name, where name is the "
+                f"component's folder under dashboards/. Never put it in backticks or a code block: "
+                f"the chat turns the bare reference into a card the owner can add to a dashboard.\n"
+            )
+        else:
+            reference = (
+                "- To point the owner at one of your dashboard components, name the component "
+                "(its folder under dashboards/) in plain words.\n"
+            )
+        return (
+            "\n\n---\n\n## Dashboards\n\n"
+            + reference
+            + "- A tile refreshes itself when the owner opens or re-shows it; you never need to "
+            "push data to it.\n"
+            "- The dashboard tile tools exist only in a chat opened from a dashboard. Anywhere "
+            "else, do not offer to change or highlight tiles.\n"
+        )
+
     def _get_environment_context(self) -> str:
         """
         Get environment context section for both building and conversation modes.
@@ -883,6 +917,10 @@ class PromptGenerator:
             building_prompt += session_context_section
             logger.info("Included session context section in building mode prompt")
 
+        dashboards_section = self._get_dashboards_section(session_context)
+        if dashboards_section:
+            building_prompt += dashboards_section
+
         # Append the per-install personal memory (App Data tier), if any.
         # True no-op when the memory area is empty — zero added tokens.
         personal_memory = self._load_personal_memory()
@@ -979,6 +1017,10 @@ class PromptGenerator:
         if session_context_section:
             conversation_prompt_parts.append(session_context_section)
             logger.info("Included session context section in conversation mode prompt")
+
+        dashboards_section = self._get_dashboards_section(session_context)
+        if dashboards_section:
+            conversation_prompt_parts.append(dashboards_section)
 
         # Append task context if this session is linked to a task
         task_context_section = self.build_task_context_section(session_context)

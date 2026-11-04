@@ -38,7 +38,8 @@
 |------|-----------|---------|
 | `knowledge_query.py` | `query_integration_knowledge` | RAG-based knowledge source query tool |
 | `cinna_tasks_protocol.py` | — | The Cinna Task Protocol's `cinna` tools, engine-agnostic: `load_tool_specs()` reads names, descriptions and input schemas from `/app/core/protocols/tasks.schema.json`; `CinnaTasksClient` forwards each call to `/api/v1/agent/tasks/protocol/*` — see [Cinna Task Tools](cinna_tasks_tools.md) |
-| `cinna_tasks_claude.py` | `tasks_targets` … `tasks_reply` | `build_cinna_server()` — the in-process SDK server `cinna`, one tool per schema entry |
+| `cinna_tasks_claude.py` | `tasks_targets` … `tasks_reply` | `build_cinna_server()` — the in-process SDK server `cinna`, one tool per schema entry; toolset `dashboards` adds the two tile tools |
+| `cinna_dashboards_protocol.py` | — | Dashboard tile tools, engine-agnostic: specs from `/app/core/protocols/dashboards-tools.schema.json`, client POSTs `{session_id, ...}` to `/api/v1/agent/dashboards/*`, `verified_session_context` / `verified_dashboard_id` (HMAC) |
 
 **Schema convention**: Hand-written SDK tools use explicit JSON Schema dicts (`{"type": "object", "properties": {...}, "required": [...]}`) rather than simple `{name: type}` dicts. This ensures the `claude_agent_sdk`'s `create_sdk_mcp_server()` correctly marks optional parameters as non-required in the generated MCP tool schema.
 
@@ -51,7 +52,7 @@ Lightweight stdio MCP servers that expose the same tools for OpenCode agents. Re
 | File | Exposes |
 |------|---------|
 | `knowledge_server.py` | `query_integration_knowledge` tool |
-| `cinna_server.py` | The eight `tasks_*` tools of the `cinna` server (`opencode.json` key `cinna`), from the same schema specs as the Claude Code server |
+| `cinna_server.py` | The eight `tasks_*` tools of the `cinna` server (`opencode.json` key `cinna`), from the same schema specs as the Claude Code server; plus `dashboards_tiles` / `dashboards_update_tile` in conversation mode (`CINNA_OPENCODE_MODE`), returning JSON text and structured content |
 
 The MCP bridge tools use Python type annotations with defaults for optional params (e.g., `files: list[str] | None = None`). FastMCP generates correct JSON Schema from these signatures automatically.
 
@@ -93,6 +94,7 @@ No dedicated database tables - the environment core runs inside Docker container
 | `/chat` | POST | Synchronous chat - complete response |
 | `/config/agent-prompts` | GET | Read current prompts from workspace docs |
 | `/config/agent-prompts` | POST | Write prompts to workspace docs |
+| `/dashboards/components`, `/dashboards/file`, `/dashboards/run`, `/dashboards/source-file` | POST | Dashboard components (`server/dashboards_routes.py`, `server/endpoint_runner.py`); see [Agent Components tech](../../application/user_dashboards/agent_components_tech.md) |
 | `/health` | GET | Health check with status, timestamp, uptime |
 | `/session/context` | GET | Session context metadata (HMAC-verified, per-session or legacy) |
 | `/sdk/sessions` | GET | List SDK sessions (debugging) |

@@ -157,64 +157,14 @@ class InstallReadinessGate:
 
         items: list[GateMissingItem] = []
         for link in link_rows:
-            cred = session.get(Credential, link.credential_id)
-            if cred is None:
-                # Best-effort spec resolution by credential id is impossible
-                # once the row is gone; fall back to a generic label so the
-                # frontend still has something to render.
-                spec_name, spec_type = InstallReadinessGate._spec_for_credential(
-                    spec_lookup, credential_id=link.credential_id, fallback_name="(missing)"
-                )
-                items.append(GateMissingItem(
-                    spec_name=spec_name,
-                    spec_type=spec_type,
-                    reason="publisher_credential_missing",
-                    is_ai=False,
-                    credential_id=link.credential_id,
-                ))
-                continue
-
-            spec_name, spec_type = InstallReadinessGate._spec_for_credential(
-                spec_lookup,
-                credential_id=cred.id,
-                fallback_name=cred.name,
-                fallback_type=cred.type.value if hasattr(cred.type, "value") else str(cred.type),
+            spec_name, spec_type, reason = InstallReadinessGate._service_link_verdict(
+                session, install, spec_lookup, link
             )
-
-            if cred.owner_id == install.owner_id:
-                # User-provided spec (or owner == installer is the publisher
-                # install). Placeholder ⇒ needs_setup.
-                if cred.is_placeholder:
-                    items.append(GateMissingItem(
-                        spec_name=spec_name,
-                        spec_type=spec_type,
-                        reason="placeholder_empty",
-                        is_ai=False,
-                        credential_id=link.credential_id,
-                    ))
-                continue
-
-            # Foreign-owned: must be shareable AND must have an active
-            # share to the installer. (The installer is never the owner
-            # at this branch — already guarded above.)
-            if not cred.allow_sharing:
+            if reason is not None:
                 items.append(GateMissingItem(
                     spec_name=spec_name,
                     spec_type=spec_type,
-                    reason="publisher_credential_unshared",
-                    is_ai=False,
-                    credential_id=link.credential_id,
-                ))
-                continue
-
-            # Direct or user-group share.
-            if not CredentialShareService.has_share(
-                session, cred.id, install.owner_id
-            ):
-                items.append(GateMissingItem(
-                    spec_name=spec_name,
-                    spec_type=spec_type,
-                    reason="publisher_credential_unshared",
+                    reason=reason,
                     is_ai=False,
                     credential_id=link.credential_id,
                 ))
@@ -223,6 +173,72 @@ class InstallReadinessGate:
                 session, install, items
             )
         return items
+
+    @staticmethod
+    def _service_link_verdict(
+        session: Session,
+        install: Agent,
+        spec_lookup: dict[str, dict],
+        link: AgentCredentialLink,
+    ) -> tuple[str, str, GateMissingReason | None]:
+        """``(spec_name, spec_type, reason)`` for one service-credential link.
+
+        ``reason`` is None when the link resolves to a usable credential.
+        """
+        cred = session.get(Credential, link.credential_id)
+        if cred is None:
+            # Best-effort spec resolution by credential id is impossible
+            # once the row is gone; fall back to a generic label so the
+            # frontend still has something to render.
+            spec_name, spec_type = InstallReadinessGate._spec_for_credential(
+                spec_lookup, credential_id=link.credential_id, fallback_name="(missing)"
+            )
+            return spec_name, spec_type, "publisher_credential_missing"
+
+        spec_name, spec_type = InstallReadinessGate._spec_for_credential(
+            spec_lookup,
+            credential_id=cred.id,
+            fallback_name=cred.name,
+            fallback_type=cred.type.value if hasattr(cred.type, "value") else str(cred.type),
+        )
+
+        if cred.owner_id == install.owner_id:
+            # User-provided spec (or owner == installer is the publisher
+            # install). Placeholder ⇒ needs_setup.
+            reason: GateMissingReason | None = "placeholder_empty" if cred.is_placeholder else None
+            return spec_name, spec_type, reason
+
+        # Foreign-owned: must be shareable AND must have an active
+        # share to the installer (direct or user-group). The installer is
+        # never the owner at this branch — already guarded above.
+        if not cred.allow_sharing or not CredentialShareService.has_share(
+            session, cred.id, install.owner_id
+        ):
+            return spec_name, spec_type, "publisher_credential_unshared"
+        return spec_name, spec_type, None
+
+    @staticmethod
+    def service_credential_readiness(session: Session, install: Agent) -> dict[str, bool]:
+        """Linked service credentials by name → whether each is usable.
+
+        Names are resolved exactly as the gate resolves them (the bundle
+        spec's name, else the credential's own). Unlike :meth:`missing_for`,
+        a skill-provisioned slot is NOT exempted: callers asking "can this
+        credential be used right now" (a dashboard component's
+        ``requires_credentials``) need the raw answer. A name linked twice is
+        ready when any of its links is.
+        """
+        spec_lookup = InstallReadinessGate._spec_lookup_for_install(session, install)
+        link_rows = session.exec(
+            select(AgentCredentialLink).where(AgentCredentialLink.agent_id == install.id)
+        ).all()
+        readiness: dict[str, bool] = {}
+        for link in link_rows:
+            name, _, reason = InstallReadinessGate._service_link_verdict(
+                session, install, spec_lookup, link
+            )
+            readiness[name] = readiness.get(name, False) or reason is None
+        return readiness
 
     @staticmethod
     def _scan_unlinked_publisher_specs(

@@ -13,6 +13,7 @@ from app.models import (
     SessionCommandsPublic,
     User,
 )
+from app.services.dashboards import dashboard_context
 from app.services.sessions.message_service import MessageService
 from app.services.sessions.active_streaming_manager import active_streaming_manager
 from app.services.sharing.agent_guest_share_service import AgentGuestShareService
@@ -172,6 +173,15 @@ async def send_message_stream(
     if message_in.page_context:
         safe_page_context = message_in.page_context[:_PAGE_CONTEXT_MAX_CHARS]
 
+    # The dashboard chat's context: validated JSON under a 12,000-char cap.
+    # Only a session with a dashboard takes one; elsewhere it is dropped.
+    safe_dashboard_context: str | None = None
+    if message_in.dashboard_context and chat_session.dashboard_id:
+        try:
+            safe_dashboard_context = dashboard_context.sanitize(message_in.dashboard_context)
+        except dashboard_context.DashboardContextError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
     # Send message using centralized service method
     result = await SessionService.send_session_message(
         session_id=session_id,
@@ -180,6 +190,7 @@ async def send_message_stream(
         file_ids=message_in.file_ids,
         answers_to_message_id=message_in.answers_to_message_id,
         page_context=safe_page_context,
+        dashboard_context=safe_dashboard_context,
     )
 
     # Handle error results

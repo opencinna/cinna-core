@@ -48,6 +48,7 @@ from .agent_env_service import AgentEnvService
 from .active_session_manager import active_session_manager
 from .prompt_generator import PromptGenerator
 from .tools.cinna_tasks_protocol import PROTOCOL_VERSION as TASK_PROTOCOL_VERSION
+from .endpoint_runner import DEFAULT_TIMEOUT_S, MAX_STDOUT_BYTES, clamp_timeout, run_script
 
 router = APIRouter(tags=["agent"])
 logger = logging.getLogger(__name__)
@@ -1515,44 +1516,42 @@ async def webapp_data_api(endpoint: str, request: Request):
         body = {}
 
     params = body.get("params", {})
-    timeout = min(body.get("timeout", 60), 300)
-
-    stdin_data = json.dumps(params)
+    timeout = clamp_timeout(body.get("timeout", DEFAULT_TIMEOUT_S))
 
     try:
-        proc = await asyncio.wait_for(
-            asyncio.create_subprocess_exec(
-                "python", str(script_path),
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=str(WEBAPP_DIR.parent),  # workspace root
-            ),
-            timeout=timeout + 2,  # small buffer for process creation
+        result = await run_script(
+            script_path,
+            params,
+            timeout_s=timeout,
+            cwd=WEBAPP_DIR.parent,  # workspace root
+            use_uv=False,  # webapp scripts run on the image's python, as always
         )
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(input=stdin_data.encode()),
-            timeout=timeout,
-        )
-    except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail=f"Script timed out after {timeout}s")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to execute script: {str(e)}")
 
-    if proc.returncode != 0:
+    if result.start_error is not None:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to execute script: {result.start_error}"
+        )
+    if result.reason == "timeout":
+        raise HTTPException(status_code=504, detail=f"Script timed out after {timeout}s")
+    if result.reason in ("failed", "too_large"):
+        error = (
+            f"Script output exceeded {MAX_STDOUT_BYTES} bytes"
+            if result.reason == "too_large"
+            else f"Script exited with code {result.exit_code}"
+        )
         return Response(
-            content=json.dumps({
-                "error": f"Script exited with code {proc.returncode}",
-                "stderr": stderr.decode(errors="replace")[:2000],
-            }),
+            content=json.dumps({"error": error, "stderr": result.stderr_tail}),
             status_code=500,
             media_type="application/json",
             headers={"Cache-Control": "no-store"},
         )
 
-    # Return stdout as JSON
+    # Return stdout as printed. A non-JSON stdout (``bad_json``) is passed
+    # through unchanged, as this route always has.
     return Response(
-        content=stdout,
+        content=result.value_bytes,
         status_code=200,
         media_type="application/json",
         headers={"Cache-Control": "no-store"},
@@ -2719,3 +2718,11 @@ async def interrupt_command(exec_id: str):
         return {"status": "ok"}
     await streamer.kill()
     return {"status": "ok"}
+
+
+# ── Dashboard components (kit protocol dashboards/1) ─────────────────────
+# Mounted last so the router module is complete; the dashboards module stays
+# free of routes.py imports (no cycle) and is testable on its own app.
+from .dashboards_routes import router as dashboards_router  # noqa: E402
+
+router.include_router(dashboards_router, dependencies=[Depends(verify_auth_token)])

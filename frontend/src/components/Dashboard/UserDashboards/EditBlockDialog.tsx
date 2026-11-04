@@ -31,6 +31,17 @@ import {
 import { Switch } from "@/components/ui/switch"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
+import { LoadingButton } from "@/components/ui/loading-button"
+import { Separator } from "@/components/ui/separator"
+import {
+  draftFromOverrides,
+  overridesFromDraft,
+  type RefreshDraft,
+  RefreshOverridesSection,
+} from "@/components/Dashboard/AgentComponents/RefreshOverridesSection"
+import { componentErrorMessage, readTileConfig } from "@/components/Dashboard/AgentComponents/tileConfig"
+import { useAgentComponent } from "@/components/Dashboard/AgentComponents/useAgentComponent"
+import useCustomToast from "@/hooks/useCustomToast"
 
 const editBlockSchema = z.object({
   title: z.string().max(255).optional().or(z.literal("")),
@@ -50,8 +61,21 @@ interface EditBlockDialogProps {
 export function EditBlockDialog({ block, dashboardId, open, onOpenChange }: EditBlockDialogProps) {
   const queryClient = useQueryClient()
 
+  const { showErrorToast } = useCustomToast()
   const blockConfig = block.config as Record<string, string> | null
   const [filePath, setFilePath] = useState<string>(blockConfig?.file_path ?? "")
+
+  const isComponent = block.view_type === "agent_component"
+  const componentConfig = readTileConfig(block)
+  const initialRefresh = draftFromOverrides(componentConfig.refresh)
+  const [refreshDraft, setRefreshDraft] = useState<RefreshDraft>(initialRefresh)
+  // UQ1: the component's own refresh rules label each "Component default".
+  const componentQuery = useAgentComponent(
+    block.agent_id,
+    componentConfig.component,
+    componentConfig.skill,
+    isComponent && open,
+  )
 
   const form = useForm<EditBlockFormData>({
     resolver: zodResolver(editBlockSchema),
@@ -80,6 +104,31 @@ export function EditBlockDialog({ block, dashboardId, open, onOpenChange }: Edit
 
   const updateBlockMutation = useMutation({
     mutationFn: (data: EditBlockFormData) => {
+      const appearance = {
+        title: data.title || null,
+        show_border: data.show_border,
+        show_header: data.show_header,
+      }
+      if (isComponent) {
+        // The config is sent only when the refresh overrides changed: the
+        // server re-checks a component block's config against the running
+        // environment, which an appearance edit has no reason to wake.
+        const refreshChanged =
+          JSON.stringify(refreshDraft) !== JSON.stringify(initialRefresh)
+        return DashboardsService.updateBlock({
+          dashboardId,
+          blockId: block.id,
+          requestBody: refreshChanged
+            ? {
+                ...appearance,
+                config: {
+                  ...(block.config ?? {}),
+                  refresh: overridesFromDraft(refreshDraft),
+                },
+              }
+            : appearance,
+        })
+      }
       const config =
         block.view_type === "agent_env_file"
           ? { file_path: filePath }
@@ -88,17 +137,15 @@ export function EditBlockDialog({ block, dashboardId, open, onOpenChange }: Edit
       return DashboardsService.updateBlock({
         dashboardId,
         blockId: block.id,
-        requestBody: {
-          title: data.title || null,
-          show_border: data.show_border,
-          show_header: data.show_header,
-          config,
-        },
+        requestBody: { ...appearance, config },
       })
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["userDashboard", dashboardId] })
       onOpenChange(false)
+    },
+    onError: (error: unknown) => {
+      showErrorToast(componentErrorMessage(error, "Failed to save the block."))
     },
   })
 
@@ -107,14 +154,21 @@ export function EditBlockDialog({ block, dashboardId, open, onOpenChange }: Edit
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!updateBlockMutation.isPending) onOpenChange(next)
+      }}
+    >
+      <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto overflow-x-hidden [&>*]:min-w-0">
         <DialogHeader>
           <DialogTitle>Edit Block</DialogTitle>
         </DialogHeader>
 
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+            <section className="space-y-4">
+            {isComponent && <h3 className="text-sm font-medium">Appearance</h3>}
             <FormField
               control={form.control}
               name="show_header"
@@ -140,7 +194,7 @@ export function EditBlockDialog({ block, dashboardId, open, onOpenChange }: Edit
                     <FormLabel>Custom Title (optional)</FormLabel>
                     <FormControl>
                       <Input
-                        placeholder="Defaults to agent name"
+                        placeholder={isComponent ? "Defaults to the component title" : "Defaults to agent name"}
                         {...field}
                       />
                     </FormControl>
@@ -164,6 +218,19 @@ export function EditBlockDialog({ block, dashboardId, open, onOpenChange }: Edit
                 </FormItem>
               )}
             />
+
+            </section>
+
+            {isComponent && (
+              <>
+                <Separator />
+                <RefreshOverridesSection
+                  draft={refreshDraft}
+                  onChange={setRefreshDraft}
+                  component={componentQuery.data}
+                />
+              </>
+            )}
 
             {/* Agent Env File: file selector */}
             {block.view_type === "agent_env_file" && (
@@ -200,9 +267,9 @@ export function EditBlockDialog({ block, dashboardId, open, onOpenChange }: Edit
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={updateBlockMutation.isPending}>
+              <LoadingButton type="submit" loading={updateBlockMutation.isPending}>
                 Save Changes
-              </Button>
+              </LoadingButton>
             </DialogFooter>
           </form>
         </Form>

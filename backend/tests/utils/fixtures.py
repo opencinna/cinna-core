@@ -155,6 +155,9 @@ BACKGROUND_TASK_TARGETS_FULL = BACKGROUND_TASK_TARGETS_BASE + [
     # usage_intent.py schedules background env activation via create_task_with_error_logging
     # when a suspended environment receives a usage-intent signal.
     "app.services.environments.usage_intent.create_task_with_error_logging",
+    # The agent's dashboards_update_tile recomputes the tile in the background
+    # and then emits dashboard_tile_updated; collected so tests drain it.
+    "app.services.dashboards.tile_tools_service.create_task_with_error_logging",
 ]
 
 

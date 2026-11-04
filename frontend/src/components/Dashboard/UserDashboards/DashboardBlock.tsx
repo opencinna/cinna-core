@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Globe, MessageSquare, ClipboardList, FileText, MoreVertical, Pencil, Trash2, Zap } from "lucide-react"
+import { Globe, MessageSquare, ClipboardList, FileText, LayoutGrid, MoreVertical, Pencil, Trash2, Zap } from "lucide-react"
 
 import type { UserDashboardBlockPublic, AgentPublic } from "@/client"
 import { DashboardsService } from "@/client"
@@ -11,7 +11,26 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import { componentTitle } from "@/components/Dashboard/AgentComponents/componentSpec"
+import { focusTile, useIsTileFocused } from "@/components/Dashboard/AgentComponents/dashboardFocus"
+import { readTileConfig } from "@/components/Dashboard/AgentComponents/tileConfig"
+import { useAgentComponent } from "@/components/Dashboard/AgentComponents/useAgentComponent"
 import { cn } from "@/lib/utils"
 import { getColorPreset } from "@/utils/colorPresets"
 import useCustomToast from "@/hooks/useCustomToast"
@@ -20,6 +39,7 @@ import { WebAppView } from "./views/WebAppView"
 import { LatestSessionView } from "./views/LatestSessionView"
 import { LatestTasksView } from "./views/LatestTasksView"
 import { AgentEnvFileView } from "./views/AgentEnvFileView"
+import { AgentComponentTile, agentComponentTileTitle } from "./views/AgentComponentView"
 import { EditBlockDialog } from "./EditBlockDialog"
 import { EditPromptActionsDialog } from "./EditPromptActionsDialog"
 import { PromptActionsOverlay } from "./PromptActionsOverlay"
@@ -36,6 +56,7 @@ const VIEW_TYPE_ICONS: Record<string, React.ElementType> = {
   latest_session: MessageSquare,
   latest_tasks: ClipboardList,
   agent_env_file: FileText,
+  agent_component: LayoutGrid,
 }
 
 export function DashboardBlock({ block, agent, dashboardId, isEditMode }: DashboardBlockProps) {
@@ -53,7 +74,20 @@ export function DashboardBlock({ block, agent, dashboardId, isEditMode }: Dashbo
   const { showErrorToast } = useCustomToast()
   const colorPreset = getColorPreset(agent?.ui_color_preset)
   const ViewIcon = VIEW_TYPE_ICONS[block.view_type] ?? MessageSquare
-  const title = block.title || agent?.name || "Unknown Agent"
+  const isComponent = block.view_type === "agent_component"
+  const componentConfig = isComponent ? readTileConfig(block) : null
+  // Shares its query with the tile body: one request per component.
+  const componentQuery = useAgentComponent(
+    agent?.id,
+    componentConfig?.component ?? "",
+    componentConfig?.skill ?? null,
+    isComponent,
+  )
+  const title = isComponent
+    ? agentComponentTileTitle(block, componentTitle(componentQuery.data))
+    : block.title || agent?.name || "Unknown Agent"
+  const isFocused = useIsTileFocused(dashboardId, block.id)
+  const focusThisTile = isComponent ? () => focusTile(dashboardId, block.id) : undefined
 
   const handleStreamComplete = useCallback(() => {
     if (!agent) return
@@ -77,6 +111,7 @@ export function DashboardBlock({ block, agent, dashboardId, isEditMode }: Dashbo
         blockId: block.id,
       }),
     onSuccess: () => {
+      setShowDeleteConfirm(false)
       queryClient.invalidateQueries({ queryKey: ["userDashboard", dashboardId] })
     },
     onError: () => {
@@ -112,7 +147,15 @@ export function DashboardBlock({ block, agent, dashboardId, isEditMode }: Dashbo
             filePath={(block.config as Record<string, string> | null)?.file_path ?? ""}
           />
         )
-      case "latest_session":
+      case "agent_component":
+        return (
+          <AgentComponentTile
+            block={block}
+            agent={agent}
+            dashboardId={dashboardId}
+            title={title}
+          />
+        )
       default:
         return <LatestSessionView agentId={agent.id} />
     }
@@ -123,12 +166,19 @@ export function DashboardBlock({ block, agent, dashboardId, isEditMode }: Dashbo
       className={cn(
         "flex flex-col h-full bg-background overflow-hidden rounded-lg",
         isEditMode && "border border-border",
-        !isEditMode && block.show_border && "border border-border"
+        !isEditMode && block.show_border && "border border-border",
+        // The tile the dashboard chat is about (exactly one per page).
+        isComponent && isFocused && "ring-2 ring-primary ring-offset-1",
       )}
     >
       {/* Block header - visible in edit mode or when show_header is enabled */}
       {(isEditMode || block.show_header) && (
-        <div className={cn("flex items-center gap-2 px-3 py-2 border-b shrink-0", colorPreset.badgeBg)}>
+        // biome-ignore lint/a11y/useKeyWithClickEvents: a click on the header focuses the tile for the dashboard chat; the tile's Ask button is the keyboard route.
+        // biome-ignore lint/a11y/noStaticElementInteractions: as above.
+        <div
+          className={cn("flex items-center gap-2 px-3 py-2 border-b shrink-0", colorPreset.badgeBg)}
+          onClick={focusThisTile}
+        >
           <span
             className={cn("h-2 w-2 rounded-full shrink-0", colorPreset.badgeText, "bg-current")}
           />
@@ -138,24 +188,39 @@ export function DashboardBlock({ block, agent, dashboardId, isEditMode }: Dashbo
           </span>
           {isEditMode && (
             <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-5 w-5 shrink-0">
-                  <MoreVertical className="h-3.5 w-3.5" />
-                </Button>
-              </DropdownMenuTrigger>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-5 w-5 shrink-0"
+                      aria-label={`Block actions for ${title}`}
+                    >
+                      <MoreVertical className="h-3.5 w-3.5" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="text-xs">
+                  Block actions
+                </TooltipContent>
+              </Tooltip>
               <DropdownMenuContent align="end">
                 <DropdownMenuItem onClick={() => setShowEditDialog(true)}>
                   <Pencil className="mr-2 h-4 w-4" />
                   Edit Block
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => setShowPromptActionsDialog(true)}>
-                  <Zap className="mr-2 h-4 w-4" />
-                  Edit Prompt Actions
-                </DropdownMenuItem>
+                {/* A component's questions live in the dashboard chat (D-C5). */}
+                {!isComponent && (
+                  <DropdownMenuItem onClick={() => setShowPromptActionsDialog(true)}>
+                    <Zap className="mr-2 h-4 w-4" />
+                    Edit Prompt Actions
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
+                  variant="destructive"
                   onClick={() => setShowDeleteConfirm(true)}
-                  className="text-destructive focus:text-destructive"
                 >
                   <Trash2 className="mr-2 h-4 w-4" />
                   Remove Block
@@ -166,52 +231,57 @@ export function DashboardBlock({ block, agent, dashboardId, isEditMode }: Dashbo
         </div>
       )}
 
-      {/* Delete confirmation inline */}
-      {showDeleteConfirm ? (
-        <div className="flex flex-col items-center justify-center h-full p-4 gap-3 text-center">
-          <p className="text-sm font-medium">Remove this block?</p>
-          <div className="flex gap-2">
-            <Button
-              size="sm"
-              variant="destructive"
-              className="h-7 text-xs"
-              onClick={() => deleteBlockMutation.mutate()}
+      {/* Content area with prompt actions overlay */}
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: hover only reveals the prompt-action overlay, whose buttons are reachable by keyboard. */}
+      <div
+        className="flex-1 overflow-hidden min-h-0 relative"
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
+      >
+        {renderView()}
+        {!isEditMode && !isComponent && agent && block.prompt_actions && block.prompt_actions.length > 0 && (
+          <PromptActionsOverlay
+            actions={block.prompt_actions}
+            agentId={agent.id}
+            blockId={block.id}
+            dashboardId={dashboardId}
+            isVisible={isHovered}
+            isWebApp={block.view_type === "webapp"}
+            iframeRef={block.view_type === "webapp" ? webappIframeRef : undefined}
+            onStreamComplete={handleStreamComplete}
+          />
+        )}
+      </div>
+
+      {/* Owned by the block, not the menu item: a menu item unmounts on select. */}
+      <AlertDialog
+        open={showDeleteConfirm}
+        onOpenChange={(open) => {
+          if (!deleteBlockMutation.isPending) setShowDeleteConfirm(open)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="break-words">Remove block {title}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              It leaves this dashboard. The agent and its data stay as they are.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteBlockMutation.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               disabled={deleteBlockMutation.isPending}
+              onClick={(event) => {
+                event.preventDefault()
+                deleteBlockMutation.mutate()
+              }}
             >
-              Remove
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-7 text-xs"
-              onClick={() => setShowDeleteConfirm(false)}
-            >
-              Cancel
-            </Button>
-          </div>
-        </div>
-      ) : (
-        /* Content area with prompt actions overlay */
-        <div
-          className="flex-1 overflow-hidden min-h-0 relative"
-          onMouseEnter={() => setIsHovered(true)}
-          onMouseLeave={() => setIsHovered(false)}
-        >
-          {renderView()}
-          {!isEditMode && agent && block.prompt_actions && block.prompt_actions.length > 0 && (
-            <PromptActionsOverlay
-              actions={block.prompt_actions}
-              agentId={agent.id}
-              blockId={block.id}
-              dashboardId={dashboardId}
-              isVisible={isHovered}
-              isWebApp={block.view_type === "webapp"}
-              iframeRef={block.view_type === "webapp" ? webappIframeRef : undefined}
-              onStreamComplete={handleStreamComplete}
-            />
-          )}
-        </div>
-      )}
+              {deleteBlockMutation.isPending ? "Removing…" : "Remove block"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {showEditDialog && (
         <EditBlockDialog

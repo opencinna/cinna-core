@@ -70,7 +70,7 @@ Auto-generated from OpenAPI spec. Tag: `Dashboards`
 
 **Request body** (`UserDashboardBlockCreate`):
   - `agent_id`: uuid (required)
-  - `view_type`: "webapp" | "latest_session" | "latest_tasks" | "agent_env_file"
+  - `view_type`: "webapp" | "latest_session" | "latest_tasks" | "agent_env_file" | "agent_component"
   - `title`: string | null
   - `show_border`: boolean
   - `show_header`: boolean

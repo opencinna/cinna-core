@@ -160,6 +160,13 @@ class EventType:
     # them access (role grants expanded). Refresh hint only; never broadcast.
     CATALOG_GRANTED = "catalog.granted"
 
+    # Dashboard tiles, to the owner's ``user_{id}`` room. ``updated`` meta
+    # ``{dashboard_id, block_id}``: the agent changed the tile's params and the
+    # recompute settled, refetch its data. ``highlight`` meta
+    # ``{dashboard_id, block_id, ids}``: the agent's highlight (``[]`` clears).
+    DASHBOARD_TILE_UPDATED = "dashboard_tile_updated"
+    DASHBOARD_TILE_HIGHLIGHT = "dashboard_tile_highlight"
+
     # Generic notification
     NOTIFICATION = "notification"
 

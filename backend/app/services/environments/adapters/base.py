@@ -412,6 +412,57 @@ class EnvironmentAdapter(ABC):
         """
         pass
 
+    # --- Dashboard components (env-core ``/dashboards/*``, all POST) ---
+    #
+    # A 404 on the listing means the container's ``/app/core`` predates the
+    # routes: :class:`EndpointUnsupportedError`. The other three answer 404 for
+    # a missing or refused file too, so they return the status instead.
+
+    @abstractmethod
+    async def list_dashboard_components(self) -> dict:
+        """``{"components": [{name, skill, component_json, findings, size_bytes}]}``.
+
+        Raises:
+            EndpointUnsupportedError: the container answered 404.
+            Exception: any other failure (unreachable, timeout, transport).
+        """
+        pass
+
+    @abstractmethod
+    async def read_dashboard_file(
+        self, component: str, skill: str | None, path: str
+    ) -> tuple[int, str | None, bytes]:
+        """A file of a component's folder: ``(status_code, content_type, body)``."""
+        pass
+
+    @abstractmethod
+    async def run_dashboard_endpoint(
+        self,
+        component: str,
+        skill: str | None,
+        endpoint: str,
+        params: dict,
+        timeout: int | None = None,
+    ) -> dict:
+        """Run one of a component's endpoints.
+
+        Returns env-core's body: ``{"ok": true, "value": …}`` or
+        ``{"ok": false, "code": "not_found|invalid_input|call_failed",
+        "message": …, "stderr_tail"?: …}``.
+
+        Raises:
+            EndpointUnsupportedError: a 404 that is not such a body.
+            Exception: any other failure (unreachable, timeout, transport).
+        """
+        pass
+
+    @abstractmethod
+    async def read_dashboard_source_file(
+        self, component: str, skill: str | None
+    ) -> tuple[int, str | None, bytes]:
+        """The component's ``source.file``: ``(status_code, content_type, body)``."""
+        pass
+
     @abstractmethod
     async def set_mcp_servers(self, manifest: dict) -> bool:
         """

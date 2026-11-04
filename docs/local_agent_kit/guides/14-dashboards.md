@@ -4,19 +4,21 @@
 
 The owner wants to see, track or keep an eye on something over time — a pipeline,
 an inbox ranked by their rules, a row of KPIs, this week's meetings — and they use
-Cinna Desktop. The agent that runs in Cinna learns the details from the platform
-skill `cinna-dashboards` (`skills/cinna-dashboards/SKILL.md` in this kit); this
-guide is for you, building the agent.
+Cinna Desktop or run the agent in the cloud in Cinna. The agent that runs in
+Cinna learns the details from the platform skill `cinna-dashboards`
+(`skills/cinna-dashboards/SKILL.md` in this kit); this guide is for you, building
+the agent.
 
 ## What a component is
 
 A **dashboard component** is a folder in the agent, `dashboards/<name>/`, with a
 `component.json` that says what to show and where the data comes from. The owner
-adds it to a dashboard in Cinna Desktop as a tile; the tile refreshes while they
-look at it, and a chat docked beside the dashboard asks the agent about what is on
-screen. In that chat the agent can also change its own tiles, their params and
-what they highlight, with the `dashboards_tiles` and `dashboards_update_tile` tools
-(`protocols/dashboards-tools.schema.json`, contract 1.20.0). The contract is
+adds it to a dashboard in Cinna Desktop, or in Cinna for a cloud agent, as a tile;
+the tile refreshes while they look at it, and a chat docked beside the dashboard
+asks the agent about what is on screen. In that chat the agent can also change its
+own tiles, their params and what they highlight, with the `dashboards_tiles` and
+`dashboards_update_tile` tools (`protocols/dashboards-tools.schema.json`, contract
+1.20.0). The contract is
 `protocols/dashboards.schema.json` (`cinna_protocol: dashboards/1`).
 
 | | Component | Artifact |
@@ -28,8 +30,9 @@ what they highlight, with the `dashboards_tiles` and `dashboards_update_tile` to
 
 Asked for both? Build both.
 
-An agent in the cloud has no dashboards yet: there, `dashboards/` travels with the
-agent and waits.
+A cloud agent's components show on the owner's dashboards in Cinna too (contract
+1.21.0). There, tiles refresh when opened, and `on_app_start` is ignored because
+the cloud has no app launch.
 
 ## Layout
 
@@ -86,10 +89,11 @@ app-data/
 - **`params`**: `enum`, `month`, `date`, `date_range`, `text`, `number`,
   `boolean`. The app draws controls and sends the values on stdin.
 - **`refresh`**: `max_age` is how stale a visible tile may be; `after_turn`
-  recomputes when the agent's turn ends; `while_open_every` (≥ `1m`) polls while the
-  dashboard is open; `on_app_start` warms up at launch, which costs the owner at every
-  launch. `command` (`/run:<name>`) rewrites a source file first; `schedule` names
-  the schedule that writes it.
+  recomputes when the agent's turn ends; `while_open_every` (≥ `1m`) polls while
+  the dashboard is open; `on_app_start` warms up at launch, which costs the owner
+  at every launch (the cloud has no launch and ignores it). `command`
+  (`/run:<name>`) rewrites a source file first; `schedule` names the schedule that
+  writes it.
 - **`requires_credentials`**: names from the manifest's `credentials[]`, so a
   teammate without one sees what is missing instead of an error.
 - **`context`** and **`prompts`**: what the owner's chat needs to read the view, and

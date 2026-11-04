@@ -1,5 +1,21 @@
-import ReactMarkdown from "react-markdown"
+import type { Element, ElementContent, Root } from "hast"
+import { useContext, useMemo } from "react"
+import ReactMarkdown, {
+  type Components,
+  defaultUrlTransform,
+} from "react-markdown"
 import remarkGfm from "remark-gfm"
+
+import {
+  isComponentRef,
+  isComponentRefUrl,
+  isolateComponentRefLines,
+} from "@/utils/componentRefs"
+import { ComponentReferenceCard } from "./ComponentReferenceCard"
+import { ComponentRefChatContext } from "./componentRefContext"
+
+/** Cards per message; further references stay plain text (the resolve route takes ≤ 20). */
+const MAX_CARDS = 20
 
 /**
  * Markdown → React, with no sanitiser configured — and that is the contract,
@@ -34,48 +50,145 @@ import remarkGfm from "remark-gfm"
  * inject markup into a signed-in user's page. If that plugin is ever genuinely
  * wanted, pair it with `rehype-sanitize` in the same commit — and do not
  * "simplify" `/start` back onto this renderer to match.
+ *
+ * COMPONENT REFERENCES
+ * --------------------
+ * `urlTransform` lets exactly one extra scheme through: `cinna://component/…`
+ * (`utils/componentRefs`). Everything else still goes through
+ * `defaultUrlTransform`, so `javascript:` and friends stay stripped. A
+ * paragraph that is only a reference — bare on its own line, or a markdown
+ * link to one — renders as a `ComponentReferenceCard`; a reference inside
+ * running text keeps its words and is not a link (the scheme does not
+ * navigate). Inside backticks or a code block it is plain code.
+ *
+ * Cards are drawn only inside a chat that provides `ComponentRefChatContext`
+ * (not on guest pages or other markdown), never in text that is still
+ * streaming (`refCards={false}`: a half-written name is a valid prefix), and
+ * at most 20 per message.
  */
+function urlTransform(url: string): string {
+  return isComponentRefUrl(url) ? url : defaultUrlTransform(url)
+}
+
+function isBlank(child: ElementContent): boolean {
+  return child.type === "text" && !child.value.trim()
+}
+
+/** The reference a paragraph consists of, if that is all it holds. */
+function paragraphRef(node: Element | undefined): string | null {
+  const children = (node?.children ?? []).filter((c) => !isBlank(c))
+  if (children.length !== 1) return null
+  const only = children[0]
+  if (only.type === "text") {
+    const text = only.value.trim()
+    return isComponentRef(text) ? text : null
+  }
+  if (only.type === "element" && only.tagName === "a") {
+    const href = only.properties?.href
+    return typeof href === "string" && isComponentRef(href) ? href : null
+  }
+  return null
+}
+
 interface MarkdownRendererProps {
   content: string
   className?: string
+  /** `false` for text that is still streaming: references stay plain text. */
+  refCards?: boolean
 }
 
-export function MarkdownRenderer({ content, className = "" }: MarkdownRendererProps) {
+const REF_PROPERTY = "dataComponentRef"
+
+/**
+ * Marks the first `MAX_CARDS` paragraphs that are only a reference, in
+ * document order, with the reference to draw. Choosing them from the tree
+ * (not by counting during render) keeps the choice stable across re-renders.
+ */
+function rehypeComponentRefs() {
+  return (tree: Root) => {
+    let cards = 0
+    const walk = (node: Root | Element) => {
+      for (const child of node.children) {
+        if (child.type !== "element") continue
+        if (child.tagName === "p" && cards < MAX_CARDS) {
+          const ref = paragraphRef(child)
+          if (ref) {
+            child.properties = { ...child.properties, [REF_PROPERTY]: ref }
+            cards += 1
+            continue
+          }
+        }
+        walk(child)
+      }
+    }
+    walk(tree)
+  }
+}
+
+const CARD_PLUGINS = [rehypeComponentRefs]
+const NO_PLUGINS: never[] = []
+
+export function MarkdownRenderer({ content, className = "", refCards = true }: MarkdownRendererProps) {
+  const chat = useContext(ComponentRefChatContext)
+  const cardsOn = refCards && chat !== null
+  // One stable set of overrides per mode: inline functions would be new
+  // component types on every render and remount the cards (closing an open
+  // Preview or Add dialog).
+  const components = useMemo<Components>(
+    () => ({
+      p({ node, children }) {
+        const ref = node?.properties?.[REF_PROPERTY]
+        if (cardsOn && typeof ref === "string")
+          return <ComponentReferenceCard reference={ref} />
+        return <p>{children}</p>
+      },
+      a({ node: _node, href, children, ...rest }) {
+        if (href && isComponentRefUrl(href)) return <span>{children}</span>
+        return (
+          <a href={href} {...rest}>
+            {children}
+          </a>
+        )
+      },
+      code(props) {
+        const { className, children, ...rest } = props as any
+        // Check if it's a code block by looking for language class
+        const match = /language-(\w+)/.exec(className || '')
+        const isCodeBlock = match || className?.includes('language-')
+
+        if (!isCodeBlock) {
+          // Inline code - subtle background highlight that adapts to theme
+          return (
+            <code className="bg-slate-200 text-slate-800 dark:bg-slate-900 dark:text-slate-100 px-1.5 py-0.5 rounded font-mono text-sm" {...rest}>
+              {children}
+            </code>
+          )
+        }
+        // Code blocks - dark CLI-like appearance
+        return (
+          <code
+            className="block bg-slate-900 text-slate-100 p-3 rounded-md font-mono text-xs overflow-x-auto border border-slate-700"
+            {...rest}
+          >
+            {children}
+          </code>
+        )
+      },
+      pre({ children }) {
+        return <div className="not-prose my-2">{children}</div>
+      },
+    }),
+    [cardsOn],
+  )
   return (
     <div className={className}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
-        components={{
-          code(props) {
-            const { className, children, ...rest } = props as any
-            // Check if it's a code block by looking for language class
-            const match = /language-(\w+)/.exec(className || '')
-            const isCodeBlock = match || (className && className.includes('language-'))
-
-            if (!isCodeBlock) {
-              // Inline code - subtle background highlight that adapts to theme
-              return (
-                <code className="bg-slate-200 text-slate-800 dark:bg-slate-900 dark:text-slate-100 px-1.5 py-0.5 rounded font-mono text-sm" {...rest}>
-                  {children}
-                </code>
-              )
-            }
-            // Code blocks - dark CLI-like appearance
-            return (
-              <code
-                className="block bg-slate-900 text-slate-100 p-3 rounded-md font-mono text-xs overflow-x-auto border border-slate-700"
-                {...rest}
-              >
-                {children}
-              </code>
-            )
-          },
-          pre({ children }) {
-            return <div className="not-prose my-2">{children}</div>
-          },
-        }}
+        rehypePlugins={cardsOn ? CARD_PLUGINS : NO_PLUGINS}
+        urlTransform={urlTransform}
+        components={components}
       >
-        {content}
+        {cardsOn ? isolateComponentRefLines(content) : content}
       </ReactMarkdown>
     </div>
   )

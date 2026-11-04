@@ -85,6 +85,18 @@ CINNA_ARTIFACT_TOOL_NAMES_OPENCODE: tuple[str, ...] = tuple(
     f"{CINNA_TASKS_SERVER}_{name}" for name in CINNA_ARTIFACT_TOOLS
 )
 
+# The dashboard tile tools on the same "cinna" server (core/protocols/
+# dashboards-tools.schema.json). Served in conversation mode only: Claude Code
+# registers them in a chat opened from a dashboard, OpenCode lists them in
+# every conversation chat (it caches the list per bridge process).
+CINNA_DASHBOARD_TOOLS: tuple[str, ...] = ("dashboards_tiles", "dashboards_update_tile")
+CINNA_DASHBOARD_TOOL_NAMES_CLAUDE: tuple[str, ...] = tuple(
+    f"mcp__{CINNA_TASKS_SERVER}__{name}" for name in CINNA_DASHBOARD_TOOLS
+)
+CINNA_DASHBOARD_TOOL_NAMES_OPENCODE: tuple[str, ...] = tuple(
+    f"{CINNA_TASKS_SERVER}_{name}" for name in CINNA_DASHBOARD_TOOLS
+)
+
 # ---------------------------------------------------------------------------
 # Canonical pre-approved tools (lowercase)
 #
@@ -110,6 +122,9 @@ PRE_APPROVED_TOOLS: frozenset[str] = frozenset([
     # Artifacts tool (server "cinna") — both forms
     *CINNA_ARTIFACT_TOOL_NAMES_CLAUDE,
     *CINNA_ARTIFACT_TOOL_NAMES_OPENCODE,
+    # Dashboard tile tools (server "cinna") — both forms
+    *CINNA_DASHBOARD_TOOL_NAMES_CLAUDE,
+    *CINNA_DASHBOARD_TOOL_NAMES_OPENCODE,
     # DEPRECATED: the former "agent_task" server, replaced by "cinna" above.
     # Kept only so environments built before the change are still
     # pre-approved; drop in the release after the Cinna Task Protocol.

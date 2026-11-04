@@ -1340,6 +1340,94 @@ class DockerEnvironmentAdapter(EnvironmentAdapter, LocalFilesAccessInterface):
             logger.error(f"Failed to call webapp API {endpoint}: {e}")
             raise Exception(f"Failed to call webapp API: {e}")
 
+    # === Dashboard component Methods (env-core /dashboards/*) ===
+
+    async def _post_dashboards(
+        self, path: str, body: dict, timeout: float
+    ) -> httpx.Response:
+        """POST a JSON body to env-core's ``/dashboards/<path>``.
+
+        Everything travels in the body, never in the URL, so no params or file
+        paths reach an access log (D-C3). Bodies are never logged here either.
+        """
+        async with httpx.AsyncClient() as client:
+            return await client.post(
+                f"{self.base_url}/dashboards/{path}",
+                json=body,
+                headers=self._get_headers(),
+                timeout=timeout,
+            )
+
+    async def list_dashboard_components(self) -> dict:
+        try:
+            response = await self._post_dashboards("components", {}, timeout=30.0)
+        except httpx.HTTPError as e:
+            logger.error(f"Failed to list dashboard components on env {self.env_id}: {e}")
+            raise Exception(f"Failed to list dashboard components: {e}")
+        if response.status_code == 404:
+            logger.info(
+                "dashboard components unsupported on env %s (pre-feature /app/core)",
+                self.env_id,
+            )
+            raise EndpointUnsupportedError("/dashboards/components")
+        if response.status_code >= 400:
+            raise Exception(f"Failed to list dashboard components: HTTP {response.status_code}")
+        return response.json()
+
+    async def read_dashboard_file(
+        self, component: str, skill: str | None, path: str
+    ) -> tuple[int, str | None, bytes]:
+        body = {"component": component, "skill": skill, "path": path}
+        try:
+            response = await self._post_dashboards("file", body, timeout=30.0)
+        except httpx.HTTPError as e:
+            logger.error(f"Failed to read a dashboard file on env {self.env_id}: {e}")
+            raise Exception(f"Failed to read dashboard file: {e}")
+        return response.status_code, response.headers.get("content-type"), response.content
+
+    async def run_dashboard_endpoint(
+        self,
+        component: str,
+        skill: str | None,
+        endpoint: str,
+        params: dict,
+        timeout: int | None = None,
+    ) -> dict:
+        body: dict = {
+            "component": component,
+            "skill": skill,
+            "endpoint": endpoint,
+            "params": params,
+        }
+        if timeout is not None:
+            body["timeout"] = timeout
+        try:
+            # env-core enforces the endpoint's own timeout (≤ 300 s); leave it room.
+            response = await self._post_dashboards("run", body, timeout=float(timeout or 300) + 15.0)
+        except httpx.HTTPError as e:
+            logger.error(f"Failed to run a dashboard endpoint on env {self.env_id}: {e}")
+            raise Exception(f"Failed to run dashboard endpoint: {e}")
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = None
+        if isinstance(payload, dict) and "ok" in payload:
+            return payload
+        if response.status_code == 404:
+            raise EndpointUnsupportedError("/dashboards/run")
+        raise Exception(f"Failed to run dashboard endpoint: HTTP {response.status_code}")
+
+    async def read_dashboard_source_file(
+        self, component: str, skill: str | None
+    ) -> tuple[int, str | None, bytes]:
+        body = {"component": component, "skill": skill}
+        try:
+            response = await self._post_dashboards("source-file", body, timeout=30.0)
+        except httpx.HTTPError as e:
+            logger.error(f"Failed to read a dashboard source file on env {self.env_id}: {e}")
+            raise Exception(f"Failed to read dashboard source file: {e}")
+        return response.status_code, response.headers.get("content-type"), response.content
+
     # === Agent REST API (cinna_api) Methods ===
 
     async def get_agent_api_status(self) -> dict:

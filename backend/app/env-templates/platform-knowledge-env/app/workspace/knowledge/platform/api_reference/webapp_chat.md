@@ -58,6 +58,7 @@ Auto-generated from OpenAPI spec. Tag: `webapp-chat`
   - `answers_to_message_id`: string | null
   - `file_ids`: uuid[]
   - `page_context`: string | null
+  - `dashboard_context`: string | null
 
 ---
 

@@ -4,7 +4,7 @@ description: Build a dashboard component, a live, refreshable view your owner ke
 when_to_use: The owner asks to see, watch, track, monitor or keep an eye on something over time; asks for a dashboard, tile, widget, live view or KPI; asks to change a component under dashboards/; or a skill you have ships components under its dashboards/ folder.
 user-invocable: false
 version: "1"
-compatibility: Cinna Desktop with a kit agent (contract 1.19.0 or later; tile tools and highlight 1.20.0). Other hosts ignore dashboards/.
+compatibility: Cinna Desktop with a kit agent, and cloud agents in Cinna (contract 1.21.0). Other hosts ignore dashboards/.
 metadata:
   cinna_protocol: dashboards/1
 ---
@@ -82,7 +82,7 @@ Use `html` only for what native views cannot draw: a custom chart, a map, an int
 - `max_age` (default `15m`): how old a visible tile's data may be before it is recomputed. Match it to how fast the data really changes: `1m` for a queue, `6h` for a monthly report.
 - `after_turn`: recompute when your turn ends, while the tile is on screen. Set it when your work in the chat changes what the view shows.
 - `while_open_every`: recompute on a period while the dashboard is open, at least `1m`. Rarely needed.
-- `on_app_start`: warm up once when the app starts. It costs the owner at **every** launch, so use it only for slow sources whose first view would otherwise wait.
+- `on_app_start`: warm up once when the app starts. It costs the owner at **every** launch, so use it only for slow sources whose first view would otherwise wait. In the cloud there is no app launch: `on_app_start` is ignored and tiles refresh when the owner opens them.
 
 ## Web views
 
@@ -113,7 +113,7 @@ Use `html` only for what native views cannot draw: a custom chart, a map, an int
 
 ## Acting on your tiles from the dashboard chat
 
-In a chat opened from a dashboard, Cinna Desktop gives you two tools on the `cinna` server (the cloud has no dashboards yet, so there they do not exist):
+In a chat opened from a dashboard, Cinna Desktop and the cloud give you two tools on the `cinna` server (outside such a chat they do not exist):
 
 - `dashboards_tiles` lists that dashboard's tiles that show your components: each `tile_id`, its `params`, the accepted values (`param_specs`), whether it can highlight, and what is selected and on screen.
 - `dashboards_update_tile` changes one: `params` are merged over the stored ones (`null` restores a default) and the tile recomputes; `highlight` names rows or items to mark (`[]` clears).

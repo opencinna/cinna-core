@@ -38,6 +38,7 @@ class SessionService:
         guest_share_id: UUID | None = None,
         webapp_share_id: UUID | None = None,
         dashboard_block_id: UUID | None = None,
+        dashboard_id: UUID | None = None,
     ) -> Session | None:
         """
         Create session using agent's active environment.
@@ -67,6 +68,9 @@ class SessionService:
             guest_share_id: Optional guest share ID (for guest share sessions)
             webapp_share_id: Optional webapp share ID (for webapp chat sessions)
             dashboard_block_id: Optional dashboard block ID (for prompt action session reuse)
+            dashboard_id: The dashboard whose chat this session is. Without it,
+                a session opened from one of the user's own dashboard blocks
+                (a prompt action) gets that block's dashboard.
         """
         # Get agent to find active environment
         agent = db_session.get(Agent, data.agent_id)
@@ -96,6 +100,9 @@ class SessionService:
         effective_guest_share_id = guest_share_id or data.guest_share_id
         effective_webapp_share_id = webapp_share_id or data.webapp_share_id
         effective_dashboard_block_id = dashboard_block_id or data.dashboard_block_id
+        effective_dashboard_id = dashboard_id or SessionService._owned_block_dashboard_id(
+            db_session, effective_dashboard_block_id, user_id
+        )
 
         session = Session(
             environment_id=agent.active_environment_id,
@@ -107,6 +114,7 @@ class SessionService:
             guest_share_id=effective_guest_share_id,
             webapp_share_id=effective_webapp_share_id,
             dashboard_block_id=effective_dashboard_block_id,
+            dashboard_id=effective_dashboard_id,
             title=data.title,
             mode=data.mode,
             email_thread_id=email_thread_id,
@@ -117,6 +125,19 @@ class SessionService:
         db_session.commit()
         db_session.refresh(session)
         return session
+
+    @staticmethod
+    def _owned_block_dashboard_id(
+        db_session: DBSession, block_id: UUID | None, user_id: UUID
+    ) -> UUID | None:
+        """The dashboard of ``block_id`` when the user owns it; else None."""
+        if block_id is None:
+            return None
+        from app.models.users.user_dashboard import UserDashboard, UserDashboardBlock
+
+        block = db_session.get(UserDashboardBlock, block_id)
+        dashboard = db_session.get(UserDashboard, block.dashboard_id) if block else None
+        return dashboard.id if dashboard is not None and dashboard.owner_id == user_id else None
 
     @staticmethod
     def resolve_and_rebind_session_environment(
@@ -1412,6 +1433,7 @@ class SessionService:
         external_message_id: str | None = None,
         channel_reply_target: dict[str, Any] | None = None,
         client_message_id: str | None = None,
+        dashboard_context: str | None = None,
     ) -> dict[str, Any]:
         """
         Send a message to a session and optionally initiate streaming.
@@ -1466,6 +1488,10 @@ class SessionService:
                 ``"temporary"``. Same single caller and the same bound: it
                 exempts the **named ids** and nothing else. See that method for
                 the full contract before adding a second caller.
+            dashboard_context: Optional, already sanitized JSON of what the
+                owner sees on the dashboard (``dashboard_context.sanitize``).
+                Stored in message_metadata like ``page_context``;
+                collect_pending_messages injects it as ``<dashboard_context>``.
             client_message_id: Caller-supplied message id (A2A ``messageId``).
                 Stored in the user row's ``message_metadata`` and, for an
                 existing session, used to dedupe: a resend returns
@@ -1532,6 +1558,7 @@ class SessionService:
                 channel_reply_target=channel_reply_target,
                 client_message_id=client_message_id,
                 dedupe=claim_key is not None,
+                dashboard_context=dashboard_context,
             )
         finally:
             if claim_key is not None:
@@ -1560,6 +1587,7 @@ class SessionService:
         channel_reply_target: dict[str, Any] | None = None,
         client_message_id: str | None = None,
         dedupe: bool = False,
+        dashboard_context: str | None = None,
     ) -> dict[str, Any]:
         """Body of ``send_session_message``; see there.
 
@@ -1873,6 +1901,8 @@ class SessionService:
                 base_message_metadata["channel_reply_target"] = channel_reply_target
             if page_context:
                 base_message_metadata["page_context"] = page_context
+            if dashboard_context:
+                base_message_metadata["dashboard_context"] = dashboard_context
 
             context_transaction = channel_context is not None and context_binding_id is not None
             uploaded_file_paths: dict[UUID, str] | None = None

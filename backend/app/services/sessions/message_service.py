@@ -16,6 +16,7 @@ from app.services.environments.agent_env_connector import agent_env_connector
 from app.services.agents.agent_service import AgentService
 from app.models.mcp.mcp_session_meta import MCPSessionMeta
 from app.services.sessions.session_context_signer import sign_session_context
+from app.services.dashboards import dashboard_context
 from app.services.sessions.stream_heartbeat import (
     STREAM_HEARTBEAT_KEY,
     StreamHeartbeat,
@@ -72,6 +73,13 @@ PRE_ALLOWED_TOOLS = frozenset([
     # Cinna artifacts tool (MCP server "cinna") — both forms
     "mcp__cinna__artifacts_publish",
     "cinna_artifacts_publish",
+    # Cinna dashboard tile tools (MCP server "cinna") — both forms. Offered in
+    # every conversation; the backend answers ``no_dashboard`` outside a
+    # dashboard chat.
+    "mcp__cinna__dashboards_tiles",
+    "mcp__cinna__dashboards_update_tile",
+    "cinna_dashboards_tiles",
+    "cinna_dashboards_update_tile",
     # Cinna Task Protocol tools — OpenCode form ({server}_{tool})
     "cinna_tasks_targets",
     "cinna_tasks_list",
@@ -355,6 +363,36 @@ async def _emit_attachment_error_event(
         )
 
 
+def _dashboard_context_digest_ref(
+    session: Session, session_id: UUID, messages: list[SessionMessage]
+) -> list[str | None]:
+    """sha256 of the last ``<dashboard_context>`` sent in the session, as a mutable cell.
+
+    Only looked up when one of ``messages`` carries a context.
+    """
+    if not messages or not any(dashboard_context.from_metadata(m.message_metadata) for m in messages):
+        return [None]
+    previous = dashboard_context.last_sent(
+        session, session_id, before_sequence=messages[0].sequence_number
+    )
+    return [dashboard_context.digest(previous) if previous else None]
+
+
+def _dashboard_context_block(message: SessionMessage, digest_ref: list[str | None]) -> str | None:
+    """The full block when the message's context differs from the last one sent; else None.
+
+    Never diffed (unlike ``page_context``): unchanged means omitted.
+    """
+    stored = dashboard_context.from_metadata(message.message_metadata)
+    if not stored:
+        return None
+    current = dashboard_context.digest(stored)
+    if current == digest_ref[0]:
+        return None
+    digest_ref[0] = current
+    return dashboard_context.block(stored)
+
+
 def _compute_context_diff(old_context_str: str, new_context_str: str) -> dict | None:
     """
     Compute a semantic diff between two page_context JSON strings.
@@ -507,6 +545,10 @@ def _build_session_context(
         "email_thread_id": session_db.email_thread_id,
         "backend_session_id": str(session_db.id),
     }
+    # A dashboard chat (or a prompt action's session) gets the dashboard tile
+    # tools; env-core reads this from the signed context.
+    if session_db.dashboard_id:
+        context["dashboard_id"] = str(session_db.dashboard_id)
 
     # Fetch email subject from the initiating EmailMessage (avoid data duplication)
     if session_db.integration_type == "email":
@@ -1330,6 +1372,7 @@ class MessageService:
         # multiple pending messages in sequence.  Wrapped in a list so the inner
         # function can update it without a nonlocal declaration.
         prev_context_ref: list[str | None] = [last_sent_context]
+        dashboard_digest_ref = _dashboard_context_digest_ref(session, session_id, pending_messages)
 
         # Helper function to reconstruct message content with files
         def get_message_content_with_files(message: SessionMessage) -> str:
@@ -1387,6 +1430,10 @@ class MessageService:
 
                 # Advance the closure so the next pending message diffs against this one.
                 prev_context_ref[0] = stored_page_context
+
+            dashboard_block = _dashboard_context_block(message, dashboard_digest_ref)
+            if dashboard_block:
+                agent_content = f"{agent_content}\n\n{dashboard_block}"
 
             return agent_content
 
@@ -1584,6 +1631,7 @@ class MessageService:
                 break
 
         prev_context_ref: list[str | None] = [last_sent_context]
+        dashboard_digest_ref = _dashboard_context_digest_ref(db, session_id, messages)
 
         def _get_content(message: SessionMessage) -> str:
             file_stmt = select(MessageFile).where(MessageFile.message_id == message.id)
@@ -1624,6 +1672,10 @@ class MessageService:
                     agent_content = f"{agent_content}\n\n{context_block}"
 
                 prev_context_ref[0] = stored_page_context
+
+            dashboard_block = _dashboard_context_block(message, dashboard_digest_ref)
+            if dashboard_block:
+                agent_content = f"{agent_content}\n\n{dashboard_block}"
 
             return agent_content
 

@@ -46,6 +46,12 @@ interface MessageInputProps {
    * user is actively typing.
    */
   seed?: { text: string; nonce: number }
+  /**
+   * For a narrow docked panel (the dashboard chat): tighter padding, 40 px
+   * Add and Send buttons, and no rotating hints row — so the textarea keeps room for its placeholder at
+   * 320–360 px.
+   */
+  compact?: boolean
 }
 
 export const MessageInput = forwardRef<HTMLTextAreaElement, MessageInputProps>(
@@ -61,6 +67,7 @@ export const MessageInput = forwardRef<HTMLTextAreaElement, MessageInputProps>(
     isNewAgent = false,
     sessionId,
     seed,
+    compact = false,
   }, ref) {
     // Resolve effective streaming state: prefer the new isStreaming prop, fall
     // back to the legacy sendDisabled prop so callers that haven't migrated yet
@@ -319,7 +326,7 @@ export const MessageInput = forwardRef<HTMLTextAreaElement, MessageInputProps>(
     }
 
     return (
-      <div className="border-t p-4 bg-background/60 shrink-0 relative">
+      <div className={`border-t ${compact ? "p-3" : "p-4"} bg-background/60 shrink-0 relative`}>
         {showCommandPopup && filteredCommands.length > 0 && (
           <SlashCommandPopup
             commands={filteredCommands}
@@ -335,7 +342,7 @@ export const MessageInput = forwardRef<HTMLTextAreaElement, MessageInputProps>(
               <Button
                 variant="outline"
                 size="icon"
-                className="h-[60px] w-[60px] shrink-0"
+                className={`h-[60px] ${compact ? "w-10" : "w-[60px]"} shrink-0`}
               >
                 <Plus className="h-5 w-5" />
               </Button>
@@ -422,7 +429,7 @@ export const MessageInput = forwardRef<HTMLTextAreaElement, MessageInputProps>(
                 onClick={handleStop}
                 variant="destructive"
                 size="icon"
-                className="h-[28px] w-[60px]"
+                className={`h-[28px] ${compact ? "w-10" : "w-[60px]"}`}
                 disabled={isInterruptPending}
                 title="Stop agent"
               >
@@ -437,7 +444,7 @@ export const MessageInput = forwardRef<HTMLTextAreaElement, MessageInputProps>(
               onClick={handleSend}
               disabled={!message.trim() && attachedFiles.length === 0}
               size="icon"
-              className={effectiveIsStreaming ? "h-[28px] w-[60px]" : "h-[60px] w-[60px]"}
+              className={`${effectiveIsStreaming ? "h-[28px]" : "h-[60px]"} ${compact ? "w-10" : "w-[60px]"}`}
               title="Send message"
             >
               <Send className="h-5 w-5" />
@@ -467,7 +474,7 @@ export const MessageInput = forwardRef<HTMLTextAreaElement, MessageInputProps>(
               ))}
             </div>
           </div>
-        ) : (
+        ) : compact ? null : (
           <RotatingHints
             className="mt-2 max-w-7xl mx-auto"
             onClick={() => setShowGettingStarted(true)}

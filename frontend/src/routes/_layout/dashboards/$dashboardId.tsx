@@ -21,6 +21,9 @@ import PendingItems from "@/components/Pending/PendingItems"
 import NotFound from "@/components/Common/NotFound"
 import { DashboardGrid } from "@/components/Dashboard/UserDashboards/DashboardGrid"
 import { AddBlockDialog } from "@/components/Dashboard/UserDashboards/AddBlockDialog"
+import { DashboardChatPanel } from "@/components/Dashboard/DashboardChat/DashboardChatPanel"
+import { DashboardChatToggle } from "@/components/Dashboard/DashboardChat/DashboardChatToggle"
+import { useDashboardChatLayout } from "@/components/Dashboard/DashboardChat/useDashboardChatLayout"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -87,6 +90,7 @@ function DashboardViewPage() {
   const [menuOpen, setMenuOpen] = useState(false)
   const [showEditDialog, setShowEditDialog] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
+  const chat = useDashboardChatLayout()
 
   const { data: dashboard, isLoading: dashboardLoading } = useQuery({
     queryKey: ["userDashboard", dashboardId],
@@ -161,6 +165,11 @@ function DashboardViewPage() {
             <span className="font-medium truncate">{dashboard.name}</span>
           </div>
           <div className="flex items-center gap-2">
+            <DashboardChatToggle
+              open={chat.open}
+              onToggle={() => chat.setOpen(!chat.open)}
+              isEditMode={isEditMode}
+            />
             {isEditMode && (
               <Button
                 size="sm"
@@ -221,7 +230,7 @@ function DashboardViewPage() {
       )
     }
     return () => setHeaderContent(null)
-  }, [dashboard, setHeaderContent, isEditMode, menuOpen])
+  }, [dashboard, setHeaderContent, isEditMode, menuOpen, chat.open, chat.setOpen])
 
   if (dashboardLoading || agentsLoading) {
     return <PendingItems />
@@ -241,14 +250,25 @@ function DashboardViewPage() {
   const agents = agentsData?.data ?? []
 
   return (
-    <div className="flex flex-col h-full">
-      <DashboardGrid
+    <div className="flex h-full">
+      <div className="flex min-w-0 flex-1 flex-col">
+        <DashboardGrid
+          dashboard={dashboard}
+          agents={agents}
+          isEditMode={isEditMode}
+          showAddBlock={showAddBlock}
+          onCloseAddBlock={() => setShowAddBlock(false)}
+          onRequestAddBlock={() => setShowAddBlock(true)}
+        />
+      </div>
+
+      <DashboardChatPanel
         dashboard={dashboard}
         agents={agents}
+        open={chat.open}
+        onOpenChange={chat.setOpen}
+        docked={chat.docked}
         isEditMode={isEditMode}
-        showAddBlock={showAddBlock}
-        onCloseAddBlock={() => setShowAddBlock(false)}
-        onRequestAddBlock={() => setShowAddBlock(true)}
       />
 
       {showAddBlock && (

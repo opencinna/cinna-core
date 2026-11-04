@@ -1,6 +1,9 @@
+import re
 import uuid
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Annotated, Any, Literal
+
+from pydantic import StringConstraints, field_validator
 from sqlmodel import Field, Relationship, SQLModel, Column
 from sqlalchemy import JSON, Index
 
@@ -61,9 +64,52 @@ class UserDashboardBlockPromptActionPublic(SQLModel):
 # Block models
 # ---------------------------------------------------------------------------
 
+DashboardBlockViewType = Literal[
+    "webapp", "latest_session", "latest_tasks", "agent_env_file", "agent_component"
+]
+
+# A duration as component.json writes it (``30s``, ``15m``, ``6h``, ``1d``).
+DURATION_PATTERN = r"^[1-9][0-9]*(s|m|h|d)$"
+# At least one minute: ``while_open_every`` never polls faster than that.
+DURATION_1M_PATTERN = r"^(([6-9][0-9]|[1-9][0-9]{2,})s|[1-9][0-9]*(m|h|d))$"
+COMPONENT_NAME_PATTERN = r"^[a-z0-9][a-z0-9-]{0,63}$"
+SKILL_NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+
+
+class AgentComponentRefreshOverrides(SQLModel):
+    """The Edit-tile overrides of a component's ``refresh`` (``on_app_start`` is never stored)."""
+
+    model_config = {"extra": "forbid"}
+
+    max_age: Annotated[str, StringConstraints(pattern=DURATION_PATTERN)] | None = None
+    # A duration of at least 1m, or "manual" for "never while open".
+    while_open_every: str | None = Field(default=None)
+    after_turn: bool | None = None
+
+    @field_validator("while_open_every")
+    @classmethod
+    def _check_while_open_every(cls, value: str | None) -> str | None:
+        if value is None or value == "manual" or re.fullmatch(DURATION_1M_PATTERN, value):
+            return value
+        raise ValueError("while_open_every must be a duration of at least 1m, or \"manual\"")
+
+
+class AgentComponentBlockConfig(SQLModel):
+    """``config`` of an ``agent_component`` block."""
+
+    model_config = {"extra": "forbid"}
+
+    # sqlmodel drops ``regex=`` silently, so the patterns ride on the types.
+    component: Annotated[str, StringConstraints(pattern=COMPONENT_NAME_PATTERN)]
+    skill: Annotated[str, StringConstraints(pattern=SKILL_NAME_PATTERN)] | None = None
+    params: dict[str, Any] = Field(default_factory=dict)
+    refresh: AgentComponentRefreshOverrides = Field(
+        default_factory=AgentComponentRefreshOverrides
+    )
+
 class UserDashboardBlockBase(SQLModel):
     agent_id: uuid.UUID
-    view_type: Literal["webapp", "latest_session", "latest_tasks", "agent_env_file"] = Field(default="latest_session")
+    view_type: DashboardBlockViewType = Field(default="latest_session")
     title: str | None = Field(default=None, max_length=255)
     show_border: bool = Field(default=True)
     show_header: bool = Field(default=False)
@@ -106,7 +152,7 @@ class UserDashboardBlockCreate(UserDashboardBlockBase):
 
 
 class UserDashboardBlockUpdate(SQLModel):
-    view_type: Literal["webapp", "latest_session", "latest_tasks", "agent_env_file"] | None = None
+    view_type: DashboardBlockViewType | None = None
     title: str | None = None
     show_border: bool | None = None
     show_header: bool | None = None

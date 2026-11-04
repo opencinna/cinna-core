@@ -7,7 +7,10 @@ Routes marked *Not available via `cinna api`* are refused by the account CLI esc
 
 | Domain | File | Endpoints |
 |--------|------|-----------|
+| Agentdashboards | [AgentDashboards.md](./AgentDashboards.md) | 4 |
 | App Sync | [App Sync.md](./App Sync.md) | 21 |
+| Dashboardchat | [DashboardChat.md](./DashboardChat.md) | 3 |
+| Dashboardtiles | [DashboardTiles.md](./DashboardTiles.md) | 6 |
 | Dashboards | [Dashboards.md](./Dashboards.md) | 17 |
 | A2A | [a2a.md](./a2a.md) | 9 |
 | Access Tokens | [access_tokens.md](./access_tokens.md) | 5 |
@@ -24,6 +27,7 @@ Routes marked *Not available via `cinna api`* are refused by the account CLI esc
 | Agent Api Public | [agent_api_public.md](./agent_api_public.md) | 1 |
 | Agent Artifacts | [agent_artifacts.md](./agent_artifacts.md) | 1 |
 | Agent Credentials | [agent_credentials.md](./agent_credentials.md) | 1 |
+| Agent Dashboards | [agent_dashboards.md](./agent_dashboards.md) | 2 |
 | Agent Git | [agent_git.md](./agent_git.md) | 11 |
 | Agent Hooks | [agent_hooks.md](./agent_hooks.md) | 1 |
 | Agent Tasks | [agent_tasks.md](./agent_tasks.md) | 20 |

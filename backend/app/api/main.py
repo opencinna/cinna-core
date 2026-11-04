@@ -12,6 +12,9 @@ from app.api.routes import (
     admin_user_groups,
     agent_api,
     agent_api_public,
+    agent_dashboards,
+    agent_dashboard_tools,
+    dashboard_chat,
     artifact_agent_api,
     artifact_links,
     artifacts,
@@ -78,6 +81,7 @@ from app.api.routes import (
     user_channels,
     users,
     user_dashboards,
+    dashboard_tiles,
     user_groups,
     user_workspaces,
     utils,
@@ -140,7 +144,15 @@ api_router.include_router(sessions.router)
 api_router.include_router(improvement_requests.router)
 api_router.include_router(messages.router)
 api_router.include_router(workspace.router)
+# Dashboard chat + component-ref resolve, before the ``/dashboards/{id}`` routes.
+api_router.include_router(dashboard_chat.router)
 api_router.include_router(user_dashboards.router)
+# Agent-component tiles (``/dashboards/{id}/blocks/{id}/component/*``) and the
+# agent-scoped component routes (``/agents/{id}/dashboards/*``).
+api_router.include_router(dashboard_tiles.router)
+api_router.include_router(agent_dashboards.router)
+# The agent's tile tools (``/agent/dashboards/*``, agent-env token).
+api_router.include_router(agent_dashboard_tools.router)
 api_router.include_router(user_workspaces.router)
 api_router.include_router(notification_settings.router)
 api_router.include_router(activities.router)

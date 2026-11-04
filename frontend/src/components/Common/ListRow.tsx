@@ -1,5 +1,5 @@
 import { Info, type LucideIcon } from "lucide-react"
-import type { ReactNode } from "react"
+import type { HTMLAttributes, ReactNode } from "react"
 
 import {
   Tooltip,
@@ -58,7 +58,7 @@ export interface RowStatus {
   label: string
 }
 
-interface ListRowGroupProps {
+interface ListRowGroupProps extends HTMLAttributes<HTMLDivElement> {
   children: ReactNode
   className?: string
 }
@@ -70,9 +70,15 @@ interface ListRowGroupProps {
  * while the text itself stays flush with the card's other content, so a list
  * does not read as an inset panel.
  */
-export function ListRowGroup({ children, className }: ListRowGroupProps) {
+export function ListRowGroup({
+  children,
+  className,
+  ...rest
+}: ListRowGroupProps) {
+  // `rest` carries ARIA for a group that is itself a control (a listbox of
+  // selectable rows on a dashboard tile); the hairline stays on direct children.
   return (
-    <div className={cn("-mx-2 divide-y divide-border", className)}>
+    <div className={cn("-mx-2 divide-y divide-border", className)} {...rest}>
       {children}
     </div>
   )

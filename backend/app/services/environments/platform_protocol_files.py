@@ -15,6 +15,10 @@ them with no second hand-edited copy in ``app_core_base``:
   /app/core/skills/cinna-tasks/           — the skill, for projection into the engine
   /app/core/protocols/artifacts.schema.json — read by the `cinna` server's artifacts_publish
   /app/core/skills/cinna-artifacts/       — its skill
+  /app/core/protocols/dashboards-tools.schema.json — the dashboard tile tools
+  /app/core/protocols/dashboards.schema.json — the component.json contract
+  /app/core/skills/cinna-dashboards/      — its skill (incl. scripts/check_component.py,
+                                            imported by env-core's /dashboards/components)
 
 Paths are relative to the environment's core directory and mirrored by
 ``core/server/tools/cinna_tasks_protocol.py`` (SCHEMA_RELATIVE_PATH /
@@ -37,6 +41,9 @@ PROTOCOL_FILES: tuple[str, ...] = (
     "skills/cinna-tasks",
     "protocols/artifacts.schema.json",
     "skills/cinna-artifacts",
+    "protocols/dashboards-tools.schema.json",
+    "protocols/dashboards.schema.json",
+    "skills/cinna-dashboards",
 )
 
 

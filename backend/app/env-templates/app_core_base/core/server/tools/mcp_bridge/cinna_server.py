@@ -9,8 +9,21 @@ signatures. Calls go through ``CinnaTasksClient`` / ``CinnaArtifactsClient``,
 shared with the Claude Code binding. The bridge runs in both OpenCode modes,
 so artifacts are available while building and in conversation.
 
-Session context (backend_session_id) is read at call time from the file the
-OpenCode adapter writes before each message (``CINNA_SESSION_CONTEXT_PATH``).
+The dashboard tile tools (``dashboards-tools.schema.json``) are served in
+conversation mode only. OpenCode lists an MCP server's tools once per
+connection (again only on a ``tools/list_changed`` notification), so they are
+listed in every conversation chat; outside a chat opened from a dashboard the
+backend answers ``no_dashboard``. Their results carry ``structuredContent``
+beside the same JSON as text.
+
+Session context (backend_session_id, dashboard_id) is read at call time from
+the file the OpenCode adapter writes before each message
+(``CINNA_SESSION_CONTEXT_PATH``); the mode from ``CINNA_OPENCODE_MODE``. That
+file is one per mode, so the latest message wins. A dashboard tool call
+instead carries the calling OpenCode session id (``SESSION_ARG``, stamped by
+``cinna_session_plugin.js``), and its context is read from the per-session copy
+``session_context/<id>.json`` beside it. Arguments are validated here, after
+that key is removed, rather than by the low-level server.
 
 Run with:
     python3 /app/core/server/tools/mcp_bridge/cinna_server.py
@@ -28,10 +41,12 @@ from typing import Any
 # The shared implementation sits one directory up; this file runs as a script.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import jsonschema  # noqa: E402
 import mcp.types as types  # noqa: E402
 from mcp.server.lowlevel import Server  # noqa: E402
 
 from cinna_artifacts_protocol import CinnaArtifactsClient, load_artifact_specs  # noqa: E402
+from cinna_dashboards_protocol import CinnaDashboardsClient, load_dashboard_specs  # noqa: E402
 from cinna_tasks_protocol import SERVER_NAME, CinnaTasksClient, load_tool_specs  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -39,14 +54,62 @@ logger = logging.getLogger(__name__)
 SESSION_CONTEXT_PATH = Path(os.getenv("CINNA_SESSION_CONTEXT_PATH") or "session_context.json")
 
 
-def _read_backend_session_id() -> str | None:
+# The argument cinna_session_plugin.js adds to a dashboard tool call.
+SESSION_ARG = "_cinna_opencode_session_id"
+SESSION_CONTEXT_DIRNAME = "session_context"
+
+
+def _read_json(path: Path) -> dict[str, Any]:
     try:
-        if SESSION_CONTEXT_PATH.exists():
-            data = json.loads(SESSION_CONTEXT_PATH.read_text(encoding="utf-8"))
-            return data.get("backend_session_id") or None
+        if path.exists():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Could not read session_context.json: %s", exc)
-    return None
+        logger.warning("Could not read %s: %s", path.name, exc)
+    return {}
+
+
+def _read_session_context() -> dict[str, Any]:
+    return _read_json(SESSION_CONTEXT_PATH)
+
+
+def _read_backend_session_id() -> str | None:
+    return _read_session_context().get("backend_session_id") or None
+
+
+def _is_safe_session_id(session_id: Any) -> bool:
+    return (
+        isinstance(session_id, str)
+        and 0 < len(session_id) <= 128
+        and all((ch.isascii() and ch.isalnum()) or ch in "_-" for ch in session_id)
+    )
+
+
+def _backend_session_id_for(opencode_session_id: Any) -> str | None:
+    """The backend session of the OpenCode session that made the call.
+
+    No stamped id (the plugin is not loaded) falls back to the shared file. A
+    stamped id with no context of its own resolves to no session, never to
+    another chat's.
+    """
+    if opencode_session_id is None:
+        return _read_backend_session_id()
+    if not _is_safe_session_id(opencode_session_id):
+        return None
+    path = SESSION_CONTEXT_PATH.parent / SESSION_CONTEXT_DIRNAME / f"{opencode_session_id}.json"
+    return _read_json(path).get("backend_session_id") or None
+
+
+def _dashboard_tools_offered() -> bool:
+    """Conversation mode lists the tile tools (Q1: OpenCode caches the list).
+
+    An adapter that predates ``CINNA_OPENCODE_MODE`` sets no mode; then the
+    current chat's ``dashboard_id`` decides.
+    """
+    mode = os.getenv("CINNA_OPENCODE_MODE")
+    if mode:
+        return mode == "conversation"
+    return bool(_read_session_context().get("dashboard_id"))
 
 
 def _artifact_specs_if_installed() -> dict[str, dict[str, Any]]:
@@ -58,33 +121,71 @@ def _artifact_specs_if_installed() -> dict[str, dict[str, Any]]:
         return {}
 
 
+def _dashboard_specs_if_installed() -> dict[str, dict[str, Any]]:
+    """The tile tools' specs; none when an older core lacks the schema."""
+    try:
+        return load_dashboard_specs()
+    except FileNotFoundError as exc:
+        logger.warning("dashboards-tools.schema.json not installed; no dashboard tools: %s", exc)
+        return {}
+
+
 def build_server(
     specs: dict[str, dict[str, Any]] | None = None,
     client: CinnaTasksClient | None = None,
     artifact_specs: dict[str, dict[str, Any]] | None = None,
     artifacts_client: CinnaArtifactsClient | None = None,
+    dashboard_specs: dict[str, dict[str, Any]] | None = None,
+    dashboards_client: CinnaDashboardsClient | None = None,
 ) -> Server:
     task_specs = specs if specs is not None else load_tool_specs()
     artifact_specs = artifact_specs if artifact_specs is not None else _artifact_specs_if_installed()
+    dashboard_specs = dashboard_specs if dashboard_specs is not None else _dashboard_specs_if_installed()
     task_client = client or CinnaTasksClient()
     artifacts_client = artifacts_client or CinnaArtifactsClient()
+    dashboards_client = dashboards_client or CinnaDashboardsClient(tool_names=frozenset(dashboard_specs))
     specs = {**task_specs, **artifact_specs}
     server = Server(SERVER_NAME)
+
+    def _offered() -> dict[str, dict[str, Any]]:
+        if dashboard_specs and _dashboard_tools_offered():
+            return {**specs, **dashboard_specs}
+        return specs
 
     @server.list_tools()
     async def list_tools() -> list[types.Tool]:
         return [
             types.Tool(name=name, description=spec["description"], inputSchema=spec["inputSchema"])
-            for name, spec in specs.items()
+            for name, spec in _offered().items()
         ]
 
-    @server.call_tool()
-    async def call_tool(name: str, arguments: dict[str, Any] | None) -> list[types.TextContent]:
-        if name not in specs:
+    @server.call_tool(validate_input=False)
+    async def call_tool(
+        name: str, arguments: dict[str, Any] | None,
+    ) -> list[types.TextContent] | types.CallToolResult:
+        offered = _offered()
+        if name not in offered:
             raise ValueError(f"Unknown tool: {name}")
+        arguments = dict(arguments or {})
+        opencode_session_id = arguments.pop(SESSION_ARG, None)
+        try:
+            jsonschema.validate(instance=arguments, schema=offered[name]["inputSchema"])
+        except jsonschema.ValidationError as exc:
+            # The message the low-level server gave when it validated.
+            raise ValueError(f"Input validation error: {exc.message}") from exc
+        if name in dashboard_specs:
+            result = await asyncio.to_thread(
+                dashboards_client.call_result, name, arguments,
+                _backend_session_id_for(opencode_session_id),
+            )
+            return types.CallToolResult(
+                content=[types.TextContent(type="text", text=result.text)],
+                structuredContent=result.structured,
+                isError=result.is_error,
+            )
         target = artifacts_client if name in artifact_specs else task_client
         text, is_error = await asyncio.to_thread(
-            target.call, name, arguments or {}, _read_backend_session_id(),
+            target.call, name, arguments, _read_backend_session_id(),
         )
         if is_error:
             # The low-level server turns a raised error into an isError result.

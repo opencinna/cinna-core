@@ -7897,6 +7897,175 @@ export const AgentCredentialLinkRequestSchema = {
     title: 'AgentCredentialLinkRequest'
 } as const;
 
+export const AgentDashboardRefSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        }
+    },
+    type: 'object',
+    required: ['id', 'name'],
+    title: 'AgentDashboardRef'
+} as const;
+
+export const AgentDashboardTileSchema = {
+    properties: {
+        tile_id: {
+            type: 'string',
+            title: 'Tile Id'
+        },
+        component: {
+            type: 'string',
+            title: 'Component'
+        },
+        skill: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Skill'
+        },
+        title: {
+            type: 'string',
+            title: 'Title'
+        },
+        view: {
+            type: 'string',
+            title: 'View'
+        },
+        params: {
+            additionalProperties: true,
+            type: 'object',
+            title: 'Params'
+        },
+        param_specs: {
+            additionalProperties: true,
+            type: 'object',
+            title: 'Param Specs'
+        },
+        can_highlight: {
+            type: 'boolean',
+            title: 'Can Highlight'
+        },
+        summary: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Summary'
+        },
+        selection: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Selection'
+        }
+    },
+    type: 'object',
+    required: ['tile_id', 'component', 'title', 'view', 'params', 'param_specs', 'can_highlight'],
+    title: 'AgentDashboardTile'
+} as const;
+
+export const AgentDashboardTilesRequestSchema = {
+    properties: {
+        session_id: {
+            type: 'string',
+            maxLength: 64,
+            title: 'Session Id'
+        }
+    },
+    type: 'object',
+    required: ['session_id'],
+    title: 'AgentDashboardTilesRequest'
+} as const;
+
+export const AgentDashboardTilesResultSchema = {
+    properties: {
+        dashboard: {
+            '$ref': '#/components/schemas/AgentDashboardRef'
+        },
+        tiles: {
+            items: {
+                '$ref': '#/components/schemas/AgentDashboardTile'
+            },
+            type: 'array',
+            title: 'Tiles'
+        }
+    },
+    type: 'object',
+    required: ['dashboard', 'tiles'],
+    title: 'AgentDashboardTilesResult'
+} as const;
+
+export const AgentDashboardUpdateTileRequestSchema = {
+    properties: {
+        session_id: {
+            type: 'string',
+            maxLength: 64,
+            title: 'Session Id'
+        },
+        tile_id: {
+            title: 'Tile Id'
+        },
+        params: {
+            title: 'Params'
+        },
+        highlight: {
+            title: 'Highlight'
+        }
+    },
+    type: 'object',
+    required: ['session_id'],
+    title: 'AgentDashboardUpdateTileRequest'
+} as const;
+
+export const AgentDashboardUpdateTileResultSchema = {
+    properties: {
+        tile_id: {
+            type: 'string',
+            title: 'Tile Id'
+        },
+        params: {
+            additionalProperties: true,
+            type: 'object',
+            title: 'Params'
+        },
+        recomputing: {
+            type: 'boolean',
+            title: 'Recomputing'
+        },
+        highlighted: {
+            type: 'boolean',
+            title: 'Highlighted'
+        }
+    },
+    type: 'object',
+    required: ['tile_id', 'params', 'recomputing', 'highlighted'],
+    title: 'AgentDashboardUpdateTileResult'
+} as const;
+
 export const AgentDelegationReportSchema = {
     properties: {
         status: {
@@ -10538,6 +10707,56 @@ export const AgentTaskStatusUpdateSchema = {
     required: ['status'],
     title: 'AgentTaskStatusUpdate',
     description: 'Agent request to explicitly update task status (edge cases only)'
+} as const;
+
+export const AgentTileToolErrorSchema = {
+    properties: {
+        error: {
+            '$ref': '#/components/schemas/AgentTileToolErrorDetail'
+        }
+    },
+    type: 'object',
+    required: ['error'],
+    title: 'AgentTileToolError'
+} as const;
+
+export const AgentTileToolErrorDetailSchema = {
+    properties: {
+        code: {
+            type: 'string',
+            enum: ['not_found', 'invalid_input', 'rate_limited', 'no_dashboard'],
+            title: 'Code'
+        },
+        message: {
+            type: 'string',
+            title: 'Message'
+        },
+        field: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Field'
+        },
+        retry_after_s: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Retry After S'
+        }
+    },
+    type: 'object',
+    required: ['code', 'message'],
+    title: 'AgentTileToolErrorDetail'
 } as const;
 
 export const AgentUpdateSchema = {
@@ -17416,6 +17635,214 @@ the remote with their OWN git/SSH client. \`\`repo_url\`\` / \`\`subdir\`\` / \`
 are not secrets (the agent owner already sees them in the UI).`
 } as const;
 
+export const ComponentRefAgentSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        }
+    },
+    type: 'object',
+    required: ['id', 'name'],
+    title: 'ComponentRefAgent'
+} as const;
+
+export const ComponentRefComponentSchema = {
+    properties: {
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        skill: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Skill'
+        },
+        title: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Title'
+        },
+        view: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'View'
+        }
+    },
+    type: 'object',
+    required: ['name'],
+    title: 'ComponentRefComponent'
+} as const;
+
+export const ComponentRefPlacementSchema = {
+    properties: {
+        dashboard_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Dashboard Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        }
+    },
+    type: 'object',
+    required: ['dashboard_id', 'name'],
+    title: 'ComponentRefPlacement'
+} as const;
+
+export const ComponentRefResolvedSchema = {
+    properties: {
+        ref: {
+            type: 'string',
+            title: 'Ref'
+        },
+        status: {
+            type: 'string',
+            enum: ['ok', 'ambiguous', 'not_installed', 'gone', 'invalid', 'env_asleep', 'adapter_unsupported'],
+            title: 'Status'
+        },
+        message: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Message'
+        },
+        agent: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/ComponentRefAgent'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        component: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/ComponentRefComponent'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        from_skill: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'From Skill'
+        },
+        findings: {
+            items: {
+                '$ref': '#/components/schemas/DashboardComponentFinding'
+            },
+            type: 'array',
+            title: 'Findings',
+            default: []
+        },
+        placements: {
+            items: {
+                '$ref': '#/components/schemas/ComponentRefPlacement'
+            },
+            type: 'array',
+            title: 'Placements',
+            default: []
+        },
+        catalog_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Catalog Name'
+        }
+    },
+    type: 'object',
+    required: ['ref', 'status'],
+    title: 'ComponentRefResolved'
+} as const;
+
+export const ComponentRefsResolveRequestSchema = {
+    properties: {
+        refs: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            maxItems: 20,
+            title: 'Refs'
+        },
+        session_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Session Id'
+        }
+    },
+    type: 'object',
+    required: ['refs'],
+    title: 'ComponentRefsResolveRequest'
+} as const;
+
+export const ComponentRefsResolvedSchema = {
+    properties: {
+        results: {
+            items: {
+                '$ref': '#/components/schemas/ComponentRefResolved'
+            },
+            type: 'array',
+            title: 'Results'
+        }
+    },
+    type: 'object',
+    required: ['results'],
+    title: 'ComponentRefsResolved'
+} as const;
+
 export const ConfirmEmailRequestSchema = {
     properties: {
         token: {
@@ -19164,6 +19591,570 @@ export const DCRRequestSchema = {
     },
     type: 'object',
     title: 'DCRRequest'
+} as const;
+
+export const DashboardChatCreateSchema = {
+    properties: {
+        agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Agent Id'
+        },
+        new: {
+            type: 'boolean',
+            title: 'New',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['agent_id'],
+    title: 'DashboardChatCreate'
+} as const;
+
+export const DashboardChatPublicSchema = {
+    properties: {
+        session: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/SessionPublic'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        }
+    },
+    type: 'object',
+    title: 'DashboardChatPublic',
+    description: 'The (dashboard, agent) chat session; ``None`` before the first one exists.'
+} as const;
+
+export const DashboardComponentErrorBodySchema = {
+    properties: {
+        error: {
+            '$ref': '#/components/schemas/DashboardComponentErrorDetail'
+        }
+    },
+    type: 'object',
+    required: ['error'],
+    title: 'DashboardComponentErrorBody',
+    description: 'Error body of every agent-component route: ``{error: {code, message, …}}``.'
+} as const;
+
+export const DashboardComponentErrorDetailSchema = {
+    properties: {
+        code: {
+            type: 'string',
+            enum: ['rate_limited', 'needs_credentials', 'call_failed', 'invalid_input', 'not_found', 'env_unavailable', 'adapter_unsupported'],
+            title: 'Code'
+        },
+        message: {
+            type: 'string',
+            title: 'Message'
+        },
+        retry_after_s: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Retry After S'
+        },
+        field: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Field'
+        }
+    },
+    type: 'object',
+    required: ['code', 'message'],
+    title: 'DashboardComponentErrorDetail'
+} as const;
+
+export const DashboardComponentFindingSchema = {
+    properties: {
+        path: {
+            type: 'string',
+            title: 'Path'
+        },
+        code: {
+            type: 'string',
+            title: 'Code'
+        },
+        field: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Field'
+        },
+        severity: {
+            type: 'string',
+            enum: ['error', 'warning'],
+            title: 'Severity'
+        },
+        message: {
+            type: 'string',
+            title: 'Message'
+        }
+    },
+    type: 'object',
+    required: ['path', 'code', 'severity', 'message'],
+    title: 'DashboardComponentFinding'
+} as const;
+
+export const DashboardComponentFrameRequestSchema = {
+    properties: {
+        skill: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 128
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Skill'
+        },
+        tile_key: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 64
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Tile Key'
+        }
+    },
+    type: 'object',
+    title: 'DashboardComponentFrameRequest'
+} as const;
+
+export const DashboardComponentPlacementSchema = {
+    properties: {
+        dashboard_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Dashboard Id'
+        },
+        dashboard_name: {
+            type: 'string',
+            title: 'Dashboard Name'
+        },
+        block_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Block Id'
+        }
+    },
+    type: 'object',
+    required: ['dashboard_id', 'dashboard_name', 'block_id'],
+    title: 'DashboardComponentPlacement',
+    description: "A block on one of the owner's dashboards that shows the component."
+} as const;
+
+export const DashboardComponentPublicSchema = {
+    properties: {
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        skill: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Skill'
+        },
+        title: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Title'
+        },
+        view: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'View'
+        },
+        component_json: {
+            anyOf: [
+                {
+                    additionalProperties: true,
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Component Json'
+        },
+        findings: {
+            items: {
+                '$ref': '#/components/schemas/DashboardComponentFinding'
+            },
+            type: 'array',
+            title: 'Findings',
+            default: []
+        },
+        has_errors: {
+            type: 'boolean',
+            title: 'Has Errors',
+            default: false
+        },
+        size_bytes: {
+            type: 'integer',
+            title: 'Size Bytes',
+            default: 0
+        },
+        placements: {
+            items: {
+                '$ref': '#/components/schemas/DashboardComponentPlacement'
+            },
+            type: 'array',
+            title: 'Placements',
+            default: []
+        }
+    },
+    type: 'object',
+    required: ['name'],
+    title: 'DashboardComponentPublic'
+} as const;
+
+export const DashboardComponentRunRequestSchema = {
+    properties: {
+        skill: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 128
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Skill'
+        },
+        endpoint: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 128
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Endpoint'
+        },
+        params: {
+            additionalProperties: true,
+            type: 'object',
+            title: 'Params'
+        },
+        tile_key: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 64
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Tile Key'
+        }
+    },
+    type: 'object',
+    title: 'DashboardComponentRunRequest'
+} as const;
+
+export const DashboardComponentRunResultSchema = {
+    properties: {
+        value: {
+            title: 'Value'
+        },
+        fetched_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Fetched At'
+        },
+        notice: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Notice'
+        },
+        params_resolved: {
+            additionalProperties: true,
+            type: 'object',
+            title: 'Params Resolved',
+            default: {}
+        }
+    },
+    type: 'object',
+    required: ['fetched_at'],
+    title: 'DashboardComponentRunResult'
+} as const;
+
+export const DashboardComponentsPublicSchema = {
+    properties: {
+        components: {
+            items: {
+                '$ref': '#/components/schemas/DashboardComponentPublic'
+            },
+            type: 'array',
+            title: 'Components'
+        }
+    },
+    type: 'object',
+    required: ['components'],
+    title: 'DashboardComponentsPublic'
+} as const;
+
+export const DashboardFramePublicSchema = {
+    properties: {
+        frame_url: {
+            type: 'string',
+            title: 'Frame Url'
+        },
+        expires_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Expires At'
+        }
+    },
+    type: 'object',
+    required: ['frame_url', 'expires_at'],
+    title: 'DashboardFramePublic'
+} as const;
+
+export const DashboardTileCallRequestSchema = {
+    properties: {
+        endpoint: {
+            type: 'string',
+            maxLength: 128,
+            minLength: 1,
+            title: 'Endpoint'
+        },
+        params: {
+            additionalProperties: true,
+            type: 'object',
+            title: 'Params'
+        }
+    },
+    type: 'object',
+    required: ['endpoint'],
+    title: 'DashboardTileCallRequest'
+} as const;
+
+export const DashboardTileCallResultSchema = {
+    properties: {
+        value: {
+            title: 'Value'
+        }
+    },
+    type: 'object',
+    title: 'DashboardTileCallResult'
+} as const;
+
+export const DashboardTileDataPublicSchema = {
+    properties: {
+        data: {
+            title: 'Data'
+        },
+        stale: {
+            type: 'boolean',
+            title: 'Stale',
+            default: true
+        },
+        fetched_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Fetched At'
+        },
+        mark: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Mark'
+        },
+        mark_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Mark At'
+        },
+        notice: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Notice'
+        },
+        params_resolved: {
+            additionalProperties: true,
+            type: 'object',
+            title: 'Params Resolved',
+            default: {}
+        },
+        missing_credentials: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Missing Credentials',
+            default: []
+        },
+        skipped: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Skipped'
+        }
+    },
+    type: 'object',
+    title: 'DashboardTileDataPublic',
+    description: "A tile's cached data and what the page needs to draw it."
+} as const;
+
+export const DashboardTilePageStateRequestSchema = {
+    properties: {
+        page_doc: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 64
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Page Doc'
+        },
+        highlight_ready: {
+            type: 'boolean',
+            title: 'Highlight Ready',
+            default: false
+        },
+        seq: {
+            anyOf: [
+                {
+                    type: 'integer',
+                    maximum: 9223372036854776000,
+                    minimum: 0
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Seq'
+        },
+        if_page_doc: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 64
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'If Page Doc'
+        }
+    },
+    type: 'object',
+    title: 'DashboardTilePageStateRequest'
+} as const;
+
+export const DashboardTileParamsRequestSchema = {
+    properties: {
+        params: {
+            additionalProperties: true,
+            type: 'object',
+            title: 'Params'
+        }
+    },
+    type: 'object',
+    title: 'DashboardTileParamsRequest',
+    description: "The tile's whole param set: keys left out (or cleared) go back to their default."
+} as const;
+
+export const DashboardTileRefreshRequestSchema = {
+    properties: {
+        reason: {
+            type: 'string',
+            enum: ['open', 'reshow', 'manual', 'interval', 'after_turn', 'params'],
+            title: 'Reason'
+        }
+    },
+    type: 'object',
+    required: ['reason'],
+    title: 'DashboardTileRefreshRequest'
 } as const;
 
 export const DatabaseQueryRequestSchema = {
@@ -28800,6 +29791,17 @@ export const MessageCreateSchema = {
                 }
             ],
             title: 'Page Context'
+        },
+        dashboard_context: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Dashboard Context'
         }
     },
     type: 'object',
@@ -33830,6 +34832,18 @@ export const SessionPublicSchema = {
             ],
             title: 'Dashboard Block Id'
         },
+        dashboard_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Dashboard Id'
+        },
         caller_id: {
             anyOf: [
                 {
@@ -34106,6 +35120,18 @@ export const SessionPublicExtendedSchema = {
                 }
             ],
             title: 'Dashboard Block Id'
+        },
+        dashboard_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Dashboard Id'
         },
         caller_id: {
             anyOf: [
@@ -38490,7 +39516,7 @@ export const UserDashboardBlockCreateSchema = {
         },
         view_type: {
             type: 'string',
-            enum: ['webapp', 'latest_session', 'latest_tasks', 'agent_env_file'],
+            enum: ['webapp', 'latest_session', 'latest_tasks', 'agent_env_file', 'agent_component'],
             title: 'View Type',
             default: 'latest_session'
         },
@@ -38772,7 +39798,7 @@ export const UserDashboardBlockUpdateSchema = {
             anyOf: [
                 {
                     type: 'string',
-                    enum: ['webapp', 'latest_session', 'latest_tasks', 'agent_env_file']
+                    enum: ['webapp', 'latest_session', 'latest_tasks', 'agent_env_file', 'agent_component']
                 },
                 {
                     type: 'null'

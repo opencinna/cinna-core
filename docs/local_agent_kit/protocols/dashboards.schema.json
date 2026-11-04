@@ -127,7 +127,7 @@
             "max_age": { "$ref": "#/$defs/duration", "default": "15m", "description": "A visible tile whose cached result is older than this is recomputed. Never null: leave it out for the default." },
             "while_open_every": { "oneOf": [{ "$ref": "#/$defs/duration_1m_or_more" }, { "type": "null" }], "default": null, "description": "Recompute on this period while the dashboard is on screen. At least `1m`." },
             "after_turn": { "type": "boolean", "default": false, "description": "Recompute when this agent's turn ends and the tile is on screen. Without it the end of a turn only re-reads." },
-            "on_app_start": { "type": "boolean", "default": false, "description": "Warm up once after the app starts. It costs the owner at every launch: only for slow sources." },
+            "on_app_start": { "type": "boolean", "default": false, "description": "Warm up once after the app starts. It costs the owner at every launch: only for slow sources. A host without an app launch (cinna-core) ignores it; tiles there refresh when opened." },
             "command": { "oneOf": [{ "type": "string", "pattern": "^/run:[A-Za-z0-9][A-Za-z0-9_-]*$" }, { "type": "null" }], "default": null, "description": "A `/run:<name>` command from docs/CLI_COMMANDS.yaml (the `status_refresh_command` grammar) run before the source is read: it rewrites the source file." },
             "schedule": { "oneOf": [{ "type": "string", "minLength": 1, "maxLength": 255, "pattern": "\\S" }, { "type": "null" }], "default": null, "description": "The `schedules[].name` whose output the source reads. For data that needs model judgment, such as ranking by the owner's rules; the tile re-reads what the schedule wrote." }
           }
@@ -243,7 +243,7 @@
     "location": "dashboards/<component>/api/<endpoint>.<ext>; a component may mix runtimes.",
     "runtimes": {
       ".py": "python <script>, localized as `/run:` commands are (through the host's managed uv when the agent has a pyproject.toml). check_component.py --run without `uv` on PATH runs the checker's own Python and warns `uv_missing`.",
-      ".js": "node <script>: the user's `node` when one resolves on the command's PATH, otherwise the host's own Node runtime (Cinna Desktop: Electron as Node). A host passes `CINNA_NODE` to tools it runs: it names an executable that runs a script the way `node` does (`$CINNA_NODE <script>`), not necessarily a real node, so it is never probed with `--version` or any other flag. check_component.py --run runs exactly `[CINNA_NODE, script]`, else `node` on PATH, and with neither warns `runtime_missing` and skips the run.",
+      ".js": "node <script>: the user's `node` when one resolves on the command's PATH, otherwise the host's own Node runtime (Cinna Desktop: Electron as Node; cinna-core: the environment's `node`). A host passes `CINNA_NODE` to tools it runs: it names an executable that runs a script the way `node` does (`$CINNA_NODE <script>`), not necessarily a real node, so it is never probed with `--version` or any other flag. check_component.py --run runs exactly `[CINNA_NODE, script]`, else `node` on PATH, and with neither warns `runtime_missing` and skips the run.",
       ".mjs": "as .js",
       ".cjs": "as .js",
       ".ts": "not yet: unknown extensions are refused."
@@ -260,7 +260,7 @@
   },
   "x-web-view": {
     "sandbox": {
-      "description": "The page runs in a frame sandboxed with `allow-scripts allow-forms allow-modals` (no `allow-same-origin`, no top navigation, no popups), served under a per-tile path prefix, with a content security policy scoped to the component's own folder `<src>`: `default-src 'none'; connect-src <src>; script-src <src> 'unsafe-inline'; style-src <src> 'unsafe-inline'; img-src <src> data: blob:; font-src <src> data:; media-src <src> blob:; form-action 'none'; base-uri 'none'; frame-src 'none'; worker-src 'none'`. A host uses this policy as written; `<src>` is never `'self'`, a bare scheme or a host. Each rule below says why; check_component.py reports the code given.",
+      "description": "The page runs in a frame sandboxed with `allow-scripts allow-forms allow-modals` (no `allow-same-origin`, no top navigation, no popups), served under a per-tile path prefix, with a content security policy scoped to the component's own folder `<src>`: `default-src 'none'; connect-src <src>; script-src <src> 'unsafe-inline'; style-src <src> 'unsafe-inline'; img-src <src> data: blob:; font-src <src> data:; media-src <src> blob:; form-action 'none'; base-uri 'none'; frame-src 'none'; worker-src 'none'`. A host serving pages over http(s) also sends the sandbox as the CSP `sandbox` directive and adds `frame-ancestors <its app origin>`, so the page is sandboxed even when opened top-level. A host uses this policy as written; `<src>` is never `'self'`, a bare scheme or a host. Each rule below says why; check_component.py reports the code given.",
       "rules": [
         { "rule": "No network: bundle every library into the folder; no CDN, web fonts or external images.", "why": "Every fetch directive allows only <src>.", "code": "network_reference" },
         { "rule": "fetch / XHR reach only the component's own folder, by relative path. Static files are fine; endpoint data never comes through fetch.", "why": "connect-src <src>, and api/ is never served (404). Use cinna.onData and cinna.call.", "code": "fetch_endpoint" },
@@ -325,7 +325,7 @@
     ],
     "agent_segment": {
       "id:<manifest id>": "The uuid in cinna-agent.json `id`. Survives folder moves and renames; teammates' copies keep it. What an agent prints when it has no bundle id.",
-      "bundle:<bundle_id>": "The catalog id cinna-core mints when the agent is shared (e.g. `io.example.cinna.ab12cd34`). The same on every machine and for every teammate. Read from cinna-agent.json `bundle.bundle_id`, or from app-data/desktop.json `shared_remote.bundle_id`; the manifest wins when both exist.",
+      "bundle:<bundle_id>": "The catalog id cinna-core mints when the agent is shared (e.g. `io.example.cinna.ab12cd34`). The same on every machine and for every teammate. Read from cinna-agent.json `bundle.bundle_id`, or from app-data/desktop.json `shared_remote.bundle_id`; the manifest wins when both exist. A host resolves it among the agents the viewer has on that host (a kit agent on a desktop, an owned agent in cinna-core).",
       "<slug>": "A bare manifest slug. Readable and typeable, but a folder rename breaks it. Accepted by a host, never printed by an agent."
     },
     "prefix_rule": "The prefix is always written: `bundle:` and `id:` are never guessed from the segment's shape. An agent prints the prefix its host's prompt gives it, never one it read from app-data/.",
@@ -337,7 +337,7 @@
       "name": "^[a-z0-9][a-z0-9-]{0,63}$"
     },
     "where_a_card_renders": "A bare reference on a line of its own, or a markdown link whose target is a reference (the link text becomes the card's subtitle). Several references in one message render as a list of cards.",
-    "containment": "A host resolves a reference to a kit agent on its machine and a folder under that agent's dashboards/ role or one of its skills' dashboards/. It is never a path."
+    "containment": "A host resolves a reference to an agent the viewer has on that host (a kit agent on a desktop, an owned agent in cinna-core) and a folder under that agent's dashboards/ role or one of its skills' dashboards/. It is never a path."
   },
   "x-skill-components": {
     "description": "A skill may ship prebuilt components in `<skill>/dashboards/<name>/`, same layout, whether the skill is authored under skills/, from the catalog or from a marketplace. Other hosts ignore the folder.",

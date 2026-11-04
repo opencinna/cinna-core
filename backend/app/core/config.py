@@ -1096,6 +1096,9 @@ class Settings(BaseSettings):
     # Origin serving ``/a/`` content. Empty = ``backend_base_url``; set it on
     # split-host deployments where the SPA origin has no backend behind it.
     ARTIFACTS_CONTENT_ORIGIN: str | None = None
+    # Dashboard component frames (``/d/v/<cap>/``) are served on the same
+    # content origin; a frame cap lives this long (12 h).
+    DASHBOARD_FRAME_CAP_TTL_SECONDS: int = 12 * 60 * 60
 
     @property
     def artifacts_content_origin(self) -> str:

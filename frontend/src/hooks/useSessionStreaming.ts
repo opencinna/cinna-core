@@ -239,7 +239,8 @@ export function useSessionStreaming({
         file_size: number
         mime_type: string
       }>,
-      pageContext?: string
+      pageContext?: string,
+      dashboardContext?: string
     ) => {
       setIsPending(true)
       // Only reset streaming events if not currently streaming — if the agent
@@ -334,6 +335,11 @@ export function useSessionStreaming({
         // context using the same diff mechanism as the webapp chat widget.
         if (pageContext) {
           requestBody.page_context = pageContext
+        }
+        // The dashboard chat panel's `<dashboard_context>` JSON (plan §5.2):
+        // stored in metadata, never rendered, sent to the agent when it changed.
+        if (dashboardContext) {
+          requestBody.dashboard_context = dashboardContext
         }
 
         const response = await fetch(

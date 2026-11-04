@@ -11,6 +11,7 @@ templates pass `--run`; and checks `kit.py dashboards check` / `kit.py validate`
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -829,3 +830,40 @@ def test_the_bridge_replays_highlights_signals_once_and_collects_context(tmp_pat
     assert from_page["summary"] == "Two deals"
     assert from_page["selection"] == ["d-14"]
     assert from_page["microdata"] == collected["microdata"]
+
+
+# ── contract 1.21.0: cloud agents' components on cinna-core dashboards ────
+
+# 1.21.0 is wording only: the reference bridge's bytes did not change (its header
+# comment keeps saying "contract 1.20.0" on purpose).
+BRIDGE_SHA256 = "c12a7bf4b266608cd1b73223f0366988a7dccf8850517a5e9eaee302bdee828e"
+
+
+def test_the_kit_contract_version_is_1_21_0() -> None:
+    kit = json.loads((KIT_DIR / "kit.json").read_text(encoding="utf-8"))
+    assert kit["contract_version"] == "1.21.0"
+
+
+@_needs_tools
+def test_the_tile_tools_schema_no_longer_says_the_cloud_has_no_dashboards() -> None:
+    doc = _tools_doc()
+    texts = {"top": doc["description"], **{n: s["description"] for n, s in doc["tools"].items()}}
+    for where, text in texts.items():
+        assert "cloud has none" not in text, where
+        assert "no dashboards yet" not in text, where
+        assert "does not exist" not in text, where
+        assert "Only Cinna Desktop registers" not in text, where
+    assert "cinna-core for cloud agents" in doc["description"]
+    assert "a host without dashboards registers neither" in doc["description"]
+
+
+@pytest.mark.skipif(not BRIDGE_JS.is_file(), reason="kit has no reference bridge (pre-1.19.1)")
+def test_the_reference_bridge_is_byte_identical_to_1_20_0() -> None:
+    assert hashlib.sha256(BRIDGE_JS.read_bytes()).hexdigest() == BRIDGE_SHA256
+
+
+def test_the_changelog_has_a_1_21_0_entry() -> None:
+    text = (KIT_DIR / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert "## 1.21.0" in text
+    entry = text.split("## 1.21.0", 1)[1].split("\n## ", 1)[0]
+    assert "No bridge change" in entry

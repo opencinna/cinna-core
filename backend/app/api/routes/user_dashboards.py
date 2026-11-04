@@ -186,7 +186,7 @@ def delete_dashboard(
 
 
 @router.post("/{dashboard_id}/blocks", response_model=UserDashboardBlockPublic)
-def add_block(
+async def add_block(
     *,
     dashboard_id: uuid.UUID,
     session: SessionDep,
@@ -195,7 +195,7 @@ def add_block(
 ) -> Any:
     """Add a block to a dashboard."""
     try:
-        block = UserDashboardService.add_block(
+        block = await UserDashboardService.add_block_checked(
             session=session,
             dashboard_id=dashboard_id,
             owner_id=current_user.id,
@@ -229,7 +229,7 @@ def update_block_layout(
 
 
 @router.put("/{dashboard_id}/blocks/{block_id}", response_model=UserDashboardBlockPublic)
-def update_block(
+async def update_block(
     *,
     dashboard_id: uuid.UUID,
     block_id: uuid.UUID,
@@ -239,7 +239,7 @@ def update_block(
 ) -> Any:
     """Update block configuration."""
     try:
-        block = UserDashboardService.update_block(
+        block = await UserDashboardService.update_block_checked(
             session=session,
             dashboard_id=dashboard_id,
             block_id=block_id,

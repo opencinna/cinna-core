@@ -169,6 +169,8 @@ All require webapp-viewer JWT. See [Webapp Chat Tech](webapp_chat_tech.md) for d
 | GET | `/webapp/{path:path}` | Serves file with ETag/Last-Modified/304 support |
 | POST | `/webapp/api/{endpoint}` | Executes Python script via stdin/stdout, timeout up to 300s |
 
+Data scripts run through env-core's shared endpoint runner (process group, 5 MiB stdout cap). The webapp keeps plain `python` (`use_uv=False`); only dashboard components use `uv run` when the workspace has a `pyproject.toml`. Stderr in an error response is the last 2000 characters; output over 5 MiB gives 500 `{error, stderr}`. See [Agent Components tech](../../application/user_dashboards/agent_components_tech.md#env-core-inside-the-environment).
+
 ## Services & Key Methods
 
 ### `WebappService` (`backend/app/services/webapp/webapp_service.py`)

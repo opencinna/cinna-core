@@ -73,6 +73,11 @@ class Session(SQLModel, table=True):
     dashboard_block_id: uuid.UUID | None = Field(
         default=None, foreign_key="user_dashboard_block.id", ondelete="SET NULL", index=True
     )
+    # The dashboard whose chat this session is (one per dashboard and agent), or
+    # the dashboard of the block whose prompt action opened it.
+    dashboard_id: uuid.UUID | None = Field(
+        default=None, foreign_key="user_dashboard.id", ondelete="SET NULL", index=True
+    )
     # Track which user initiated this session via App MCP (for app_mcp sessions)
     caller_id: uuid.UUID | None = Field(
         default=None, foreign_key="user.id", ondelete="SET NULL", index=True
@@ -161,6 +166,7 @@ class SessionPublic(SQLModel):
     mcp_connector_id: uuid.UUID | None = None
     mcp_session_id: str | None = None
     dashboard_block_id: uuid.UUID | None = None
+    dashboard_id: uuid.UUID | None = None
     caller_id: uuid.UUID | None = None
     created_at: datetime
     updated_at: datetime
@@ -195,6 +201,9 @@ class MessageCreate(SQLModel):
     answers_to_message_id: uuid.UUID | None = None
     file_ids: list[uuid.UUID] = Field(default_factory=list)
     page_context: str | None = None
+    # JSON of what the owner sees on the dashboard (dashboard chat only).
+    # Kept in message_metadata, never rendered; see dashboard_context.py.
+    dashboard_context: str | None = None
 
 
 class MessagePublic(SQLModel):

@@ -17,6 +17,26 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+
+class _QuietPathsAccessFilter(logging.Filter):
+    """Drop ``uvicorn.access`` records for ``/dashboards/`` requests.
+
+    Defence in depth: those routes take everything in POST bodies, so their
+    paths are fixed, but nothing under them should ever reach a log line.
+    uvicorn's access record args are ``(client, method, path, http, status)``.
+    """
+
+    QUIET_PREFIXES = ("/dashboards/",)
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str):
+            return not args[2].startswith(self.QUIET_PREFIXES)
+        return True
+
+
+logging.getLogger("uvicorn.access").addFilter(_QuietPathsAccessFilter())
+
 # Workspace files monitored for live-sync resync (relative to workspace root).
 # When any of these stabilise after a change (e.g., a Mutagen sync completes),
 # env-core fires a single workspace-files-changed callback; the backend emits

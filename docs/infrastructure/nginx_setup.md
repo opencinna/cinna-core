@@ -28,6 +28,8 @@ Paste the config below into the site's `server { ... }` block, replacing any per
 #   ws/             Socket.IO realtime events (WebSocket)
 #   acp/            ACP connectors (WebSocket)
 #   a/              artifact content (sandboxed; backend sets CSP + CORS)
+#                   (d/, dashboard frames, has its own unlogged block below)
+#   d/              dashboard component frames (sandboxed; backend sets CSP + CORS; never logged)
 #   agent-hooks/    agent webhooks (public)
 #   agent-start     Local Agent Kit pasteable URL (also /agent-start/<path>)
 #   .well-known/... OAuth metadata (RFC 9728 / RFC 8414), desktop/mobile discovery
@@ -54,6 +56,24 @@ location ~ ^/(api/|mcp/|ws/|acp/|a/|agent-hooks/|agent-start(/|$)|\.well-known/(
     # Largest upload (file uploads, UPLOAD_MAX_FILE_SIZE_MB). Smaller per-route
     # limits (skills 17 MiB, artifacts 55 MiB) are enforced by the backend.
     client_max_body_size 100m;
+}
+
+# ── Dashboard component frames: /d/v/<cap>/<path> ───────────────────────────
+# The path carries the frame capability and may carry page data, so nothing
+# about these requests is logged. The backend sets CSP sandbox + CORS headers.
+# `^~` makes this prefix location win over the regex locations.
+location ^~ /d/ {
+    access_log off;
+    log_not_found off;
+    # Upstream errors would log the request line (cap, path, query) otherwise.
+    error_log /dev/null crit;
+
+    proxy_pass http://localhost:8000;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
 }
 
 # ── Desktop agents: git smart HTTP (clone / pull / push) ─────────────────────
@@ -89,6 +109,7 @@ It holds three locations:
 | Location | Routes | Why it is separate |
 |----------|--------|--------------------|
 | `~ ^/(api/\|mcp/\|ws/\|acp/\|a/\|agent-hooks/\|agent-start(/\|$)\|\.well-known/(...))` | every backend path except git | one transport profile fits all of them (below) |
+| `/d/` | dashboard component frames: [Agent Components](../application/user_dashboards/agent_components.md) | content origin, never logged, see below |
 | `/git/` | desktop agent git smart HTTP | pushes need a 256 MiB body and no request buffering |
 | `/` | the SPA, `try_files $uri $uri/ /index.html`, plus `/robots.txt` | static files; carries `X-Robots-Tag` itself |
 
@@ -111,7 +132,7 @@ It holds three locations:
 
 ```bash
 H=https://your-host
-for p in /api/v1/utils/health-check/ /a/v/x/x /git/x.git/info/refs \
+for p in /api/v1/utils/health-check/ /a/v/x/x /d/v/x/x /git/x.git/info/refs \
          /agent-start /agent-hooks/x /mcp/x /.well-known/cinna-desktop \
          /.well-known/oauth-authorization-server; do
   printf '%-42s ' "$p"; curl -s "$H$p" | grep -c 'id="root"'
@@ -156,6 +177,17 @@ Paths `/a/v/<cap>/<path>` and `/a/z/<cap>`, all methods. The backend's `Artifact
 - **Symptom when not routed.** The viewer is blank, and the console shows `Cross-Origin Request Blocked ... /assets/index-<hash>.js (Reason: CORS header 'Access-Control-Allow-Origin' missing)` plus `Module source URI is not allowed in this document` at `index.html:13`. The SPA shell was served into the sandboxed iframe, whose origin is opaque (`null`), so its `crossorigin` module script fails CORS. The markdown, CSV and PDF viewers fail too, because they fetch `/a/v/...` and get HTML back.
 - **Verify.** `curl -si https://<content host>/a/v/invalid/x` returns `404` with `content-security-policy: sandbox ...` and `access-control-allow-origin: *`.
 
+### Dashboard component frames (`/d/`)
+
+Paths `/d/v/<cap>/<path>`, GET and HEAD (other methods get 405). Served by the same backend middleware as `/a/` (preflight, 404 with sandbox headers), on the content origin.
+
+- **Never logged.** The path carries the frame cap and can carry page data. The location sets `access_log off`, `log_not_found off` and `error_log /dev/null crit` (without the `error_log` line, an upstream error would write the request line). The backend drops `/d/` from `uvicorn.access` and scrubs it from Sentry. In the production config this is a separate `location ^~ /d/` block rather than part of the shared regex, so the logging switches apply to it only.
+- **Which host.** As for `/a/`: the host of `artifacts_content_origin`; with a split API host that host's proxy must route `/d/`.
+- **Verify.** `curl -si https://<content host>/d/v/invalid/x` returns `404` with `content-security-policy: sandbox ...` and `access-control-allow-origin: *`, and leaves no line in the access or error log.
+- **Local dev.** `frontend/vite.config.ts` proxies `^/d/` to `VITE_API_URL`; `frontend/nginx.conf` carries `location /d/` with the same three logging directives.
+
+See [Agent Components tech](../application/user_dashboards/agent_components_tech.md#frame-content-host-dvcappath).
+
 ### Local Agent Kit (`/agent-start`)
 
 `/agent-start` is what a user pastes into a coding assistant. A plain browser gets an HTML landing page. The pattern `agent-start(/|$)` matches `/agent-start`, `/agent-start/` and `/agent-start/<path>`, but not a future SPA route such as `/startup` or `/agent-starter`. A plain prefix `agent-start` would match those, because nginx prefix matching is on the raw string. Responses are `Cache-Control: public, max-age=300` and the same for every caller.
@@ -187,6 +219,7 @@ The router is mounted a second time under `/api/agent-start`, and every link ins
 ## Integration Points
 
 - [Artifacts](../application/artifacts/artifacts.md): `/a/` and the backend-enforced upload cap
+- [Agent Components](../application/user_dashboards/agent_components.md): `/d/`
 - [MCP Integration](../application/mcp_integration/agent_mcp_architecture.md): `/mcp/`, `/.well-known/oauth-protected-resource`, `/.well-known/oauth-authorization-server`
 - [App MCP Server](../application/app_mcp_server/app_mcp_server.md): shares `/mcp/` with per-agent MCP servers
 - [Desktop App Authentication](../application/desktop_auth/desktop_auth.md): `/.well-known/cinna-desktop`, `/.well-known/cinna-app`

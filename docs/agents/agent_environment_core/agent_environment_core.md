@@ -213,6 +213,10 @@ The system prompt carries data only — a task context block (current task with 
 
 Tool-by-tool behaviour, prompts and file references: [Cinna Task Tools](cinna_tasks_tools.md).
 
+### Dashboard tile tools
+
+The same `cinna` server also offers `dashboards_tiles` and `dashboards_update_tile` (Claude Code `mcp__cinna__dashboards_*`, OpenCode `cinna_dashboards_*`, both pre-approved), read from `/app/core/protocols/dashboards-tools.schema.json`. They act on the dashboard of the current chat and only in a chat opened from a dashboard. Claude Code gets them only when the session context carries a verified `dashboard_id`; OpenCode caches its tool list, so they are listed in every conversation chat and answer `no_dashboard` outside a dashboard chat. On OpenCode a session plugin (`cinna_session_plugin.js`) tags each dashboard tool call with the OpenCode session id and the bridge reads that session's own context file, falling back to the shared file when the plugin is absent; on a non-200 from the backend only the status and error code are logged. Results are JSON text (the Claude SDK drops structured content). The system prompt gains a Dashboards section when the `cinna-dashboards` skill is installed. See [Agent Components](../../application/user_dashboards/agent_components.md).
+
 ---
 
 ## API Endpoints
@@ -236,6 +240,17 @@ Tool-by-tool behaviour, prompts and file references: [Cinna Task Tools](cinna_ta
 - `GET /webapp/status` - Webapp metadata: exists, total_size_bytes, file_count, has_index, api_endpoints
 - `GET /webapp/{path:path}` - Serve static file from `webapp/` with ETag/Last-Modified/304 caching headers
 - `POST /webapp/api/{endpoint}` - Execute Python data script (`webapp/api/{endpoint}.py`) via stdin/stdout, timeout up to 300s
+
+### Dashboards
+
+All `POST`, JSON body, agent-env token, `Cache-Control: no-store`:
+
+- `POST /dashboards/components` - List the agent's dashboard components (own and skill) with checker findings
+- `POST /dashboards/file` - Serve a file of a component by path (`api`, dot segments and escapes refused)
+- `POST /dashboards/run` - Run a component endpoint through the shared endpoint runner
+- `POST /dashboards/source-file` - Read the component's `source.file` under `app-data/` or `files/`
+
+Environments built before this feature answer 404, surfaced by the backend as `adapter_unsupported`. See [Agent Components tech](../../application/user_dashboards/agent_components_tech.md#env-core-inside-the-environment).
 
 ### Utility
 
