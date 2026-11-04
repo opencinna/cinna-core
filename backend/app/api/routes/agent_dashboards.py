@@ -30,6 +30,18 @@ from app.services.dashboards import frame_cap
 from app.services.dashboards.agent_component_service import AgentComponentService
 from app.services.dashboards.component_service import DashboardComponentError
 
+# Reads list env-core's components through a short per-worker cache (a few
+# seconds), which is right for the web UI and Cinna Desktop. A caller that just
+# changed the agent's files (``cinna dashboards`` after a push) asks for a
+# fresh read. No extra guard: the route is owner-only, a fresh read is one
+# listing round-trip to the owner's own running environment (the same call the
+# cache makes when it expires), and it never wakes an environment the cached
+# read would not.
+FRESH_DESCRIPTION = (
+    "Skip the short per-worker component list cache and read the environment now "
+    "(use right after changing the agent's files)."
+)
+
 router = APIRouter(
     prefix="/agents/{agent_id}/dashboards",
     tags=["AgentDashboards"],
@@ -39,11 +51,14 @@ router = APIRouter(
 
 @router.get("/", response_model=DashboardComponentsPublic)
 async def list_agent_dashboard_components(
-    agent_id: uuid.UUID, session: SessionDep, current_user: CurrentUser
+    agent_id: uuid.UUID,
+    session: SessionDep,
+    current_user: CurrentUser,
+    fresh: bool = Query(default=False, description=FRESH_DESCRIPTION),
 ) -> Any:
     """The agent's components with the checker's findings and where each is placed."""
     try:
-        return await AgentComponentService.list_public(session, current_user, agent_id)
+        return await AgentComponentService.list_public(session, current_user, agent_id, fresh=fresh)
     except DashboardComponentError as e:
         return component_error_response(e)
 
@@ -55,9 +70,12 @@ async def get_agent_dashboard_component(
     session: SessionDep,
     current_user: CurrentUser,
     skill: str | None = Query(default=None, max_length=128),
+    fresh: bool = Query(default=False, description=FRESH_DESCRIPTION),
 ) -> Any:
     try:
-        return await AgentComponentService.get_public(session, current_user, agent_id, name, skill)
+        return await AgentComponentService.get_public(
+            session, current_user, agent_id, name, skill, fresh=fresh
+        )
     except DashboardComponentError as e:
         return component_error_response(e)
 

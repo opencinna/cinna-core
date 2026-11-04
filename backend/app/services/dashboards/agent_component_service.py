@@ -1,7 +1,9 @@
 """Agent-scoped component operations (D-C9): list, get, run with explicit params, frame.
 
-These back ``/agents/{agent_id}/dashboards/*``: the core preview and the
-desktop's remote tiles. Nothing is cached and no params are stored; a run is
+These back ``/agents/{agent_id}/dashboards/*``: the core preview, the
+desktop's remote tiles and ``cinna dashboards``. No values are cached and no
+params are stored; list/get read env-core's per-worker component list cache
+unless the caller passes ``fresh`` (the CLI does, right after a push); a run is
 budgeted per ``p:<user>:<agent>:<skill|->:<component>:<tile_key|preview>``,
 except a source run with empty params (a plain preview), which is not counted.
 """
@@ -44,10 +46,11 @@ def _public(entry: dict, placements: list[dict]) -> DashboardComponentPublic:
 class AgentComponentService:
     @staticmethod
     async def list_public(
-        session: Session, user: User, agent_id: uuid.UUID
+        session: Session, user: User, agent_id: uuid.UUID, *, fresh: bool = False
     ) -> DashboardComponentsPublic:
+        """``fresh`` skips the per-worker list cache (and refills it)."""
         agent = ComponentService.get_owned_agent(session, agent_id, user.id)
-        components = await ComponentService.list_components(session, agent)
+        components = await ComponentService.list_components(session, agent, fresh=fresh)
         placements = ComponentService.placements(session, user.id, agent.id)
         return DashboardComponentsPublic(
             components=[
@@ -58,10 +61,16 @@ class AgentComponentService:
 
     @staticmethod
     async def get_public(
-        session: Session, user: User, agent_id: uuid.UUID, name: str, skill: str | None
+        session: Session,
+        user: User,
+        agent_id: uuid.UUID,
+        name: str,
+        skill: str | None,
+        *,
+        fresh: bool = False,
     ) -> DashboardComponentPublic:
         agent = ComponentService.get_owned_agent(session, agent_id, user.id)
-        entry = await ComponentService.get_component(session, agent, name, skill)
+        entry = await ComponentService.get_component(session, agent, name, skill, fresh=fresh)
         placements = ComponentService.placements(session, user.id, agent.id)
         return _public(entry, placements.get((name, skill or None), []))
 

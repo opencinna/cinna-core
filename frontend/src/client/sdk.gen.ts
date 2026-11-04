@@ -2634,6 +2634,7 @@ export class AgentDashboardsService {
      * The agent's components with the checker's findings and where each is placed.
      * @param data The data for the request.
      * @param data.agentId
+     * @param data.fresh Skip the short per-worker component list cache and read the environment now (use right after changing the agent's files).
      * @returns DashboardComponentsPublic Successful Response
      * @throws ApiError
      */
@@ -2643,6 +2644,9 @@ export class AgentDashboardsService {
             url: '/api/v1/agents/{agent_id}/dashboards/',
             path: {
                 agent_id: data.agentId
+            },
+            query: {
+                fresh: data.fresh
             },
             errors: {
                 400: 'Bad Request',
@@ -2662,6 +2666,7 @@ export class AgentDashboardsService {
      * @param data.agentId
      * @param data.name
      * @param data.skill
+     * @param data.fresh Skip the short per-worker component list cache and read the environment now (use right after changing the agent's files).
      * @returns DashboardComponentPublic Successful Response
      * @throws ApiError
      */
@@ -2674,7 +2679,8 @@ export class AgentDashboardsService {
                 name: data.name
             },
             query: {
-                skill: data.skill
+                skill: data.skill,
+                fresh: data.fresh
             },
             errors: {
                 400: 'Bad Request',

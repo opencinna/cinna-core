@@ -10,7 +10,7 @@ Test scenarios:
   6. Schedule-fed tile recomputes once per settled schedule run
   7. Page calls and frames (html view vs native view)
   8. adapter_unsupported mapping (pre-feature container)
-  9. Agent-scoped routes — list, get, run, frame
+  9. Agent-scoped routes — list, get, run, frame; fresh reads skip the list cache
  10. Ownership — another user's agent, dashboard and block are 404
  11. Page-state PUT
 """
@@ -461,6 +461,53 @@ def test_agent_scoped_list_get_run_and_frame(
     r = client.post(f"{base}/sales/frame", headers=h, json={})
     assert r.status_code == 400 and _err(r)["code"] == "invalid_input"
     assert client.post(f"{base}/ghost/frame", headers=h, json={}).status_code == 404
+
+
+def test_agent_scoped_list_and_get_fresh_skip_the_list_cache(
+    client: TestClient, db: Session, superuser_token_headers: dict, patch_environment_adapter
+) -> None:
+    """A read right after the agent's files change: cached reads lag, ``fresh`` does not."""
+    adapter = _adapter(patch_environment_adapter)
+    h = superuser_token_headers
+    agent = setup_component_agent(client, db, h, adapter, [make_component("sales")])
+    base = f"{API}/agents/{agent['id']}/dashboards"
+
+    # Cached: list and get both report the component as clean
+    assert client.get(f"{base}/", headers=h).json()["components"][0]["has_errors"] is False
+    assert client.get(f"{base}/sales", headers=h).json()["has_errors"] is False
+
+    # The component breaks in the environment (a push of a bad component.json)
+    broken = make_component("sales")
+    broken["findings"] = [
+        {"path": "component.json", "code": "bad_spec", "severity": "error", "message": "Broken."}
+    ]
+    adapter.dashboard_components = [broken]
+
+    # Default reads still serve the cached list (the web UI / desktop path)
+    assert client.get(f"{base}/", headers=h).json()["components"][0]["has_errors"] is False
+    assert client.get(f"{base}/sales", headers=h).json()["has_errors"] is False
+
+    # fresh=true reads the environment now, on both routes
+    r = client.get(f"{base}/sales", headers=h, params={"fresh": "true"})
+    assert r.status_code == 200, r.text
+    assert r.json()["has_errors"] is True and r.json()["findings"][0]["code"] == "bad_spec"
+    r = client.get(f"{base}/", headers=h, params={"fresh": "true"})
+    assert r.status_code == 200, r.text
+    assert r.json()["components"][0]["has_errors"] is True
+    # ...and refills the cache, so a default read now agrees
+    assert client.get(f"{base}/", headers=h).json()["components"][0]["has_errors"] is True
+
+    # The other direction: fixed, and a newly added component, seen only fresh
+    adapter.dashboard_components = [make_component("sales"), make_component("orders")]
+    assert client.get(f"{base}/sales", headers=h).json()["has_errors"] is True
+    assert client.get(f"{base}/orders", headers=h).status_code == 404
+    assert client.get(f"{base}/sales", headers=h, params={"fresh": "true"}).json()["has_errors"] is False
+    assert client.get(f"{base}/orders", headers=h, params={"fresh": "true"}).status_code == 200
+    names = {c["name"] for c in client.get(f"{base}/", headers=h, params={"fresh": True}).json()["components"]}
+    assert names == {"sales", "orders"}
+
+    # A non-boolean value is a validation error, not a silent cached read
+    assert client.get(f"{base}/", headers=h, params={"fresh": "soon"}).status_code == 422
 
 
 def test_agent_scoped_list_with_stopped_environment_is_503(

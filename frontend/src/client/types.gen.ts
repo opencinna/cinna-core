@@ -10636,12 +10636,20 @@ export type AgentCredentialsAgentCredentialAccessTokenResponse = (AgentCredentia
 
 export type AgentDashboardsListAgentDashboardComponentsData = {
     agentId: string;
+    /**
+     * Skip the short per-worker component list cache and read the environment now (use right after changing the agent's files).
+     */
+    fresh?: boolean;
 };
 
 export type AgentDashboardsListAgentDashboardComponentsResponse = (DashboardComponentsPublic);
 
 export type AgentDashboardsGetAgentDashboardComponentData = {
     agentId: string;
+    /**
+     * Skip the short per-worker component list cache and read the environment now (use right after changing the agent's files).
+     */
+    fresh?: boolean;
     name: string;
     skill?: (string | null);
 };

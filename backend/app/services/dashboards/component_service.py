@@ -234,9 +234,17 @@ class ComponentService:
 
     @staticmethod
     async def get_component(
-        session: Session, agent: Agent, name: str, skill: str | None, *, activate: bool = True
+        session: Session,
+        agent: Agent,
+        name: str,
+        skill: str | None,
+        *,
+        activate: bool = True,
+        fresh: bool = False,
     ) -> dict:
-        components = await ComponentService.list_components(session, agent, activate=activate)
+        components = await ComponentService.list_components(
+            session, agent, activate=activate, fresh=fresh
+        )
         entry = ComponentService.find(components, name, skill)
         if entry is None:
             raise not_found()

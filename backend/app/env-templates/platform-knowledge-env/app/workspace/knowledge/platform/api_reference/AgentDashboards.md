@@ -8,6 +8,9 @@ Auto-generated from OpenAPI spec. Tag: `AgentDashboards`
 **Path parameters:**
 - `agent_id`: uuid
 
+**Query parameters:**
+- `fresh`: boolean, default: `False`
+
 **Response:** `DashboardComponentsPublic`
 
 ---
@@ -21,6 +24,7 @@ Auto-generated from OpenAPI spec. Tag: `AgentDashboards`
 
 **Query parameters:**
 - `skill`: string | null
+- `fresh`: boolean, default: `False`
 
 **Response:** `DashboardComponentPublic`
 
