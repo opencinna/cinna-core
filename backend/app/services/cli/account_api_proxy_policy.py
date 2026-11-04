@@ -27,7 +27,9 @@ user's own rights, never less.
 Besides segment prefixes, ``EXCLUDED_PATTERNS`` (any method) and
 ``EXCLUDED_WRITE_PATTERNS`` (one method) deny single routes by full regex match
 on the API-relative path: routes whose response carries a secret value
-(issued API keys, minted bearer tokens, raw workspace files).
+(issued API keys, minted bearer tokens, dashboard frame caps, raw workspace
+files). ``BROWSER_PAGE_WRITE_PATTERNS`` denies writes that only an open browser
+page may make (dashboard tile ``page-state``).
 
 Matching runs on the percent-DECODED path, because that is what the router
 sees (httpx decodes ``%63redentials`` to ``credentials`` before dispatch).
@@ -148,6 +150,18 @@ EXCLUDED_WRITE_PATTERNS: tuple[tuple[str, str], ...] = (
     # The CLI creates links on the dedicated, interactive
     # ``/cli/account/artifacts/{id}/links`` route instead.
     ("POST", r"artifacts/[^/]+/links"),
+    # Dashboard component frames: ``frame_url``'s path (``/d/v/<cap>/``) is the
+    # credential for 12 h. Cinna Desktop and the web app call these directly
+    # with the user's JWT, never through the proxy.
+    ("POST", r"agents/[^/]+/dashboards/[^/]+/frame"),
+    ("POST", r"dashboards/[^/]+/blocks/[^/]+/component/frame"),
+)
+
+# (method, pattern) pairs: writes that belong to an open browser page, not to
+# an account token. Not secrets: ``page-state`` reports the owner's open tile
+# page's highlight readiness, and a CLI write would make that readiness lie.
+BROWSER_PAGE_WRITE_PATTERNS: tuple[tuple[str, str], ...] = (
+    ("PUT", r"dashboards/[^/]+/blocks/[^/]+/component/page-state"),
 )
 
 # Allowed routes whose response passes through with fields blanked, because
@@ -174,6 +188,10 @@ _SECRET_ROUTE_MESSAGE = (
 _SHARE_ROUTE_MESSAGE = (
     "Share links and security codes are managed in the web app; the escape "
     "hatch never returns them."
+)
+_BROWSER_PAGE_MESSAGE = (
+    "This route is written by an open dashboard page in the browser; the "
+    "escape hatch does not call it."
 )
 _PREFIX_MESSAGE = (
     "The escape hatch may not call '{path}' (credential/user-management/admin/"
@@ -249,6 +267,9 @@ def route_refusal(method: str, relative_path: str) -> ApiProxyDenied | None:
     for denied_method, pattern in EXCLUDED_WRITE_PATTERNS:
         if method == denied_method and re.fullmatch(pattern, path):
             return ApiProxyDenied("excluded_path", _SECRET_ROUTE_MESSAGE)
+    for denied_method, pattern in BROWSER_PAGE_WRITE_PATTERNS:
+        if method == denied_method and re.fullmatch(pattern, path):
+            return ApiProxyDenied("excluded_path", _BROWSER_PAGE_MESSAGE)
     return None
 
 

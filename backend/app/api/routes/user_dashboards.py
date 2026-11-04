@@ -18,7 +18,9 @@ from app.models import (
     UserDashboardBlockPromptActionCreate,
     UserDashboardBlockPromptActionUpdate,
     UserDashboardBlockPromptActionPublic,
+    DashboardsCapabilities,
 )
+from app.services.dashboards.capabilities import dashboards_capabilities
 from app.services.sessions.session_service import SessionService
 from app.services.users.user_dashboard_service import UserDashboardService, UserDashboardError
 
@@ -75,6 +77,14 @@ def _dashboard_to_public(dashboard: Any) -> UserDashboardPublic:
 
 
 # ── Dashboard endpoints ──────────────────────────────────────────────────────
+
+
+# IMPORTANT: /capabilities must be registered BEFORE /{dashboard_id} (and the
+# dashboard_chat router, registered first, has no one-segment GET that could take it).
+@router.get("/capabilities", response_model=DashboardsCapabilities)
+def get_dashboards_capabilities(_current_user: CurrentUser) -> Any:
+    """Agent dashboard limits and features. Cheap; never touches an environment."""
+    return dashboards_capabilities()
 
 
 # IMPORTANT: /agent-env-files must be registered BEFORE /{dashboard_id} to avoid route conflicts.

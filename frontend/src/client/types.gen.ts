@@ -3992,6 +3992,26 @@ export type CLIAccountTokensPublic = {
 };
 
 /**
+ * Building context for a CLI workspace.
+ *
+ * Extra keys a newer env-core adds pass through unchanged.
+ */
+export type CLIBuildingContext = {
+    building_prompt?: string;
+    building_prompt_parts?: {
+        [key: string]: unknown;
+    };
+    prompt_files?: {
+        [key: string]: (string);
+    };
+    settings?: {
+        [key: string]: unknown;
+    };
+    platform_skills?: Array<CLIPlatformSkill>;
+    [key: string]: unknown | string | CLIPlatformSkill;
+};
+
+/**
  * Where this agent's git remote is — for the CLI's sparse-checkout link.
  *
  * Carries NO deploy-key / private-key material: the developer authenticates to
@@ -4006,6 +4026,14 @@ export type CliGitCoordinates = {
     sync_direction?: (string | null);
     last_synced_commit?: (string | null);
     auth_hint?: (string | null);
+};
+
+/**
+ * A platform skill projected into the environment (outside ``/app/workspace``).
+ */
+export type CLIPlatformSkill = {
+    name: string;
+    kit_path: string;
 };
 
 export type CLISetupTokenCreate = {
@@ -4628,6 +4656,25 @@ export type DashboardComponentsPublic = {
 export type DashboardFramePublic = {
     frame_url: string;
     expires_at: string;
+};
+
+export type DashboardsCapabilities = {
+    version: number;
+    contract_version: (string | null);
+    limits: DashboardsLimits;
+    chat?: boolean;
+    component_refs?: boolean;
+};
+
+export type DashboardsLimits = {
+    runs_per_minute: number;
+    blocks_per_dashboard: number;
+    dashboards_per_user: number;
+    context_chars: number;
+    summary_chars: number;
+    stdout_bytes: number;
+    timeout_s_default: number;
+    timeout_s_max: number;
 };
 
 export type DashboardTileCallRequest = {
@@ -11857,7 +11904,7 @@ export type CliGetBuildingContextData = {
     agentId: string;
 };
 
-export type CliGetBuildingContextResponse = (unknown);
+export type CliGetBuildingContextResponse = (CLIBuildingContext);
 
 export type CliGetWorkspaceData = {
     agentId: string;
@@ -12421,6 +12468,8 @@ export type DashboardChatOpenDashboardChatData = {
 };
 
 export type DashboardChatOpenDashboardChatResponse = (DashboardChatPublic);
+
+export type DashboardsGetDashboardsCapabilitiesResponse = (DashboardsCapabilities);
 
 export type DashboardsListAgentEnvFilesData = {
     /**

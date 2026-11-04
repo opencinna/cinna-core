@@ -46,6 +46,24 @@ PROTOCOL_FILES: tuple[str, ...] = (
     "skills/cinna-dashboards",
 )
 
+#: Kit directory holding the platform skills (``skills/<name>``).
+PLATFORM_SKILLS_KIT_DIR = "skills"
+
+
+def platform_skills() -> list[dict[str, str]]:
+    """The platform skills core installs into an environment, as ``{name, kit_path}``.
+
+    Derived from :data:`PROTOCOL_FILES` (``kit_path`` is the path inside the
+    Local Agent Kit). An environment reports what it actually carries in its
+    building context; this is the fallback for one built before it did.
+    """
+    prefix = f"{PLATFORM_SKILLS_KIT_DIR}/"
+    return [
+        {"name": relative[len(prefix):], "kit_path": relative}
+        for relative in PROTOCOL_FILES
+        if relative.startswith(prefix)
+    ]
+
 
 SCHEMA_FILE = "protocols/tasks.schema.json"
 

@@ -627,7 +627,9 @@ async def get_agent_prompts() -> AgentPromptsResponse:
 
 
 @router.get("/prompt/building", dependencies=[Depends(verify_auth_token)])
-async def get_building_prompt():
+async def get_building_prompt(
+    bundle_id: Annotated[str | None, Query(max_length=255)] = None,
+):
     """
     Assemble and return the building mode system prompt.
 
@@ -643,8 +645,20 @@ async def get_building_prompt():
             "WEBAPP_BUILDING.md": "...",
             "COMPLEX_AGENT_DESIGN.md": "..."
         },
-        "settings": { ... }
+        "settings": { ... },
+        "platform_skills": [{"name": "cinna-dashboards", "kit_path": "skills/cinna-dashboards"}, ...]
     }
+
+    ``bundle_id`` (optional) is the agent's bundle id. It is passed to the
+    prompt generator as ``session_context={"bundle_id": ...}`` — the same key
+    the chat session context carries — so the Dashboards section prints the
+    ``cinna://component/bundle:<bundle_id>/`` reference. Without it the
+    section falls back to naming the component in plain words.
+
+    ``platform_skills`` lists the platform skills projected from
+    ``/app/core/skills``; ``kit_path`` is each one's path inside the Local
+    Agent Kit, which a CLI workspace reads instead (it never syncs
+    ``/app/core``).
 
     ``prompt_files`` ships the contents of the companion guides in
     ``/app/core/prompts/`` (everything except ``BUILDING_AGENT.md`` itself)
@@ -657,7 +671,8 @@ async def get_building_prompt():
         prompt_gen = PromptGenerator(WORKSPACE_DIR)
 
         # Generate assembled building mode prompt
-        prompt_result = prompt_gen.generate_building_mode_prompt()
+        session_context = {"bundle_id": bundle_id} if bundle_id else None
+        prompt_result = prompt_gen.generate_building_mode_prompt(session_context)
         if prompt_result and isinstance(prompt_result, dict):
             building_prompt = prompt_result.get("append", "")
         else:
@@ -711,6 +726,7 @@ async def get_building_prompt():
             "building_prompt_parts": building_prompt_parts,
             "prompt_files": prompt_files,
             "settings": settings,
+            "platform_skills": prompt_gen.platform_skills(),
         }
 
     except Exception as e:

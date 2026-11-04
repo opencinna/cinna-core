@@ -48,6 +48,12 @@ async def resolve_component_refs(
 def get_dashboard_chat(
     dashboard_id: uuid.UUID, agent_id: uuid.UUID, session: SessionDep, current_user: CurrentUser
 ) -> Any:
+    """The (dashboard, agent) chat, or `session: null` before the first one.
+
+    Refusals use FastAPI's `{detail}` body, not the `{error:{code,message}}` body
+    of the other dashboard component routes; it keeps the same shape as `POST`, whose
+    `detail` Cinna Desktop's coreDashboardsClient reads.
+    """
     try:
         chat = DashboardChatService.get(session, current_user, dashboard_id, agent_id)
     except DashboardChatError as e:
@@ -59,6 +65,12 @@ def get_dashboard_chat(
 def open_dashboard_chat(
     dashboard_id: uuid.UUID, body: DashboardChatCreate, session: SessionDep, current_user: CurrentUser
 ) -> Any:
+    """The chat, created when there is none or `new` ("New chat") is set.
+
+    Refusals use FastAPI's `{detail}` body, not the `{error:{code,message}}` body
+    of the other dashboard component routes; Cinna Desktop's coreDashboardsClient
+    reads `detail` from this route.
+    """
     try:
         chat = DashboardChatService.get_or_create(
             session, current_user, dashboard_id, body.agent_id, new=body.new

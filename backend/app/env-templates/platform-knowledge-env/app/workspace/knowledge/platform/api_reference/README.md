@@ -11,7 +11,7 @@ Routes marked *Not available via `cinna api`* are refused by the account CLI esc
 | App Sync | [App Sync.md](./App Sync.md) | 21 |
 | Dashboardchat | [DashboardChat.md](./DashboardChat.md) | 3 |
 | Dashboardtiles | [DashboardTiles.md](./DashboardTiles.md) | 6 |
-| Dashboards | [Dashboards.md](./Dashboards.md) | 17 |
+| Dashboards | [Dashboards.md](./Dashboards.md) | 18 |
 | A2A | [a2a.md](./a2a.md) | 9 |
 | Access Tokens | [access_tokens.md](./access_tokens.md) | 5 |
 | Acp Connectors | [acp_connectors.md](./acp_connectors.md) | 9 |

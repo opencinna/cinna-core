@@ -469,12 +469,16 @@ class CLIService:
 
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
+                # ``bundle_id`` turns on the Dashboards section's component
+                # reference line; an env built before it existed ignores the
+                # unknown query parameter.
                 response = await client.get(
                     f"{base_url}/prompt/building",
+                    params={"bundle_id": agent.bundle_id},
                     headers=auth_headers,
                 )
                 response.raise_for_status()
-                return response.json()
+                context = response.json()
         except httpx.HTTPStatusError as e:
             logger.warning(
                 f"Env core returned error for building context: {e.response.status_code}. "
@@ -487,6 +491,16 @@ class CLIService:
                 "Returning minimal context."
             )
             return _minimal_building_context(agent, environment)
+
+        if "platform_skills" not in context:
+            # An env built before it reported its platform skills: fall back to
+            # the list core installs into every environment today
+            # (PROTOCOL_FILES). It may name a skill an un-rebuilt env predates;
+            # harmless, because the CLI reads the kit copy, not the env's.
+            from app.services.environments.platform_protocol_files import platform_skills
+
+            context["platform_skills"] = platform_skills()
+        return context
 
     # ── Knowledge Search ─────────────────────────────────────────────────
 
@@ -1002,4 +1016,5 @@ def _minimal_building_context(
             "sdk_adapter_conversation": environment.agent_sdk_conversation if environment else None,
             "model_override_building": environment.model_override_building if environment else None,
         },
+        "platform_skills": [],
     }

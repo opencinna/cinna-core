@@ -566,9 +566,12 @@ prefixes only.
 | `EXCLUDED_WRITE_PATTERNS` | POST | `agents/*/acp-connectors/*/tokens` | ACP token value |
 | `EXCLUDED_WRITE_PATTERNS` | POST | `agents/*/webhooks/{git-source,script,session}`, `agents/*/webhooks/*/regenerate-token` | `webhook_token` |
 | `EXCLUDED_WRITE_PATTERNS` | POST | `tasks/*/triggers/webhook`, `tasks/*/triggers/*/regenerate-token` | `webhook_token` |
+| `EXCLUDED_WRITE_PATTERNS` | POST | `agents/*/dashboards/*/frame`, `dashboards/*/blocks/*/component/frame` | `frame_url` path `/d/v/<cap>/` is a 12 h credential |
+| `BROWSER_PAGE_WRITE_PATTERNS` | PUT | `dashboards/*/blocks/*/component/page-state` | belongs to an open browser page; a CLI write would make highlight readiness lie (not a secret) |
 
 Matching runs on the **percent-decoded** path, because that is what the router sees
 (an encoded `%63redentials` once reached the router past the prefix denylist).
+Dashboard component `run`, `data`, `params`, `call` and `refresh` and all GETs (including `GET dashboards/capabilities`) stay allowed through the proxy; Cinna Desktop and the web app call the frame and page-state routes directly on `/api/v1`, so they are unaffected.
 Share links are denied too (any method, `excluded_path`, `SHARE_PATTERNS`): `agents/*/guest-shares` and below, `agents/*/webapp-shares` and below (every response carries the `share_url` with the share token and the `security_code`), plus `guest-share/*/auth` and `webapp-share/*/auth` (they answer a guest session JWT). Share links are managed in the web app. `guest-share/*/activate|info` and `webapp-share/*/info` stay allowed (no token or code returned).
 
 Carve-outs explicitly allowed from the user-management exclusion:

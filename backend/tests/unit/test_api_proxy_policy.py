@@ -731,3 +731,40 @@ class TestResponseRedaction:
 
     def test_non_dict_payload_is_safe(self) -> None:
         assert redact_response("GET", f"artifacts/{_A}", [1, 2]) is True
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# H. Dashboard component routes — frame caps and page-state are refused
+# ────────────────────────────────────────────────────────────────────────────
+
+
+class TestDashboardComponentRoutes:
+    """Frame routes mint a 12 h bearer cap; page-state belongs to an open page."""
+
+    def test_agent_dashboard_frame_post_blocked(self) -> None:
+        _denied("POST", f"{_BASE}/agents/abc/dashboards/revenue/frame", reason="excluded_path")
+
+    def test_block_component_frame_post_blocked(self) -> None:
+        _denied("POST", f"{_BASE}/dashboards/d1/blocks/b1/component/frame", reason="excluded_path")
+
+    def test_frame_blocked_with_trailing_slash(self) -> None:
+        _denied("POST", f"{_BASE}/dashboards/d1/blocks/b1/component/frame/", reason="excluded_path")
+
+    def test_page_state_put_blocked(self) -> None:
+        _denied("PUT", f"{_BASE}/dashboards/d1/blocks/b1/component/page-state", reason="excluded_path")
+
+    @pytest.mark.parametrize(
+        "method,path",
+        [
+            ("POST", "dashboards/d1/blocks/b1/component/run"),
+            ("GET", "dashboards/d1/blocks/b1/component/data"),
+            ("GET", "dashboards/d1/blocks/b1/component/params"),
+            ("PUT", "dashboards/d1/blocks/b1/component/params"),
+            ("POST", "dashboards/d1/blocks/b1/component/call"),
+            ("POST", "dashboards/d1/blocks/b1/component/refresh"),
+            ("GET", "dashboards/capabilities"),
+            ("GET", "agents/abc/dashboards/revenue/frame"),
+        ],
+    )
+    def test_other_component_routes_still_allowed(self, method: str, path: str) -> None:
+        _allowed(method, f"{_BASE}/{path}")

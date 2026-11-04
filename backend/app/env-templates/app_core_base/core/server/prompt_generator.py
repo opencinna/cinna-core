@@ -13,6 +13,8 @@ PLATFORM_TASKS_SKILL_VERSION = "1"
 
 # The platform-owned dashboards skill; its presence turns on the Dashboards section.
 PLATFORM_DASHBOARDS_SKILL = "cinna-dashboards"
+#: Directory of the platform skills inside the Local Agent Kit (and under /app/core).
+PLATFORM_SKILL_KIT_DIR = "skills"
 
 logger = logging.getLogger(__name__)
 
@@ -644,17 +646,7 @@ class PromptGenerator:
         except Exception as e:  # noqa: BLE001 — never break prompt generation
             logger.warning(f"Could not scan agent skills for the prompt: {e}")
             entries = []
-        try:
-            platform_entries = [
-                entry
-                for entry in scan_skills_root(
-                    self.platform_skills_dir, source=PLATFORM_SKILL_SOURCE
-                )
-                if entry.is_valid and entry.name in PLATFORM_SKILL_NAMES
-            ] if self.platform_skills_dir.is_dir() else []
-        except Exception as e:  # noqa: BLE001 — never break prompt generation
-            logger.warning(f"Could not scan platform skills for the prompt: {e}")
-            platform_entries = []
+        platform_entries = self._platform_skill_entries()
 
         if not entries and not platform_entries:
             return None
@@ -678,6 +670,38 @@ class PromptGenerator:
             f"({len(entries) + len(platform_entries)} skill(s))"
         )
         return "\n".join(lines)
+
+    def _platform_skill_entries(self) -> list:
+        """The valid platform skills projected from ``/app/core/skills``, name-sorted.
+
+        Never raises: an unreadable directory yields an empty list.
+        """
+        try:
+            if not self.platform_skills_dir.is_dir():
+                return []
+            return [
+                entry
+                for entry in scan_skills_root(
+                    self.platform_skills_dir, source=PLATFORM_SKILL_SOURCE
+                )
+                if entry.is_valid and entry.name in PLATFORM_SKILL_NAMES
+            ]
+        except Exception as e:  # noqa: BLE001 — never break prompt generation
+            logger.warning(f"Could not scan platform skills: {e}")
+            return []
+
+    def platform_skills(self) -> List[Dict[str, str]]:
+        """The platform skills this environment carries, as ``{name, kit_path}``.
+
+        ``/app/core/skills/<name>`` is installed from the Local Agent Kit's
+        ``skills/<name>`` (core's ``platform_protocol_files.PROTOCOL_FILES``), so
+        ``kit_path`` is the skill's path inside the kit. A CLI workspace never
+        syncs ``/app/core``; it points its local assistant at the kit copy.
+        """
+        return [
+            {"name": entry.name, "kit_path": f"{PLATFORM_SKILL_KIT_DIR}/{entry.name}"}
+            for entry in self._platform_skill_entries()
+        ]
 
     def _get_skill_scripts_section(self) -> Optional[str]:
         """Say that a loaded skill's bundled scripts may be run (conversation mode).

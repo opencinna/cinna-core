@@ -15706,6 +15706,63 @@ export const CLIAccountTokensPublicSchema = {
     title: 'CLIAccountTokensPublic'
 } as const;
 
+export const CLIBuildingContextSchema = {
+    properties: {
+        building_prompt: {
+            type: 'string',
+            title: 'Building Prompt',
+            default: ''
+        },
+        building_prompt_parts: {
+            additionalProperties: true,
+            type: 'object',
+            title: 'Building Prompt Parts'
+        },
+        prompt_files: {
+            additionalProperties: {
+                type: 'string'
+            },
+            type: 'object',
+            title: 'Prompt Files'
+        },
+        settings: {
+            additionalProperties: true,
+            type: 'object',
+            title: 'Settings'
+        },
+        platform_skills: {
+            items: {
+                '$ref': '#/components/schemas/CLIPlatformSkill'
+            },
+            type: 'array',
+            title: 'Platform Skills'
+        }
+    },
+    additionalProperties: true,
+    type: 'object',
+    title: 'CLIBuildingContext',
+    description: `Building context for a CLI workspace.
+
+Extra keys a newer env-core adds pass through unchanged.`
+} as const;
+
+export const CLIPlatformSkillSchema = {
+    properties: {
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        kit_path: {
+            type: 'string',
+            title: 'Kit Path'
+        }
+    },
+    type: 'object',
+    required: ['name', 'kit_path'],
+    title: 'CLIPlatformSkill',
+    description: 'A platform skill projected into the environment (outside ``/app/workspace``).'
+} as const;
+
 export const CLISetupTokenCreateSchema = {
     properties: {
         agent_id: {
@@ -20165,6 +20222,82 @@ export const DashboardTileRefreshRequestSchema = {
     type: 'object',
     required: ['reason'],
     title: 'DashboardTileRefreshRequest'
+} as const;
+
+export const DashboardsCapabilitiesSchema = {
+    properties: {
+        version: {
+            type: 'integer',
+            title: 'Version'
+        },
+        contract_version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Contract Version'
+        },
+        limits: {
+            '$ref': '#/components/schemas/DashboardsLimits'
+        },
+        chat: {
+            type: 'boolean',
+            title: 'Chat',
+            default: true
+        },
+        component_refs: {
+            type: 'boolean',
+            title: 'Component Refs',
+            default: true
+        }
+    },
+    type: 'object',
+    required: ['version', 'contract_version', 'limits'],
+    title: 'DashboardsCapabilities'
+} as const;
+
+export const DashboardsLimitsSchema = {
+    properties: {
+        runs_per_minute: {
+            type: 'integer',
+            title: 'Runs Per Minute'
+        },
+        blocks_per_dashboard: {
+            type: 'integer',
+            title: 'Blocks Per Dashboard'
+        },
+        dashboards_per_user: {
+            type: 'integer',
+            title: 'Dashboards Per User'
+        },
+        context_chars: {
+            type: 'integer',
+            title: 'Context Chars'
+        },
+        summary_chars: {
+            type: 'integer',
+            title: 'Summary Chars'
+        },
+        stdout_bytes: {
+            type: 'integer',
+            title: 'Stdout Bytes'
+        },
+        timeout_s_default: {
+            type: 'integer',
+            title: 'Timeout S Default'
+        },
+        timeout_s_max: {
+            type: 'integer',
+            title: 'Timeout S Max'
+        }
+    },
+    type: 'object',
+    required: ['runs_per_minute', 'blocks_per_dashboard', 'dashboards_per_user', 'context_chars', 'summary_chars', 'stdout_bytes', 'timeout_s_default', 'timeout_s_max'],
+    title: 'DashboardsLimits'
 } as const;
 
 export const DatabaseQueryRequestSchema = {

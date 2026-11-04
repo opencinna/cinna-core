@@ -46,6 +46,8 @@ Auto-generated from OpenAPI spec. Tag: `AgentDashboards`
 ## POST `/api/v1/agents/{agent_id}/dashboards/{name}/frame`
 **Mint Agent Dashboard Component Frame**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `agent_id`: uuid
 - `name`: string

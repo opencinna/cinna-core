@@ -95,7 +95,11 @@ app-data/
   (`/run:<name>`) rewrites a source file first; `schedule` names the schedule that
   writes it.
 - **`requires_credentials`**: names from the manifest's `credentials[]`, so a
-  teammate without one sees what is missing instead of an error.
+  teammate without one sees what is missing instead of an error. In the cloud a
+  linked credential answers to the bundle's credential spec name, else (an agent
+  that isn't a bundle install) to the credential's own name. A name is ready when
+  any credential linked under it is usable; a name no linked credential resolves
+  to counts as missing.
 - **`context`** and **`prompts`**: what the owner's chat needs to read the view, and
   the questions this owner would ask.
 

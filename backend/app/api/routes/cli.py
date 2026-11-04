@@ -61,6 +61,7 @@ from app.models.agents.agent_schedule import (
 )
 from app.models.agents.agent_schedule_log import AgentScheduleLogsPublic
 from app.models.cli.account_agent import AccountAgentsPublic
+from app.models.cli.cli_building_context import CLIBuildingContext
 from app.models.cli.account_convenience import (
     AccountAgentApiAccess,
     AccountAgentApiCallBody,
@@ -378,7 +379,7 @@ def revoke_cli_token(
 
 # ── Agent-scoped CLI Routes (CLI token auth) ─────────────────────────────────
 
-@router.get("/agents/{agent_id}/building-context")
+@router.get("/agents/{agent_id}/building-context", response_model=CLIBuildingContext)
 async def get_building_context(
     agent_id: uuid.UUID,
     db: SessionDep,
@@ -389,9 +390,13 @@ async def get_building_context(
 
     Proxies to the env core's prompt generator running inside Docker.
     The env core assembles the full building prompt from workspace files,
-    credentials, knowledge topics, plugins, etc.
+    credentials, knowledge topics, plugins, etc. The agent's ``bundle_id``
+    is passed along so the Dashboards section prints the component
+    reference. ``platform_skills`` lists the platform skills the
+    environment carries, each with its path inside the Local Agent Kit.
 
-    Returns minimal context if the environment is not running.
+    Returns minimal context (``platform_skills: []``) if the environment is
+    not running.
     """
     _verify_cli_agent_scope(cli_ctx, agent_id)
 

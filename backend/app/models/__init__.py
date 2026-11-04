@@ -941,6 +941,10 @@ from .dashboards.dashboard_chat import (
     ComponentRefsResolved,
     ComponentRefResolved,
 )
+from .dashboards.dashboard_capabilities import (
+    DashboardsLimits,
+    DashboardsCapabilities,
+)
 from .cli.cli_setup_token import (
     CLISetupToken,
     CLISetupTokenBase,
@@ -951,6 +955,10 @@ from .cli.cli_setup_token import (
 from .cli.account_agent import (
     AccountAgentListItem,
     AccountAgentsPublic,
+)
+from .cli.cli_building_context import (
+    CLIBuildingContext,
+    CLIPlatformSkill,
 )
 from .cli.account_convenience import (
     AccountAgentCreateBody,
@@ -2119,6 +2127,8 @@ __all__ = [
     "ComponentRefsResolveRequest",
     "ComponentRefsResolved",
     "ComponentRefResolved",
+    "DashboardsLimits",
+    "DashboardsCapabilities",
     "AgentComponentBlockConfig",
     "AgentComponentRefreshOverrides",
 ]

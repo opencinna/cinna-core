@@ -59,6 +59,8 @@ Auto-generated from OpenAPI spec. Tag: `DashboardTiles`
 ## POST `/api/v1/dashboards/{dashboard_id}/blocks/{block_id}/component/frame`
 **Mint Dashboard Tile Frame**
 
+> Not available via `cinna api` (excluded_path).
+
 **Path parameters:**
 - `dashboard_id`: uuid
 - `block_id`: uuid
@@ -69,6 +71,8 @@ Auto-generated from OpenAPI spec. Tag: `DashboardTiles`
 
 ## PUT `/api/v1/dashboards/{dashboard_id}/blocks/{block_id}/component/page-state`
 **Set Dashboard Tile Page State**
+
+> Not available via `cinna api` (excluded_path).
 
 **Path parameters:**
 - `dashboard_id`: uuid

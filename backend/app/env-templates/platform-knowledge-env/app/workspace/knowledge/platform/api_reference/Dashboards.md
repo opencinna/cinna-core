@@ -2,6 +2,13 @@
 
 Auto-generated from OpenAPI spec. Tag: `Dashboards`
 
+## GET `/api/v1/dashboards/capabilities`
+**Get Dashboards Capabilities**
+
+**Response:** `DashboardsCapabilities`
+
+---
+
 ## GET `/api/v1/dashboards/agent-env-files`
 **List Agent Env Files**
 
@@ -14,6 +21,9 @@ Auto-generated from OpenAPI spec. Tag: `Dashboards`
 ## GET `/api/v1/dashboards/`
 **List Dashboards**
 
+**Query parameters:**
+- `origin`: "web" | "desktop" | "all", default: `web`
+
 ---
 
 ## POST `/api/v1/dashboards/`
@@ -22,6 +32,7 @@ Auto-generated from OpenAPI spec. Tag: `Dashboards`
 **Request body** (`UserDashboardCreate`):
   - `name`: string (required)
   - `description`: string | null
+  - `origin`: "web" | "desktop"
 
 **Response:** `UserDashboardPublic`
 

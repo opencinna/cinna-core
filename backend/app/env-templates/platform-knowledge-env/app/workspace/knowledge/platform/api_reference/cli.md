@@ -46,6 +46,8 @@ Auto-generated from OpenAPI spec. Tag: `cli`
 **Path parameters:**
 - `agent_id`: uuid
 
+**Response:** `CLIBuildingContext`
+
 ---
 
 ## GET `/api/v1/cli/agents/{agent_id}/workspace`
