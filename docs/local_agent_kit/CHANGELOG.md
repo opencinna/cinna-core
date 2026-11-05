@@ -52,6 +52,9 @@ the agent runs in the cloud. No bridge change; no new codes.
 - **`skills/cinna-dashboards/SKILL.md`** and **`guides/14-dashboards.md`** — cloud
   agents are a dashboards host; in the cloud, tiles refresh on open and
   `on_app_start` is ignored.
+- **`kit.json`** (the `dashboards` rung's trigger), **`README.md`** and
+  **`START.md`** — the dashboards trigger names Cinna for a cloud agent beside
+  Cinna Desktop.
 
 `protocols/dashboards-bridge.js` is unchanged, byte for byte; its header still
 names contract 1.20.0.

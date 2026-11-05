@@ -80,7 +80,7 @@
     {
       "rung": "dashboards",
       "doc": "guides/14-dashboards.md",
-      "trigger": "the owner wants to see, track or keep an eye on something over time in Cinna Desktop"
+      "trigger": "the owner wants to see, track or keep an eye on something over time in Cinna Desktop, or in Cinna for a cloud agent"
     },
     {
       "rung": "go_cloud",

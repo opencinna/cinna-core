@@ -23,7 +23,7 @@ Kit version `{{KIT_VERSION}}` · contract version in `CONTRACT_VERSION` · insta
 | `guides/11-go-cloud.md` | The user asks to move an agent to {{INSTANCE_NAME}}. |
 | `guides/12-keeping-up-to-date.md` | The kit may be stale, or a convention changed under you. |
 | `guides/13-design-patterns.md` | Interviewing for any new agent (§0), and whenever the agent reaches an external system, sends or posts, answers several kinds of question, or will serve other people. |
-| `guides/14-dashboards.md` | The owner wants to see, track or keep an eye on something over time in Cinna Desktop. |
+| `guides/14-dashboards.md` | The owner wants to see, track or keep an eye on something over time in Cinna Desktop, or in Cinna for a cloud agent. |
 | `assistants/claude-code.md` | You are Claude Code. |
 | `assistants/codex.md` | You are Codex or another sandboxed CLI assistant. |
 | `assistants/antigravity.md` | You are Google Antigravity's agent. |
@@ -72,7 +72,7 @@ concrete artefacts. Walk the table top-down after every substantive change.
 | **CLI commands** | the same operation is run repeatedly by name | `docs/CLI_COMMANDS.yaml` entries (run locally through `local_command_runner`) |
 | **Knowledge & local skills** | 3+ distinct capabilities, domain docs beyond a page, or a finished skill worth publishing | `knowledge/<topic>/`, `skills/<name>/SKILL.md`, per-skill `scripts/` |
 | **Multi-agent** | a second agent appears, or one agent should delegate | root orchestrator conventions, manifest `handovers[]` |
-| **Dashboards** | the owner wants to see, track or keep an eye on something over time in Cinna Desktop | `dashboards/<name>/component.json` and its endpoints; data under `app-data/dashboards/<name>/` |
+| **Dashboards** | the owner wants to see, track or keep an eye on something over time in Cinna Desktop, or in Cinna for a cloud agent | `dashboards/<name>/component.json` and its endpoints; data under `app-data/dashboards/<name>/` |
 | **Go cloud** | the user asks, or the agent needs 24/7, email/chat channels, sharing or webapps | everything in `guides/11-go-cloud.md` |
 
 ### The ladder check
