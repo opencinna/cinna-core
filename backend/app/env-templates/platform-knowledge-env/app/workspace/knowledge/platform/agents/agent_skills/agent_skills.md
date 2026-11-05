@@ -368,7 +368,23 @@ options; core runs the same checks as a cloud publish and appends a revision.
   `edit` and the name must match (409 `skill_name_mismatch`). Without it, when the
   caller already publishes a skill of that name, the answer is 409 `package_exists`
   carrying that `package_uuid`, so the desktop retries as a new version instead of
-  creating a duplicate.
+  creating a duplicate. When the caller publishes none, but may `edit` somebody
+  else's package of that name, the answer is 409 `editable_package_exists` with
+  those packages as `candidates`: the person chooses a new version of theirs, or a
+  separate skill (`new_package: true`). Packages the caller cannot see are never
+  named. The preview lists the same `editable_packages`.
+- **A share from an older copy is refused**: the desktop sends the revision its
+  folder holds as `base_revision_number`. When that is no longer the package's
+  latest (a co-maintainer shared since), the answer is 409 `stale_base` naming the
+  latest revision, its version and who shared it, and nothing is written; the
+  person gets that version first. The check runs inside the package's publish lock,
+  so of two shares from the same base exactly one wins. Without a base nothing is
+  checked (older clients). The preview answers `stale` for a given base.
+- **Lineage**: every revision records `base_revision_number` (what the desktop
+  sent; on a cloud agent publish, the latest it published over) and the package
+  detail names who shared each version (`published_by`). Skill items in the
+  catalog listing carry `latest.content_hash`, so a desktop can tell unshared edits
+  in a linked folder without another read.
 - **Grants are additive**: those named are added or raised, never lowered, and
   everyone else keeps their access. Replacing the whole list is the catalog's grants
   call. `use` grants need the package to be limited to listed people.
@@ -413,6 +429,38 @@ local-install shares in its impact tiers.
 Reading a revision's content, file list or download also opens to a person who can
 use a desktop agent whose latest version pins exactly that revision, so sharing an
 agent carries its skills. The skill's own catalog detail does not open that way.
+
+### 5d. Sharing a skill by link
+
+Anyone who can see a package can pass it on as a **skill link**:
+`https://<instance>/get/skill/<package_id>`. **Copy install link** sits in the
+`⋯` menu of the package page's Package card (for every reader, not only its
+maintainers) and of each skill tile in the catalog grid. The link carries the
+reverse-DNS `package_id`, never the uuid, and no revision, so an old link always
+offers the latest version.
+
+The link opens a **public page** with no login wall, because the person it was
+sent to may have no account here. It names the instance, says "Someone shared a
+Cinna skill with you", shows the id, and offers **Open in Cinna Desktop**
+(`cinna://skill/<package_id>?server=<origin>`) and **Get Cinna Desktop**
+(`/desktop`). On macOS it adds "or paste this page's link into Cinna Desktop",
+because the app never reads the clipboard there. Cinna Desktop accepts both
+forms, pasted or clicked, and offers to add the skill to a local agent. On a
+instance whose web app and backend sit on different hosts, the Desktop learns the
+web address from the `web_origin` field of its instance discovery, so a web link
+still matches the server it is already signed in to.
+
+- **A signed-in visitor who may see the package** also gets its title,
+  publisher, **Version N (label)**, description, the credential slots it needs,
+  and **View in catalog**.
+- **Everyone else gets the same page for any well-formed id**: signed out,
+  signed in without access, and an id that does not exist all read the same.
+  The page never says whether a private package exists.
+- An id outside `[A-Za-z0-9._-]{1,255}` gets "This link isn't valid".
+
+The link grants nothing. Installing still needs the package's own visibility and
+grants. Marketplace skills and agents have no link yet; the `/get/<kind>/` path
+leaves room for them.
 
 ### 6. Installing a catalog skill
 
@@ -910,3 +958,4 @@ sweep skips denylisted names — it simply never travels again.
 - 2026-10-18: Desktop agents can install marketplace skills through snapshot archives and `marketplace_skills[]` pins.
 
 - `has_dashboards` flag beside `has_scripts` on skill summaries and index entries; `cinna-dashboards` reserved as a platform skill name (kit contract 1.19.0). Core does not host or render dashboards.
+- 2026-11-05: Skill links: **Copy install link** on the package page and catalog skill tiles, and the public `/get/skill/<package_id>` page that hands the skill to Cinna Desktop and reveals details only to a signed-in visitor who may see the package.

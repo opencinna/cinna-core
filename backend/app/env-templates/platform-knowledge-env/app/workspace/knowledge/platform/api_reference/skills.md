@@ -16,6 +16,7 @@ Auto-generated from OpenAPI spec. Tag: `skills`
   - `name`: string (required)
   - `frontmatter`: object
   - `package_uuid`: string | null
+  - `base_revision_number`: integer | null
   - `publisher_credentials`: SkillPublisherCredentialIn[]
 
 **Response:** `SkillPublishPreview`
@@ -30,6 +31,16 @@ Auto-generated from OpenAPI spec. Tag: `skills`
   - `meta`: string
 
 **Response:** `SkillPackageRevisionPublic`
+
+---
+
+## GET `/api/v1/skills/packages/by-package-id/{package_id}`
+**Get Skill Package By Package Id**
+
+**Path parameters:**
+- `package_id`: string
+
+**Response:** `SkillPackageDetailPublic`
 
 ---
 
