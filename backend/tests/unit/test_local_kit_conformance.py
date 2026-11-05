@@ -165,7 +165,7 @@ def _load(rel: str):
 def test_contract_version_is_coherent_across_the_four_carriers() -> None:
     # LocalAgentKitService 503s the contract when these disagree.
     file_version = (KIT_DIR / "CONTRACT_VERSION").read_text(encoding="utf-8").strip()
-    assert file_version == "1.21.0"
+    assert file_version == "1.22.0"
     assert _load("kit.json")["contract_version"] == file_version
     assert _load("layout.json")["contract_version"] == file_version
     changelog = (KIT_DIR / "CHANGELOG.md").read_text(encoding="utf-8")
@@ -309,3 +309,34 @@ def test_marketplace_schema_rejects_structural_violations(mutate, why) -> None:
     doc = copy.deepcopy(_CLAUDE_SHAPED_MARKETPLACE)
     mutate(doc)
     assert list(validator.iter_errors(doc)), why
+
+
+# ── Contract 1.22.0: co-maintained catalog skills (wording only) ───────────────
+
+
+def test_publications_skill_entries_record_the_revision_the_folder_holds() -> None:
+    skills = _load("schema/publications.schema.json")["properties"]["skills"]["items"]
+    props = skills["properties"]
+    assert props["revision_number"]["description"].startswith(
+        "The revision this folder holds"
+    )
+    assert "tells unshared changes" in props["content_hash"]["description"]
+    # Wording only: the entry's shape is unchanged.
+    assert skills["required"] == [
+        "platform_url", "name", "package_id", "package_uuid", "revision_number", "content_hash",
+    ]
+
+
+def test_guide_08_sends_a_catalog_pin_through_edit_skill() -> None:
+    guide = (KIT_DIR / "guides" / "08-knowledge-and-local-skills.md").read_text(encoding="utf-8")
+    section = guide.split("### Skills from the catalog", 1)[1].split("### Skills from a marketplace", 1)[0]
+    assert "publish a new version of it" not in section
+    assert "**Edit skill**" in section
+    assert "do not copy a pin's files into `skills/`" in section
+    assert "**different** name" in section
+    tail = guide.split("Skills this agent publishes are recorded", 1)[1].split("### ", 1)[0]
+    assert "**Get Version N**" in tail
+    assert "refused" in tail
+    changelog = (KIT_DIR / "CHANGELOG.md").read_text(encoding="utf-8")
+    entry = changelog.split("## 1.22.0 — ", 1)[1].split("\n## ", 1)[0]
+    assert "wording only" in entry

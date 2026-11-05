@@ -839,9 +839,10 @@ def test_the_bridge_replays_highlights_signals_once_and_collects_context(tmp_pat
 BRIDGE_SHA256 = "c12a7bf4b266608cd1b73223f0366988a7dccf8850517a5e9eaee302bdee828e"
 
 
-def test_the_kit_contract_version_is_1_21_0() -> None:
+def test_the_kit_contract_version_is_at_least_1_21_0() -> None:
     kit = json.loads((KIT_DIR / "kit.json").read_text(encoding="utf-8"))
-    assert kit["contract_version"] == "1.21.0"
+    major, minor, _ = (int(p) for p in kit["contract_version"].split("."))
+    assert (major, minor) >= (1, 21)
 
 
 @_needs_tools

@@ -94,14 +94,14 @@
             "x-import": "written by the publish"
           },
           "revision_number": {
-            "description": "The revision the last publish created.",
+            "description": "The revision this folder holds: written when it is shared, made editable from a pin, or brought up to a newer version.",
             "type": "integer",
             "minimum": 1,
             "x-scope": "portable",
             "x-import": "written by the publish"
           },
           "content_hash": {
-            "description": "Hash of the skill folder at the last publish, as the catalog computed it. A mismatch against the folder now means there are changes to publish.",
+            "description": "That revision's content hash, as the catalog computed it; the folder's own tree hash against it tells unshared changes.",
             "type": "string",
             "minLength": 1,
             "x-scope": "portable",

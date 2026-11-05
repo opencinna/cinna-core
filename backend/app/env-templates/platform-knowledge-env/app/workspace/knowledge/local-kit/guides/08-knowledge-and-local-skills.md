@@ -347,9 +347,18 @@ always says exactly which version it runs, and sharing the agent shares the pins
 
 A pin's `name` must not be the name of a folder under `skills/`, of a skill the
 platform provides (`cinna-tasks`, `cinna-artifacts`, `cinna-dashboards`), or of another pin: two skills with one name would
-leave the engine to pick one. `kit.py validate` reports each clash as an error. To
-change a catalog skill, publish a new version of it; to make a private variant,
-write a skill with a different name under `skills/`.
+leave the engine to pick one. `kit.py validate` reports each clash as an error.
+
+A pin is read-only. To change a catalog skill the person may edit (they hold
+**edit** or **maintain** on it), ask them to press **Edit skill** on its row in the
+agent's **Addons** tab. The host turns the pin into `skills/<name>/`, linked to the
+same package in `publications.json`; you then change those files in place, and the
+row's **Share** publishes them as the skill's next version, not as a second skill.
+Never do that step yourself: do not copy a pin's files into `skills/`, do not edit
+the host's copy of a catalog skill, and do not edit `catalog_skills[]`. A copy made
+by hand is not linked, and sharing it is refused while the person may edit the
+original. If the person may not edit it, or wants a private variant, write a skill
+with a **different** name under `skills/`.
 
 ### Skills from a marketplace
 
@@ -379,8 +388,16 @@ ignores these pins for now; sharing the agent keeps them unchanged.
 
 Skills this agent publishes are recorded in `publications.json` → `skills[]`
 (`platform_url`, `name`, `package_id`, `package_uuid`, `revision_number`,
-`content_hash`). The record travels with the agent, so anyone who can edit the agent
-and may publish the package can publish its next version.
+`content_hash`). `revision_number` is the version the folder holds, and
+`content_hash` is that version's hash, so a folder whose files no longer hash to it
+has changes that are not shared yet. The record travels with the agent, so anyone
+who can edit the agent and may publish the package can publish its next version.
+
+Someone else who may edit the package can share a newer version of it. The row then
+offers **Get Version N**, which brings that version into `skills/<name>/` and
+updates the record. Sharing from a folder that still holds an older version is
+refused, so nobody's changes are overwritten: get the newer version first, then
+share. Do not edit `publications.json` to get past that refusal.
 
 ### Components inside a skill
 
