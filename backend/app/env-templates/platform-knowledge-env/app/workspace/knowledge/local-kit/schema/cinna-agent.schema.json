@@ -202,7 +202,7 @@
             "x-import": "ignored"
           },
           "fields": {
-            "description": "Field names of the credential payload, as the platform names them.",
+            "description": "Field names of the credential payload this slot needs, as the platform names them. Only what the slot uses: a bearer `api_token` slot is [\"api_token\"]; `api_token_type` and `api_token_template` belong only to a custom header (since 1.23.0 `kit.py validate` warns on a template without a type). Scripts read an `api_token` slot as `http_header_name` / `http_header_value`.",
             "type": "array",
             "items": {"type": "string", "minLength": 1},
             "x-scope": "portable",

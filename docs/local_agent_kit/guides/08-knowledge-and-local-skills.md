@@ -160,7 +160,8 @@ credentials:
 At most **20** entries. A slot is filled by a credential of exactly that type whose
 service URI equals the slot: when the agent is set up, the person installing it
 attaches one, and the skill's scripts read it like any other credential of the
-agent (guide 04). An
+agent (guide 04) — an `api_token` slot as the `http_header_name` /
+`http_header_value` pair, or `api_token_headers("<slot>")`. An
 invalid block makes the whole skill invalid, the same as a bad `name`.
 
 ### Referencing a skill from the workflow prompt

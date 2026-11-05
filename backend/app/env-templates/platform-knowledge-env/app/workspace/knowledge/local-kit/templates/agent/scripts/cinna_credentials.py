@@ -15,6 +15,13 @@ Use one call either way::
     password = get_credential("Odoo", "password")
     odoo = get_credential("Odoo")            # every field of the slot, as a dict
 
+An ``api_token`` slot arrives as a ready header pair, locally and in the cloud
+alike; send it as it is, never build the header from the raw token::
+
+    from cinna_credentials import api_token_headers
+
+    resp = requests.get(url, headers=api_token_headers("vendor-api"))
+
 Call another agent's REST API through an issued ``agent_api`` key::
 
     from cinna_credentials import agent_api_session
@@ -37,7 +44,7 @@ from pathlib import Path
 from typing import Any
 
 AGENT_ROOT = Path(__file__).resolve().parents[1]
-HELPER_VERSION = "1.14.0"
+HELPER_VERSION = "1.23.0"
 CLOUD_CREDENTIALS = AGENT_ROOT / "credentials" / "credentials.json"
 LOCAL_ENV = AGENT_ROOT / "credentials" / ".env"
 MANIFEST = AGENT_ROOT / "cinna-agent.json"
@@ -252,6 +259,78 @@ def _local_payload(name: str) -> dict[str, Any] | None:
     return payload or None
 
 
+# --------------------------------------------------------------------------- #
+# api_token: one header pair, whichever runtime delivered the slot              #
+# --------------------------------------------------------------------------- #
+
+_API_TOKEN_TYPE = "api_token"
+_DEFAULT_TOKEN_TEMPLATE = "Authorization: Bearer {TOKEN}"
+
+
+def _slot_type(name: str) -> str | None:
+    """The declared slot's type, or ``name`` itself for a lookup by type."""
+    slot = _slot(name)
+    declared = slot.get("type") if slot else name
+    return declared if isinstance(declared, str) else None
+
+
+def _api_token_header(data: dict[str, Any]) -> tuple[str, str]:
+    """``(header name, header value)`` exactly as the platform derives them.
+
+    No ``api_token_type`` (or ``bearer``) is ``Authorization: Bearer <token>``.
+    Any other type, an empty one included, renders ``api_token_template``
+    (default ``Authorization: Bearer {TOKEN}``) with ``{TOKEN}`` replaced and
+    splits it at the first colon; a template without one is the whole value of
+    an ``Authorization`` header.
+    """
+    token = str(data.get("api_token") or "")
+    if data.get("api_token_type", "bearer") == "bearer":
+        return "Authorization", f"Bearer {token}"
+    rendered = str(data.get("api_token_template", _DEFAULT_TOKEN_TEMPLATE)).replace("{TOKEN}", token)
+    if ":" in rendered:
+        header, value = rendered.split(":", 1)
+        return header.strip(), value.strip()
+    return "Authorization", rendered
+
+
+def _with_api_token_header(payload: dict[str, Any]) -> dict[str, Any]:
+    """Add ``http_header_name`` / ``http_header_value`` to a raw ``api_token``
+    payload (the ``.env`` shape). A payload that already carries the pair — what
+    the cloud and an attached credential deliver — is returned unchanged."""
+    if "http_header_name" in payload or payload.get("api_token") in (None, ""):
+        return payload
+    header, value = _api_token_header(payload)
+    return {**payload, "http_header_name": header, "http_header_value": value}
+
+
+def api_token_headers(name: str) -> dict[str, str]:
+    """``{header name: header value}`` for an ``api_token`` slot, ready to send.
+
+    Raises :class:`CredentialError` when the slot is not configured or has no
+    token. The message names the slot and never contains a value.
+    """
+    cfg = require_credential(name)
+    header = cfg.get("http_header_name")
+    value = cfg.get("http_header_value")
+    if not header or not value:
+        declared = _slot_type(name)
+        if _slot(name) and declared != _API_TOKEN_TYPE:
+            raise CredentialError(
+                f"credential {name!r} is of type {declared!r}, not {_API_TOKEN_TYPE!r}."
+            )
+        if header:
+            # A delivered pair (cloud or attached) with no value: .env is not
+            # where this one is fixed.
+            raise CredentialError(
+                f"credential {name!r} has no token value. Fill in the attached credential."
+            )
+        raise CredentialError(
+            f"credential {name!r} has no token. "
+            f"Set {_env_prefix(name)}API_TOKEN in credentials/.env."
+        )
+    return {str(header): str(value)}
+
+
 def get_credential(
     name: str,
     field: str | None = None,
@@ -267,6 +346,8 @@ def get_credential(
     payload = _cloud_payload(name)
     if payload is None:
         payload = _local_payload(name)
+    if payload and _slot_type(name) == _API_TOKEN_TYPE:
+        payload = _with_api_token_header(payload)
     if not payload:
         if required:
             hint = unavailable_reason(name)

@@ -26,6 +26,14 @@ IMAP access to the mailbox the agent reads. Read-only use.
 | login | `BILLING_INBOX_LOGIN` | full address |
 | password | `BILLING_INBOX_PASSWORD` | app password, not the account password |
 | is_ssl | `BILLING_INBOX_IS_SSL` | true |
+
+### `vendor-api` — type `api_token`
+
+Read access to the vendor's REST API, sent as `Authorization: Bearer <token>`.
+
+| Field | Variable | Notes |
+|-------|----------|-------|
+| api_token | `VENDOR_API_TOKEN` | personal access token, read scope |
 -->
 
 _None yet._

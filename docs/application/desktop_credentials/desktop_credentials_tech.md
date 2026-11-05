@@ -55,7 +55,7 @@
 
 - `docs/local_agent_kit/templates/agent/scripts/cinna_credentials.py` (mirrored to
   `backend/app/env-templates/platform-knowledge-env/app/workspace/knowledge/local-kit/templates/agent/scripts/cinna_credentials.py`
-  by `sync_platform_knowledge.py`) — `HELPER_VERSION = "1.14.0"` (kit contract 1.14.0). Reads, in order:
+  by `sync_platform_knowledge.py`) — `HELPER_VERSION = "1.23.0"` (kit contract 1.23.0: an `api_token` slot from env/`.env` also gets `http_header_name` / `http_header_value`, derived as core's `_process_api_token_credential` does; `api_token_headers(slot)`). Reads, in order:
   `CINNA_CREDENTIALS_PATH` (if set), then `credentials/credentials.json` (array or `{"credentials":
   [...]}` envelope), then the legacy root object, then environment variables, then
   `credentials/.env`. `by_slot` / `require_slot` match on `service_uri` only, never on name or

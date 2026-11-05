@@ -68,7 +68,7 @@ def reader(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(module, "MANIFEST", tmp_path / "cinna-agent.json")
     monkeypatch.delenv("CINNA_CREDENTIALS_PATH", raising=False)
     for key in list(os.environ):
-        if key.startswith(("GMAIL_", "ERP_", "CRM_", "API_TOKEN_")):
+        if key.startswith(("GMAIL_", "ERP_", "CRM_", "API_TOKEN_", "VENDOR_")):
             monkeypatch.delenv(key)
     return module
 
@@ -220,10 +220,10 @@ import threading
 from contextlib import contextmanager
 
 
-def test_helper_version_is_1_14_0_and_not_ahead_of_the_contract(reader) -> None:
+def test_helper_version_is_1_23_0_and_not_ahead_of_the_contract(reader) -> None:
     # HELPER_VERSION names the contract the helper last changed in; later
     # contracts that leave the helper alone do not move it.
-    assert reader.HELPER_VERSION == "1.14.0"
+    assert reader.HELPER_VERSION == "1.23.0"
     if KIT_SOURCE == "docs":
         contract = (SCRIPT.parents[3] / "CONTRACT_VERSION").read_text().strip()
         as_tuple = lambda v: tuple(int(p) for p in v.split("."))  # noqa: E731
@@ -440,3 +440,104 @@ def test_agent_api_session_refuses_when_base_url_origin_changes_after_constructi
         same_origin = f"http://127.0.0.1:{a.server_port}/api/v1/agent-api/other"
         reader.CLOUD_CREDENTIALS.write_text(json.dumps([_key_entry(same_origin, "tok-1")]))
         assert session.get("ping").ok
+
+
+# ---------------------------------------------------------------------------
+# Kit contract 1.23.0: an api_token slot is one header pair in both runtimes
+# ---------------------------------------------------------------------------
+
+_VENDOR_SLOT = {"name": "vendor-api", "type": "api_token", "env_prefix": "VENDOR_",
+                "fields": ["api_token"]}
+
+
+def _env(reader, text: str) -> None:
+    reader.MANIFEST.write_text(json.dumps({"credentials": [_VENDOR_SLOT]}))
+    reader.LOCAL_ENV.write_text(text)
+
+
+def test_env_api_token_alone_is_a_bearer_header(reader) -> None:
+    _env(reader, "VENDOR_API_TOKEN=tok-1\n")
+    cfg = reader.require_credential("vendor-api")
+    assert cfg["http_header_name"] == "Authorization"
+    assert cfg["http_header_value"] == "Bearer tok-1"
+    assert cfg["api_token"] == "tok-1"  # raw key kept locally
+    assert reader.api_token_headers("vendor-api") == {"Authorization": "Bearer tok-1"}
+    # A lookup by type resolves the same derived pair.
+    assert reader.require_credential("api_token", "http_header_value") == "Bearer tok-1"
+
+
+def test_env_empty_type_and_template_are_not_missing(reader) -> None:
+    # The variables exist but are empty: still a configured bearer slot.
+    _env(reader, "VENDOR_API_TOKEN=tok-1\nVENDOR_API_TOKEN_TYPE=\nVENDOR_API_TOKEN_TEMPLATE=\n")
+    assert reader.has_credential("vendor-api") is True
+    assert reader.api_token_headers("vendor-api") == {"Authorization": "Bearer tok-1"}
+
+
+@pytest.mark.parametrize(
+    "template,expected",
+    [
+        ("X-API-Key: {TOKEN}", {"X-API-Key": "tok-1"}),
+        ("Authorization: Token {TOKEN}", {"Authorization": "Token tok-1"}),
+        ("Key {TOKEN}", {"Authorization": "Key tok-1"}),  # no colon -> Authorization
+        ("", {"Authorization": "Bearer tok-1"}),  # custom without template -> default
+    ],
+)
+def test_env_custom_template_matches_the_platform_transform(reader, template, expected) -> None:
+    _env(reader, f"VENDOR_API_TOKEN=tok-1\nVENDOR_API_TOKEN_TYPE=custom\n"
+                 f"VENDOR_API_TOKEN_TEMPLATE={template}\n")
+    assert reader.api_token_headers("vendor-api") == expected
+
+
+def test_derivation_matches_core_process_api_token_credential(reader) -> None:
+    core = pytest.importorskip("app.services.credentials.credentials_service")
+    transform = core.CredentialsService._process_api_token_credential
+    for data in (
+        {"api_token": "t"},
+        {"api_token_type": "bearer", "api_token": "t"},
+        {"api_token_type": "custom", "api_token_template": "X-Key: {TOKEN}", "api_token": "t"},
+        {"api_token_type": "custom", "api_token_template": "Key {TOKEN}", "api_token": "t"},
+        {"api_token_type": "custom", "api_token": "t"},
+        # Empty strings in a raw payload follow core: not bearer, template as given.
+        {"api_token_type": "", "api_token_template": "X-Key: {TOKEN}", "api_token": "t"},
+        {"api_token_type": "", "api_token_template": "", "api_token": "t"},
+    ):
+        derived = reader._with_api_token_header(dict(data))
+        assert {k: derived[k] for k in ("http_header_name", "http_header_value")} == transform(data)
+
+
+def test_attached_header_pair_passes_through_unchanged(reader, monkeypatch) -> None:
+    data = {"http_header_name": "X-API-Key", "http_header_value": "attached",
+            "service_uri": "vendor-api"}
+    _write(reader, [_VENDOR_SLOT],
+           [{"name": "vendor-api", "type": "api_token", "service_uri": "vendor-api",
+             "credential_data": data}])
+    monkeypatch.setenv("VENDOR_API_TOKEN", "local-should-not-win")
+    assert reader.require_credential("vendor-api") == data
+    assert reader.api_token_headers("vendor-api") == {"X-API-Key": "attached"}
+
+
+def test_api_token_headers_without_a_token_names_the_variable(reader) -> None:
+    _env(reader, "VENDOR_API_TOKEN_TYPE=custom\nVENDOR_API_TOKEN_TEMPLATE=X-Key: {TOKEN}\n")
+    with pytest.raises(reader.CredentialError) as exc:
+        reader.api_token_headers("vendor-api")
+    assert "VENDOR_API_TOKEN" in str(exc.value)
+    assert "X-Key" not in str(exc.value)
+
+
+def test_api_token_headers_with_an_empty_attached_value_does_not_point_at_env(reader) -> None:
+    _write(reader, [_VENDOR_SLOT],
+           [{"name": "vendor-api", "type": "api_token", "service_uri": "vendor-api",
+             "credential_data": {"http_header_name": "Authorization", "http_header_value": ""}}])
+    with pytest.raises(reader.CredentialError) as exc:
+        reader.api_token_headers("vendor-api")
+    assert "no token value" in str(exc.value)
+    assert ".env" not in str(exc.value)
+
+
+def test_api_token_headers_refuses_another_type(reader, monkeypatch) -> None:
+    reader.MANIFEST.write_text(json.dumps({"credentials": [
+        {"name": "Mailbox", "type": "email_imap", "env_prefix": "ERP_"}]}))
+    monkeypatch.setenv("ERP_HOST", "imap.example.org")
+    with pytest.raises(reader.CredentialError) as exc:
+        reader.api_token_headers("Mailbox")
+    assert "not 'api_token'" in str(exc.value)

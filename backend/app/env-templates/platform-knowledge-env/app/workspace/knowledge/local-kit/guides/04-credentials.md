@@ -13,8 +13,9 @@ is already reading a file directly.
 2. **Never read `credentials/.env` or `credentials/credentials.json` in the
    conversation.** Only scripts read them, and only through the shim.
 3. `credentials/` is **never** copied to the cloud, exported, or pushed anywhere.
-4. If a credential is missing, name the slot and stop. Never guess, never substitute
-   a test value.
+4. If a credential the agent needs is missing, name the slot and stop. Never guess,
+   never substitute a test value. An empty optional field (such as `api_token_type`
+   on a bearer token) is not a missing credential.
 
 If the user pastes a secret into the chat, tell them to put it in
 `credentials/.env` instead, and do not repeat it back.
@@ -46,6 +47,23 @@ empty values.
 field is `<env_prefix><FIELD IN UPPER CASE>` — so `BILLING_INBOX_HOST`,
 `BILLING_INBOX_PORT`, and so on.
 
+`fields` lists what this slot needs, not everything the type can hold. Most HTTP
+APIs take a plain bearer token, and that slot declares one field and one variable:
+
+```json
+{
+  "name": "vendor-api",
+  "type": "api_token",
+  "description": "Read access to the vendor's REST API.",
+  "env_prefix": "VENDOR_",
+  "fields": ["api_token"]
+}
+```
+
+`credentials/.env` then has a single line, `VENDOR_API_TOKEN=`. Add `api_token_type`
+and `api_token_template` only when the API wants another header (see the
+`api_token` row below).
+
 ## 2. Pick the platform type
 
 Use one of the platform's credential types, so the slot maps 1:1 when the agent goes
@@ -56,7 +74,7 @@ cloud. These are the values `type` may take:
 | `email_imap` | `host`, `port`, `login`, `password`, `is_ssl` | Reading mail. |
 | `email_smtp` | `host`, `port`, `username`, `password`, `from_email`, `use_tls`, `use_ssl` | Sending mail. |
 | `odoo` | `url`, `database_name`, `login`, `api_token` | Odoo XML-RPC / JSON-RPC. |
-| `api_token` | `api_token_type`, `api_token_template`, `api_token` | Generic HTTP API. `api_token_type` is `bearer` or `custom`; the template carries the header shape. |
+| `api_token` | `api_token`; for a custom header also `api_token_type`, `api_token_template` | Generic HTTP API. A bearer token needs only `api_token`: no type means `Authorization: Bearer <token>`. For another header set `api_token_type` to `custom` and `api_token_template` to its shape with `{TOKEN}`, e.g. `X-API-Key: {TOKEN}`. Scripts receive `http_header_name` and `http_header_value`, see §4. |
 | `google_service_account` | the service-account JSON fields (`project_id`, `private_key`, `client_email`, …) | Server-to-server Google access. |
 | `ssh_key` | `public_key`, `private_key`, `fingerprint`, `key_type` | SSH / git access. |
 | `gmail_oauth`, `gmail_oauth_readonly` | `access_token`, `token_type`, `expires_at`, `scope`, `granted_user_email`, `granted_user_name` | Cloud, and Cinna Desktop when the credential is created in Cinna Desktop (New in Attach credential) or on the platform and attached. |
@@ -117,6 +135,20 @@ conn = imaplib.IMAP4_SSL(cfg["host"], cfg["port"]) if cfg["is_ssl"] else \
 conn.login(cfg["login"], cfg["password"])
 ```
 
+An `api_token` slot reaches a script as a ready header: `http_header_name` and
+`http_header_value` (plus `service_uri` in the cloud). The platform builds them from
+the token and template, and the shim builds them the same way from `.env`, so send
+the pair as it is and never assemble a header from the raw token:
+
+```python
+from cinna_credentials import api_token_headers
+
+headers = api_token_headers("vendor-api")   # {"Authorization": "Bearer …"}
+# or: cfg = require_credential("vendor-api")
+#     headers = {cfg["http_header_name"]: cfg["http_header_value"]}
+resp = requests.get(url, headers=headers, timeout=30)
+```
+
 `get_credential()` returns `None` when the slot is unconfigured;
 `require_credential()` raises with a message that names the slot and where to fix it
 — and never contains a value.
@@ -149,8 +181,10 @@ instead of being recreated.
 ## Done when
 
 - Every external system the agent touches has a slot in `cinna-agent.json` with a
-  real platform `type`, an `env_prefix` and a `fields` list.
-- `credentials/.env.example` lists every variable name, with empty values.
+  real platform `type`, an `env_prefix` and a `fields` list of what the slot needs —
+  `["api_token"]` alone for a bearer token.
+- `credentials/.env.example` lists every variable the slot needs, with empty values,
+  and no variable for an optional field the slot does not use.
 - `credentials/README.md` describes every slot, redacted.
 - `git check-ignore credentials/.env` matches, and `git status` never shows it.
 - Every script gets its secrets via `cinna_credentials.py`; `grep -rn "\.env" scripts/`

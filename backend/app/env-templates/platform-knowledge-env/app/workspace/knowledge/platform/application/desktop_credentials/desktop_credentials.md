@@ -204,7 +204,7 @@ on a local agent, without Core ever handing out the refresh token.
   authorization link can see it connects another person's account before consenting. This
   mitigates consent phishing, where an attacker starts a flow for their own credential and sends
   the link to a victim hoping the victim's Google grant lands in the attacker's credential.
-- **Local Agent Kit.** Kit contract and `cinna_credentials.py` `HELPER_VERSION` are 1.14.0; the
+- **Local Agent Kit.** Kit contract and `cinna_credentials.py` `HELPER_VERSION` were 1.14.0 here (the helper is 1.23.0 since it derives the `api_token` header pair from `.env`); the
   helper names the three new refusal reasons and Google slots are satisfiable on a desktop host.
 
 ## Architecture Overview

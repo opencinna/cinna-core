@@ -26,6 +26,49 @@ credential's own name; a name is ready when any credential linked under it is
 usable, and a name no linked credential resolves to counts as missing. This is
 what core already did.
 
+## 1.23.0 — an api_token slot declares only what it needs
+
+Additive. Every 1.x folder stays valid; no manifest key is added, renamed or
+reshaped. Agents building a bearer-token API slot declared `api_token_type`,
+`api_token_template` and `api_token` and asked the user for three variables,
+because guide 04 listed all three and asked for "every variable". Scripts then read
+a raw `api_token` locally but `http_header_name` / `http_header_value` in the cloud:
+one slot, two shapes.
+
+### Changed
+
+- **`guides/04-credentials.md`** — a bearer `api_token` slot declares
+  `"fields": ["api_token"]` and one variable, `<PREFIX>API_TOKEN`. No
+  `api_token_type` means bearer; `api_token_type` (`custom`) and
+  `api_token_template` (`X-API-Key: {TOKEN}`) are for a custom header only. Scripts
+  send the `http_header_name` / `http_header_value` pair and never build a header
+  from the raw token. "Done when" asks for every variable the slot needs, and hard
+  rule 4 says an empty optional field is not a missing credential.
+- **`templates/agent/scripts/cinna_credentials.py`** (`HELPER_VERSION` 1.14.0 →
+  1.23.0) — a slot of type `api_token` read from the environment or `credentials/.env`
+  also carries `http_header_name` / `http_header_value`, derived exactly as the
+  platform does: no type or `bearer` is `Authorization: Bearer <token>`; any other
+  type renders `api_token_template` (default `Authorization: Bearer {TOKEN}`) with
+  `{TOKEN}` replaced and splits it at the first colon, and a template without a
+  colon is the value of an `Authorization` header. The raw keys stay. A payload that
+  already has `http_header_name` (cloud, attached credentials) is unchanged. New
+  `api_token_headers(slot) -> {name: value}`.
+- **`tools/kit.py validate`** — a WARNING on `credentials[].fields` when an
+  `api_token` slot lists `api_token_template` without `api_token_type`: without a
+  type the platform never reads the template. Three conformance cases:
+  `credentials-api-token-template-without-type` (warns), `credentials-api-token-bearer`
+  and `credentials-api-token-custom-header` (silent).
+- **`guides/08-knowledge-and-local-skills.md`**, `schema/cinna-agent.schema.json`
+  (`credentials[].fields` description), `templates/agent/credentials/.env.example` and
+  `README.md` — the same rule and a bearer example.
+
+### Hosts
+
+A validator of this contract warns on the template-without-type case with path
+`credentials.fields` (Cinna Desktop: code `manifest.credentials.fields.template_without_type`).
+A host that delivers an attached `api_token` keeps delivering the header pair; the
+shim leaves it as it is.
+
 ## 1.22.0 — co-maintained catalog skills
 
 Additive and wording only. Every 1.x folder stays valid; no manifest or

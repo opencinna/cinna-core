@@ -1906,6 +1906,25 @@ def _validate_credentials(credentials: object, report: Report) -> None:
             not isinstance(fields, list) or not all(isinstance(f, str) and f for f in fields)
         ):
             report.error(f"{MANIFEST_NAME}: `{label}.fields` must be an array of names.")
+        elif (
+            credential_type == "api_token"
+            and isinstance(fields, list)
+            and "api_token_template" in fields
+            and "api_token_type" not in fields
+        ):
+            # Contract 1.23.0. A WARNING: without a type the platform sends the
+            # token as `Authorization: Bearer <token>` and never reads the
+            # template, so the declaration asks the user for a value with no
+            # effect. Free of false positives because the platform's transform
+            # (and the shim's) ignores the template whenever the type is absent;
+            # a `.env` that sets the type anyway still under-declares the slot.
+            report.warn(
+                f"{MANIFEST_NAME}: `{label}.fields` lists \"api_token_template\" without "
+                "\"api_token_type\". Without a type the token is sent as "
+                "`Authorization: Bearer <token>` and the template is never read. For a "
+                "bearer token declare only \"api_token\"; for a custom header add "
+                "\"api_token_type\" (set to custom)."
+            )
         # Guard against a value having been pasted into the manifest. This stays an
         # ERROR, and it is the one place this validator is deliberately stricter
         # than the desktop's, which has no equivalent check: demoting a

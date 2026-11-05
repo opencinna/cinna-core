@@ -165,7 +165,7 @@ def _load(rel: str):
 def test_contract_version_is_coherent_across_the_four_carriers() -> None:
     # LocalAgentKitService 503s the contract when these disagree.
     file_version = (KIT_DIR / "CONTRACT_VERSION").read_text(encoding="utf-8").strip()
-    assert file_version == "1.22.0"
+    assert file_version == "1.23.0"
     assert _load("kit.json")["contract_version"] == file_version
     assert _load("layout.json")["contract_version"] == file_version
     changelog = (KIT_DIR / "CHANGELOG.md").read_text(encoding="utf-8")
@@ -340,3 +340,54 @@ def test_guide_08_sends_a_catalog_pin_through_edit_skill() -> None:
     changelog = (KIT_DIR / "CHANGELOG.md").read_text(encoding="utf-8")
     entry = changelog.split("## 1.22.0 — ", 1)[1].split("\n## ", 1)[0]
     assert "wording only" in entry
+
+
+# ── Contract 1.23.0: an api_token slot declares only what it needs ─────────────
+
+CONTRACT_1_23_CASES = (
+    "credentials-api-token-template-without-type",
+    "credentials-api-token-bearer",
+    "credentials-api-token-custom-header",
+)
+
+
+def test_the_contract_1_23_cases_are_in_the_set() -> None:
+    stems = {p.stem for p in CASE_FILES}
+    assert set(CONTRACT_1_23_CASES) <= stems, sorted(set(CONTRACT_1_23_CASES) - stems)
+
+
+@pytest.mark.parametrize(
+    "fields, warned",
+    [
+        (["api_token", "api_token_template"], True),
+        (["api_token_template"], True),
+        (["api_token"], False),
+        (["api_token_type", "api_token_template", "api_token"], False),
+        (["api_token_type", "api_token"], False),
+    ],
+)
+def test_template_without_type_is_a_warning_only_for_api_token(kit_module, fields, warned) -> None:
+    for credential_type, expected in (("api_token", warned), ("odoo", False)):
+        report = kit_module.Report()
+        kit_module._validate_credentials(
+            [{"name": "vendor-api", "type": credential_type, "fields": fields}], report
+        )
+        assert report.errors == []
+        hits = [w for w in report.warnings if "api_token_template" in w]
+        assert bool(hits) is expected, (credential_type, fields, report.warnings)
+        if hits:
+            assert reported_paths(hits) == {"credentials.fields"}
+
+
+def test_guide_04_declares_a_bearer_slot_with_one_field() -> None:
+    guide = (KIT_DIR / "guides" / "04-credentials.md").read_text(encoding="utf-8")
+    assert '"fields": ["api_token"]' in guide
+    assert "http_header_name" in guide and "http_header_value" in guide
+    assert "api_token_headers(" in guide
+    assert "every variable name, with empty values" not in guide
+    assert "every variable the slot needs" in guide
+    assert "not a missing credential" in guide
+    changelog = (KIT_DIR / "CHANGELOG.md").read_text(encoding="utf-8")
+    entry = changelog.split("## 1.23.0 — ", 1)[1].split("\n## ", 1)[0]
+    assert "api_token_headers" in entry
+    assert "HELPER_VERSION" in entry
