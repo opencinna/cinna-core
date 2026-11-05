@@ -17,7 +17,7 @@
 
 | Route | Notes |
 |-------|-------|
-| `GET /api/v1/catalog/items` | `kind`, `runs_on`, `scope=all` (superuser, else 403) -> `CatalogItemsPublic` |
+| `GET /api/v1/catalog/items` | `kind`, `runs_on`, `scope=all` (superuser, else 403) -> `CatalogItemsPublic`. `latest` (`CatalogLatest`) carries `content_hash` for skills (the revision's tree hash, equal to the hash of its unpacked archive), `null` for agents |
 | `GET /api/v1/catalog/items/{item_uuid}` | `CatalogItemDetail`; needs `use` |
 | `PATCH` / `DELETE /api/v1/catalog/items/{item_uuid}` | maintainer or superuser; delete 409 while others use it |
 | `GET` / `PUT /api/v1/catalog/items/{item_uuid}/grants` | full replace; principals are `user`, `role` or `group` (`CatalogPrincipalGroup {group_id}`; group level `use`/`edit` only, `member_count` = active members); backed by nullable `group_id` on `bundle_access_grant` / `skill_package_access_grant` (migration `7896e6f51c03`); see [User Groups](../user_groups/user_groups_tech.md) |

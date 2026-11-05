@@ -35,6 +35,11 @@ class CatalogLatest(SQLModel):
     published_at: datetime
     published_by: CatalogPerson | None = None
     release_notes: str | None = None
+    #: Skills only (``None`` for agents): the revision's ``content_hash``, the
+    #: SHA-256 over its tree, equal to the hash of its unpacked archive. A
+    #: desktop's linked ``skills/<name>/`` copy hashes to this when it holds
+    #: that revision unchanged.
+    content_hash: str | None = None
 
 
 class CatalogInstall(SQLModel):

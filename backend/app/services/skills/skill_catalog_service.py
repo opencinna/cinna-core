@@ -45,13 +45,14 @@ from pathlib import Path
 
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from app.core.config import settings
 from app.models.agents.agent import Agent
 from app.models.catalog.catalog_access import (
     CatalogAccess,
     CatalogGrantIn,
+    CatalogPerson,
     CatalogPrincipalKind,
 )
 from app.models.plugins.llm_plugin import AgentPluginLink, PluginSource
@@ -89,7 +90,11 @@ from app.services.agents.skill_manifest import (
 from app.services.bundles.bundle_id_service import BUNDLE_ID_REGEX, BundleIdService
 from app.services.bundles.credential_spec import ParsedCredentialSpec
 from app.services.bundles.publish_service import PublishService
-from app.services.catalog.catalog_access_service import SKILL, CatalogAccessService
+from app.services.catalog.catalog_access_service import (
+    SKILL,
+    CatalogAccessService,
+    display_name as person_display_name,
+)
 from app.services.catalog.exceptions import CatalogConflictError
 from app.services.catalog.catalog_events import CatalogEvents, add_audit_event
 from app.services.catalog.local_install_service import LocalInstallService
@@ -464,6 +469,13 @@ class SkillCatalogService:
                     "Only a maintainer of this skill can change its visibility.",
                 )
 
+            # The lineage: an agent publishes over whatever is latest (the
+            # server knows it; there is no client copy to be stale).
+            latest = (
+                None
+                if created
+                else SkillCatalogService.latest_revision(session, package.id)
+            )
             revision, _ = await SkillCatalogService._publish_tree(
                 session,
                 user=user,
@@ -477,6 +489,7 @@ class SkillCatalogService:
                 credential_specs=credential_specs,
                 source_agent_id=agent.id,
                 grant_targets=grant_targets,
+                base_revision_number=latest.revision_number if latest else None,
             )
 
         logger.info(
@@ -556,6 +569,7 @@ class SkillCatalogService:
         source_agent_id: uuid.UUID | None,
         grant_targets: list[User] | None = None,
         catalog_grants: list[CatalogGrantIn] | None = None,
+        base_revision_number: int | None = None,
     ) -> tuple[SkillPackageRevision, set[uuid.UUID]]:
         """Write one revision of ``package`` from the validated ``skill_dir``.
 
@@ -569,6 +583,7 @@ class SkillCatalogService:
         ``source_agent_id`` is ``None`` for an upload, which leaves the
         package's ``source_agent_id`` unchanged. Returns the revision and the
         users who gained access through ``catalog_grants``.
+        ``base_revision_number`` is recorded on the revision as its lineage.
         """
         next_number, published_versions, latest_version = (
             SkillCatalogService._version_history(session, package.id)
@@ -637,6 +652,7 @@ class SkillCatalogService:
             size_bytes=size_bytes,
             release_notes=release_notes or None,
             published_by_user_id=user.id,
+            base_revision_number=base_revision_number,
             required_credential_specs=credential_specs,
         )
         session.add(revision)
@@ -657,6 +673,20 @@ class SkillCatalogService:
         )
         return revision, gained_readers
 
+
+    @staticmethod
+    def latest_revision(
+        session: Session, package_uuid: uuid.UUID
+    ) -> SkillPackageRevision | None:
+        """The package's highest-numbered revision, read from the rows (not
+        ``latest_revision_id``), so under the publish lock it is the revision
+        the next one follows."""
+        return session.exec(
+            select(SkillPackageRevision)
+            .where(SkillPackageRevision.package_id == package_uuid)
+            .order_by(SkillPackageRevision.revision_number.desc())
+            .limit(1)
+        ).first()
 
     @staticmethod
     def _version_history(
@@ -1771,6 +1801,7 @@ class SkillCatalogService:
             size_bytes=revision.size_bytes,
             release_notes=revision.release_notes,
             published_by_user_id=revision.published_by_user_id,
+            base_revision_number=revision.base_revision_number,
             published_at=revision.published_at,
             required_credentials=SkillCredentialRequirements.specs_to_public(
                 revision.required_credential_specs
@@ -1978,13 +2009,30 @@ class SkillCatalogService:
         session: Session, package: SkillPackage, user: User
     ) -> SkillPackageDetailPublic:
         entry = SkillCatalogService.package_to_entry(session, package, user)
-        return SkillPackageDetailPublic(
-            **entry.model_dump(),
-            revisions=[
-                SkillCatalogService.revision_to_public(r)
-                for r in SkillCatalogService.list_revisions(session, package)
-            ],
+        revisions = SkillCatalogService.list_revisions(session, package)
+        people = SkillCatalogService.people_by_id(
+            session, {r.published_by_user_id for r in revisions}
         )
+        rows = []
+        for revision in revisions:
+            row = SkillCatalogService.revision_to_public(revision)
+            row.published_by = people.get(revision.published_by_user_id)
+            rows.append(row)
+        return SkillPackageDetailPublic(**entry.model_dump(), revisions=rows)
+
+    @staticmethod
+    def people_by_id(
+        session: Session, user_ids: set[uuid.UUID | None]
+    ) -> dict[uuid.UUID, CatalogPerson]:
+        """``{user_id, display_name}`` per id, one query; a deleted user is
+        simply absent."""
+        wanted = [i for i in user_ids if i]
+        if not wanted:
+            return {}
+        return {
+            u.id: CatalogPerson(user_id=u.id, display_name=person_display_name(u))
+            for u in session.exec(select(User).where(col(User.id).in_(wanted)))
+        }
 
     # ── Manage ─────────────────────────────────────────────────────────
 

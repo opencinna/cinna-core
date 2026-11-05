@@ -89,6 +89,10 @@ STATUS_BY_CODE: dict[str, int] = {
     "package_id_taken": 409,
     "package_id_immutable": 409,
     "package_exists": 409,
+    # A desktop share whose copy is not the package's latest revision (S5).
+    "stale_base": 409,
+    # A first share while a same-name package the caller may edit exists (S6).
+    "editable_package_exists": 409,
     "skill_name_mismatch": 409,
     "skill_archive_invalid": 400,
     "invalid_grants": 422,

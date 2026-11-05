@@ -537,6 +537,13 @@ def _latest(revision: Any, people: dict[uuid.UUID, User]) -> CatalogLatest:
         published_at=revision.published_at,
         published_by=_person(people, revision.published_by_user_id),
         release_notes=revision.release_notes,
+        # Skills only: a desktop compares its linked folder's tree hash with
+        # this to tell unshared edits without reading the revision.
+        content_hash=(
+            revision.content_hash
+            if isinstance(revision, SkillPackageRevision)
+            else None
+        ),
     )
 
 

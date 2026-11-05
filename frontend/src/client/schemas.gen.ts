@@ -16870,6 +16870,17 @@ export const CatalogLatestSchema = {
                 }
             ],
             title: 'Release Notes'
+        },
+        content_hash: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Content Hash'
         }
     },
     type: 'object',
@@ -21775,6 +21786,61 @@ Only valid for the publisher install of a bundle that has not yet been
 published (no revisions exist). Once a revision is published, mutating
 the bundle id would silently orphan installed app-data — the API
 rejects with 409.`
+} as const;
+
+export const EditableCandidateSchema = {
+    properties: {
+        package_uuid: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Package Uuid'
+        },
+        package_id: {
+            type: 'string',
+            title: 'Package Id'
+        },
+        publisher: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/CatalogPerson'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        access: {
+            type: 'string',
+            title: 'Access'
+        },
+        latest_revision_number: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Latest Revision Number'
+        },
+        latest_version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Latest Version'
+        }
+    },
+    type: 'object',
+    required: ['package_uuid', 'package_id', 'access'],
+    title: 'EditableCandidate',
+    description: `A same-name package somebody else publishes that the caller may
+\`\`edit\`\` (\`\`editable_package_exists\`\`, the desktop preview).`
 } as const;
 
 export const EncryptionInitRequestSchema = {
@@ -36113,6 +36179,18 @@ export const SkillDesktopPublishPreviewInSchema = {
             ],
             title: 'Package Uuid'
         },
+        base_revision_number: {
+            anyOf: [
+                {
+                    type: 'integer',
+                    minimum: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Base Revision Number'
+        },
         publisher_credentials: {
             items: {
                 '$ref': '#/components/schemas/SkillPublisherCredentialIn'
@@ -36969,6 +37047,27 @@ export const SkillPackageRevisionPublicSchema = {
             ],
             title: 'Published By User Id'
         },
+        published_by: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/CatalogPerson'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        base_revision_number: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Base Revision Number'
+        },
         published_at: {
             type: 'string',
             format: 'date-time',
@@ -37262,6 +37361,57 @@ export const SkillPublishPreviewSchema = {
             type: 'integer',
             title: 'Next Revision Number',
             default: 1
+        },
+        editable_packages: {
+            items: {
+                '$ref': '#/components/schemas/EditableCandidate'
+            },
+            type: 'array',
+            title: 'Editable Packages',
+            default: []
+        },
+        stale: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Stale'
+        },
+        latest_revision_number: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Latest Revision Number'
+        },
+        latest_version: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Latest Version'
+        },
+        latest_published_by: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/CatalogPerson'
+                },
+                {
+                    type: 'null'
+                }
+            ]
         },
         credentials: {
             items: {

@@ -12,7 +12,7 @@ from typing import Literal
 from pydantic import field_validator
 from sqlmodel import Field, SQLModel
 
-from app.models.catalog.catalog_access import CatalogGrantIn
+from app.models.catalog.catalog_access import CatalogGrantIn, CatalogPerson
 
 
 def _single_line_version(value: str | None) -> str | None:
@@ -160,6 +160,14 @@ class SkillPackageRevisionPublic(SQLModel):
     size_bytes: int = 0
     release_notes: str | None = None
     published_by_user_id: uuid.UUID | None = None
+    #: Who shared this revision, with a display name; ``None`` when that
+    #: person's account is gone. Filled by the package detail; listing rows
+    #: leave it ``None``.
+    published_by: CatalogPerson | None = None
+    #: The revision the sharer's copy held when they shared this one (the
+    #: lineage). ``None`` for a first revision, for a desktop share that sent
+    #: no base, and for every revision before this was recorded.
+    base_revision_number: int | None = None
     published_at: datetime
     #: The credential slots this revision requires, frozen at publish. Empty
     #: for a skill that declares none and for every revision published before
@@ -294,6 +302,18 @@ class SkillPublishRequest(SQLModel):
         return _single_line_version(value)
 
 
+class EditableCandidate(SQLModel):
+    """A same-name package somebody else publishes that the caller may
+    ``edit`` (``editable_package_exists``, the desktop preview)."""
+
+    package_uuid: uuid.UUID
+    package_id: str
+    publisher: CatalogPerson | None = None
+    access: str
+    latest_revision_number: int | None = None
+    latest_version: str | None = None
+
+
 class SkillPublishPreview(SQLModel):
     """Response of ``GET /agents/{agent_id}/skills/{name}/publish-preview``.
 
@@ -326,6 +346,18 @@ class SkillPublishPreview(SQLModel):
     #: sends it back as ``package_uuid`` on the publish).
     package_uuid: uuid.UUID | None = None
     next_revision_number: int = 1
+    #: Packages of this name that somebody else publishes and the caller may
+    #: ``edit``, offered as "a new version of theirs" instead of a separate
+    #: skill. Filled only when the preview names no ``package_uuid``; a publish
+    #: without ``package_uuid`` while any exist needs ``new_package``.
+    editable_packages: list[EditableCandidate] = []
+    #: With ``package_uuid`` and ``base_revision_number`` on the request:
+    #: whether that base is no longer the package's latest revision (the
+    #: publish would answer 409 ``stale_base``). ``None`` when not asked.
+    stale: bool | None = None
+    latest_revision_number: int | None = None
+    latest_version: str | None = None
+    latest_published_by: CatalogPerson | None = None
     #: How each credential slot the skill declares would be provided to
     #: installers if it were published now. Empty when the skill declares none
     #: or is invalid (publish refuses an invalid skill anyway).
@@ -344,6 +376,9 @@ class SkillDesktopPublishPreviewIn(SQLModel):
     #: The package to publish into (a republish, or a package somebody else
     #: maintains that the caller may ``edit``).
     package_uuid: uuid.UUID | None = None
+    #: The revision the caller's copy holds; with ``package_uuid`` the
+    #: preview answers whether it is stale.
+    base_revision_number: int | None = Field(default=None, ge=1)
     #: Slots the caller provides from their own credentials (C5). Unlisted
     #: slots are filled by each installer.
     publisher_credentials: list[SkillPublisherCredentialIn] = Field(
@@ -355,6 +390,14 @@ class SkillUploadMeta(SQLModel):
     """The ``meta`` form field (JSON) of ``POST /skills/packages/publish``."""
 
     package_uuid: uuid.UUID | None = None
+    #: The revision the caller's copy holds. When it is not the package's
+    #: latest the publish answers 409 ``stale_base`` and writes nothing.
+    #: ``None`` skips the check (older clients). Ignored on a first publish.
+    base_revision_number: int | None = Field(default=None, ge=1)
+    #: Without ``package_uuid``: create the caller's own package even though
+    #: a same-name package they may ``edit`` exists (else 409
+    #: ``editable_package_exists``).
+    new_package: bool = False
     #: One line, like :attr:`SkillPublishRequest.version`.
     version: str | None = Field(default=None, max_length=64)
     release_notes: str | None = Field(default=None, max_length=10_000)

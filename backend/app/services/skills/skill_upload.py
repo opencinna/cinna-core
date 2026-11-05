@@ -31,10 +31,11 @@ from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO
 
 from fastapi import UploadFile
-from sqlmodel import Session
+from sqlmodel import Session, col, or_, select
 
 from app.models.catalog.catalog_access import CatalogAccess
 from app.models.skills.schemas import (
+    EditableCandidate,
     SkillDesktopPublishPreviewIn,
     SkillPublishCredentialPreview,
     SkillPublisherCredentialIn,
@@ -302,6 +303,97 @@ def _package_exists(package: SkillPackage) -> SkillCatalogError:
     )
 
 
+def _editable_candidates(
+    session: Session, user: User, name: str
+) -> list[EditableCandidate]:
+    """Packages named ``name`` that somebody else publishes and ``user`` may
+    ``edit`` (S6). A package the caller cannot see never appears, so its
+    existence does not leak. Read-only."""
+    packages = session.exec(
+        select(SkillPackage).where(
+            SkillPackage.name == name,
+            or_(
+                col(SkillPackage.publisher_user_id).is_(None),
+                SkillPackage.publisher_user_id != user.id,
+            ),
+        )
+    ).all()
+    editable: list[tuple[SkillPackage, str]] = []
+    for package in packages:
+        access = SkillCatalogService.access_of(session, package, user)
+        if access is not None and CatalogAccessService.at_least(
+            access, CatalogAccess.EDIT
+        ):
+            editable.append((package, access))
+    if not editable:
+        return []
+    people = SkillCatalogService.people_by_id(
+        session, {package.publisher_user_id for package, _ in editable}
+    )
+    candidates = []
+    for package, access in editable:
+        latest = SkillCatalogService.latest_revision(session, package.id)
+        candidates.append(
+            EditableCandidate(
+                package_uuid=package.id,
+                package_id=package.package_id,
+                publisher=people.get(package.publisher_user_id),
+                access=access,
+                latest_revision_number=latest.revision_number if latest else None,
+                latest_version=latest.version if latest else None,
+            )
+        )
+    candidates.sort(key=lambda c: c.package_id)
+    return candidates
+
+
+def _editable_package_exists(
+    candidates: list[EditableCandidate], name: str
+) -> SkillCatalogError:
+    owner = candidates[0].publisher
+    whose = f"{owner.display_name}'s" if owner is not None else "another person's"
+    return SkillCatalogError(
+        "editable_package_exists",
+        f"You can edit {whose} skill '{name}'. Share this as a new version of "
+        "it, or as a separate skill.",
+        extra={"candidates": [c.model_dump(mode="json") for c in candidates]},
+    )
+
+
+def _check_base(
+    session: Session, package: SkillPackage, user: User, base: int | None
+) -> None:
+    """S5: refuse a share whose copy is not the package's latest revision.
+    ``base`` ``None`` is "not checked". Run under the package's publish lock,
+    so two shares from the same base cannot both pass."""
+    if base is None:
+        return
+    latest = SkillCatalogService.latest_revision(session, package.id)
+    latest_number = latest.revision_number if latest is not None else None
+    if latest_number == base:
+        return
+    people = SkillCatalogService.people_by_id(
+        session, {latest.published_by_user_id if latest else None}
+    )
+    by = people.get(latest.published_by_user_id) if latest else None
+    if by is not None and by.user_id == user.id:
+        who = "You"
+    elif by is not None:
+        who = by.display_name
+    else:
+        who = "Someone"
+    raise SkillCatalogError(
+        "stale_base",
+        f"{who} shared Version {latest_number} since your copy. Get it first, "
+        "then share your changes.",
+        extra={
+            "latest_revision_number": latest_number,
+            "latest_version": latest.version if latest else None,
+            "published_by": by.model_dump(mode="json") if by else None,
+        },
+    )
+
+
 class SkillUploadService:
     """Preview and publish of a skill uploaded from a desktop."""
 
@@ -329,6 +421,24 @@ class SkillUploadService:
             existing = SkillCatalogService._find_publisher_package(
                 session, publisher_user_id=user.id, entry_name=name
             )
+
+        editable_packages: list[EditableCandidate] = []
+        stale: bool | None = None
+        latest_rev: SkillPackageRevision | None = None
+        if existing is None:
+            editable_packages = _editable_candidates(session, user, name)
+        elif body.package_uuid is not None and body.base_revision_number is not None:
+            latest_rev = SkillCatalogService.latest_revision(session, existing.id)
+            stale = (
+                latest_rev.revision_number if latest_rev else None
+            ) != body.base_revision_number
+        latest_by = (
+            SkillCatalogService.people_by_id(
+                session, {latest_rev.published_by_user_id}
+            ).get(latest_rev.published_by_user_id)
+            if latest_rev is not None
+            else None
+        )
 
         if existing is not None:
             package_id, disambiguated = existing.package_id, False
@@ -371,6 +481,13 @@ class SkillUploadService:
             is_republish=existing is not None,
             package_uuid=existing.id if existing is not None else None,
             next_revision_number=next_number,
+            editable_packages=editable_packages,
+            stale=stale,
+            latest_revision_number=(
+                latest_rev.revision_number if latest_rev is not None else None
+            ),
+            latest_version=latest_rev.version if latest_rev is not None else None,
+            latest_published_by=latest_by,
         )
 
     @staticmethod
@@ -384,7 +501,7 @@ class SkillUploadService:
                 after), ``skill_archive_invalid``, ``skill_invalid``,
                 ``skill_contains_secrets``, ``package_not_found``,
                 ``not_publisher``, ``skill_name_mismatch``,
-                ``package_exists``, ``grants_require_users_visibility``,
+                ``package_exists``, ``stale_base``, ``editable_package_exists``, ``grants_require_users_visibility``,
                 ``invalid_grants``, ``invalid_visibility`` and the package-id
                 codes of a first publish.
         """
@@ -419,6 +536,11 @@ class SkillUploadService:
                 )
                 if existing is not None:
                     raise _package_exists(existing)
+                # S6: never a duplicate of an editable package by accident.
+                if not meta.new_package:
+                    candidates = _editable_candidates(session, user, entry.name)
+                    if candidates:
+                        raise _editable_package_exists(candidates, entry.name)
 
             lock_key = (
                 f"package:{existing.id}"
@@ -434,6 +556,10 @@ class SkillUploadService:
                     )
                     if raced is not None:
                         raise _package_exists(raced)
+                else:
+                    # S5, inside the lock: the latest read here is the one
+                    # the next revision number follows.
+                    _check_base(session, existing, user, meta.base_revision_number)
 
                 # 5. Sharing changes on an existing package need ``maintain``.
                 SkillUploadService._check_sharing(
@@ -497,6 +623,9 @@ class SkillUploadService:
                         credential_specs=credential_specs,
                         source_agent_id=None,
                         catalog_grants=meta.grants or None,
+                        base_revision_number=(
+                            meta.base_revision_number if existing is not None else None
+                        ),
                     )
         finally:
             await asyncio.to_thread(shutil.rmtree, tmp_root, True)

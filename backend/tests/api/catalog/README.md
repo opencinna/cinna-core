@@ -96,6 +96,15 @@ C4 — skills from a desktop:
   `skill_name_mismatch`, `use` 403), additive grants, `catalog.updated` /
   `catalog.granted`, content refusals, oversize (413 / 400) and every
   unsafe-archive shape.
+- `catalog_skill_comaintainers_test.py` — co-maintainers (core C1): an editor
+  shares from the latest base (base + `published_by` recorded), a stale base is
+  409 `stale_base` with nothing written, no base is unchecked; two concurrent
+  shares from one base (held at the publish lock's door by patching
+  `_publish_lock_for`) → exactly one wins; a first share beside an editable
+  same-name package is 409 `editable_package_exists` (invisible packages never
+  named, `use` only → own package, `new_package: true`); preview `stale` /
+  `editable_packages`; agent path records its base; listing
+  `latest.content_hash` == the tree hash of the unpacked archive (agents `null`).
 - `catalog_skill_download_via_agent_test.py` — U7 end to end over real git:
   `download`/`content`/`files` of a private skill open to a `use` holder of a
   desktop agent whose latest version pins that exact revision; other

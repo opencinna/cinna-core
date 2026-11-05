@@ -92,6 +92,13 @@ class SkillPackageRevision(SQLModel, table=True):
         default=None, sa_column=Column(Text, nullable=True)
     )
 
+    # The revision the sharer's copy held when they shared this one: the
+    # lineage of co-maintained skills. A desktop share records the base it
+    # sent (and is refused unless that base is the latest); the agent path
+    # records the latest it published over. NULL for a first revision, a
+    # desktop share that sent none, and every revision before this column.
+    base_revision_number: int | None = Field(default=None, nullable=True)
+
     published_by_user_id: uuid.UUID | None = Field(
         default=None, foreign_key="user.id", nullable=True, ondelete="SET NULL"
     )

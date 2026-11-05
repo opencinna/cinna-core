@@ -3745,6 +3745,7 @@ export type CatalogLatest = {
     published_at: string;
     published_by?: (CatalogPerson | null);
     release_notes?: (string | null);
+    content_hash?: (string | null);
 };
 
 /**
@@ -5090,6 +5091,19 @@ export type DiscoverableAgent = {
 export type DiscoverableAgents = {
     data: Array<DiscoverableAgent>;
     count: number;
+};
+
+/**
+ * A same-name package somebody else publishes that the caller may
+ * ``edit`` (``editable_package_exists``, the desktop preview).
+ */
+export type EditableCandidate = {
+    package_uuid: string;
+    package_id: string;
+    publisher?: (CatalogPerson | null);
+    access: string;
+    latest_revision_number?: (number | null);
+    latest_version?: (string | null);
 };
 
 /**
@@ -8578,6 +8592,7 @@ export type SkillDesktopPublishPreviewIn = {
         [key: string]: unknown;
     };
     package_uuid?: (string | null);
+    base_revision_number?: (number | null);
     publisher_credentials?: Array<SkillPublisherCredentialIn>;
 };
 
@@ -8793,6 +8808,8 @@ export type SkillPackageRevisionPublic = {
     size_bytes?: number;
     release_notes?: (string | null);
     published_by_user_id?: (string | null);
+    published_by?: (CatalogPerson | null);
+    base_revision_number?: (number | null);
     published_at: string;
     required_credentials?: Array<SkillCredentialRequirementPublic>;
 };
@@ -8872,6 +8889,11 @@ export type SkillPublishPreview = {
     is_republish?: boolean;
     package_uuid?: (string | null);
     next_revision_number?: number;
+    editable_packages?: Array<EditableCandidate>;
+    stale?: (boolean | null);
+    latest_revision_number?: (number | null);
+    latest_version?: (string | null);
+    latest_published_by?: (CatalogPerson | null);
     credentials?: Array<SkillPublishCredentialPreview>;
 };
 

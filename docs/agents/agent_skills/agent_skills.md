@@ -368,7 +368,23 @@ options; core runs the same checks as a cloud publish and appends a revision.
   `edit` and the name must match (409 `skill_name_mismatch`). Without it, when the
   caller already publishes a skill of that name, the answer is 409 `package_exists`
   carrying that `package_uuid`, so the desktop retries as a new version instead of
-  creating a duplicate.
+  creating a duplicate. When the caller publishes none, but may `edit` somebody
+  else's package of that name, the answer is 409 `editable_package_exists` with
+  those packages as `candidates`: the person chooses a new version of theirs, or a
+  separate skill (`new_package: true`). Packages the caller cannot see are never
+  named. The preview lists the same `editable_packages`.
+- **A share from an older copy is refused**: the desktop sends the revision its
+  folder holds as `base_revision_number`. When that is no longer the package's
+  latest (a co-maintainer shared since), the answer is 409 `stale_base` naming the
+  latest revision, its version and who shared it, and nothing is written; the
+  person gets that version first. The check runs inside the package's publish lock,
+  so of two shares from the same base exactly one wins. Without a base nothing is
+  checked (older clients). The preview answers `stale` for a given base.
+- **Lineage**: every revision records `base_revision_number` (what the desktop
+  sent; on a cloud agent publish, the latest it published over) and the package
+  detail names who shared each version (`published_by`). Skill items in the
+  catalog listing carry `latest.content_hash`, so a desktop can tell unshared edits
+  in a linked folder without another read.
 - **Grants are additive**: those named are added or raised, never lowered, and
   everyone else keeps their access. Replacing the whole list is the catalog's grants
   call. `use` grants need the package to be limited to listed people.

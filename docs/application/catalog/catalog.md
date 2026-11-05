@@ -35,7 +35,8 @@ version yet (a desktop agent before its first share) is listed only to people wi
 ## The listing
 
 `GET /api/v1/catalog/items` returns every item the caller may see, optionally narrowed by kind
-(`agent`/`skill`) or where it runs. Each entry carries the caller's access level, the latest version,
+(`agent`/`skill`) or where it runs. Each entry carries the caller's access level, the latest version
+(for a skill with its content hash, so Cinna Desktop can tell whether a linked copy holds it unchanged),
 the publisher, the credentials it needs, the install count and the caller's own installs
 (`my_installs`). A superuser can ask for every item (`scope=all`) for oversight.
 
