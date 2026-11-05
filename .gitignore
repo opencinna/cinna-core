@@ -46,6 +46,11 @@ notes.txt
 docs/local_agent_kit/**/__pycache__/
 docs/local_agent_kit/**/*.pyc
 
+# Bytecode from the repo's docs tooling (`python3 .cinna-core-kit/scripts/...`,
+# run by `make check-docs`, `make docs-registry`, `make sync-platform-knowledge`).
+.cinna-core-kit/**/__pycache__/
+.cinna-core-kit/**/*.pyc
+
 # UI review screenshots (frontend/scripts/ui-shot.mjs)
 frontend/.ui-shots/
 
