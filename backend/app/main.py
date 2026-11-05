@@ -90,6 +90,11 @@ def cinna_desktop_discovery() -> dict:
         "desktop_auth_enabled": settings.DESKTOP_AUTH_ENABLED,
         # Artifacts API version (D13); absent on cores without the feature.
         "artifacts": 1,
+        # Canonical web origin, taken from FRONTEND_HOST (may differ from the
+        # backend origin above). A share link copied from another origin that
+        # serves the same SPA (alias domain, misconfigured/default
+        # FRONTEND_HOST) will not match: treat it as an unknown server, not an error.
+        "web_origin": settings.FRONTEND_HOST.rstrip("/"),
     }
 
     # Optional local-development block. Absent => this instance does not offer

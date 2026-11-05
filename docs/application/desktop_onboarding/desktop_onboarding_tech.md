@@ -48,7 +48,7 @@ No models, no tables, no migration. Nothing about this feature is persisted.
 
 | Method | Path | Auth | Notes |
 |--------|------|------|-------|
-| GET | `/.well-known/cinna-desktop` | none | Instance metadata. Six always-present keys (`instance_name`, `authorization_endpoint`, `token_endpoint`, `userinfo_endpoint`, `version`, `desktop_auth_enabled`) plus an optional `local_dev` object |
+| GET | `/.well-known/cinna-desktop` | none | Instance metadata. Always-present keys `instance_name`, `authorization_endpoint`, `token_endpoint`, `userinfo_endpoint`, `version`, `desktop_auth_enabled`, `artifacts` and `web_origin` (the web app's origin, `FRONTEND_HOST`; on a split-host deployment it differs from the backend origin the endpoints carry, and the desktop uses it to match skill links to a profile signed in with either origin and to copy links a browser can open; `web_origin` is the canonical origin from `FRONTEND_HOST`, while the share link is built from the browser's `window.location.origin`, so a link copied from another origin serving the same SPA (an alias domain, or a default or misconfigured `FRONTEND_HOST`) will not match, and Desktop should treat it as an unknown server, not an error.), plus an optional `local_dev` object |
 | GET | `/api/v1/desktop/download` | none | `os=darwin\|linux`, `arch=arm64\|x64`, `kind=dmg\|appimage\|deb`, all required. `302` on every path; `422` only for a value outside the declared `Literal`s |
 | POST | `/api/v1/cli/account/setup-tokens` | `CurrentUser` + `require_developer` + `NoCliExchangedSession` | **Pre-existing, unchanged.** Advertised by `local_dev.setup_token_endpoint`; see [Account CLI Workspace](../cinna_cli_integration/account_cli_workspace_tech.md) |
 

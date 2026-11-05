@@ -445,7 +445,10 @@ Cinna skill with you", shows the id, and offers **Open in Cinna Desktop**
 (`cinna://skill/<package_id>?server=<origin>`) and **Get Cinna Desktop**
 (`/desktop`). On macOS it adds "or paste this page's link into Cinna Desktop",
 because the app never reads the clipboard there. Cinna Desktop accepts both
-forms, pasted or clicked, and offers to add the skill to a local agent.
+forms, pasted or clicked, and offers to add the skill to a local agent. On a
+instance whose web app and backend sit on different hosts, the Desktop learns the
+web address from the `web_origin` field of its instance discovery, so a web link
+still matches the server it is already signed in to.
 
 - **A signed-in visitor who may see the package** also gets its title,
   publisher, **Version N (label)**, description, the credential slots it needs,

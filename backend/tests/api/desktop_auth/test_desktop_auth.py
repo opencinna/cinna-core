@@ -62,6 +62,19 @@ def test_instance_discovery(client: TestClient) -> None:
     assert "/desktop-auth/authorize" in data["authorization_endpoint"]
     assert "/desktop-auth/token" in data["token_endpoint"]
     assert "/desktop-auth/userinfo" in data["userinfo_endpoint"]
+    # The web app's origin, apart from the backend origin the endpoints carry.
+    assert data["web_origin"] == settings.FRONTEND_HOST.rstrip("/")
+
+
+def test_instance_discovery_web_origin_drops_trailing_slash(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A FRONTEND_HOST configured with trailing slashes is advertised without
+    them, so the desktop can match ``<web origin>/get/skill/<id>`` exactly."""
+    monkeypatch.setattr(settings, "FRONTEND_HOST", "https://app.example.com//")
+    r = client.get("/.well-known/cinna-desktop")
+    assert r.status_code == 200
+    assert r.json()["web_origin"] == "https://app.example.com"
 
 
 # ── Test: Client management via lazy registration ───────────────────────────
