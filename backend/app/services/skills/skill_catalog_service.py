@@ -1584,6 +1584,24 @@ class SkillCatalogService:
         return package
 
     @staticmethod
+    def get_package_by_package_id(
+        session: Session, package_id: str, user: User
+    ) -> SkillPackage:
+        """:meth:`get_package`, keyed by the reverse-DNS ``package_id``.
+
+        The lookup behind a skill link (``/get/skill/<package_id>``). Same
+        access rule and the same refusal: a missing package and one the caller
+        may not see both raise ``package_not_found``, so the id a link carries
+        never tells a stranger that a private package exists.
+        """
+        package = session.exec(
+            select(SkillPackage).where(SkillPackage.package_id == package_id)
+        ).first()
+        if package is None:
+            raise SkillCatalogError("package_not_found", "Skill package not found")
+        return SkillCatalogService.get_package(session, package.id, user)
+
+    @staticmethod
     def get_readable_revision(
         session: Session, package_uuid: uuid.UUID, revision_number: int, user: User
     ) -> tuple[SkillPackage, SkillPackageRevision]:

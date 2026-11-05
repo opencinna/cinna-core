@@ -1060,6 +1060,7 @@ Two routers, one `skills` tag → one `SkillsService` in the generated client.
 |---------------|------|---------|
 | `GET /skills/catalog` | `CurrentUser` | `SkillPackagesPublic` — unfiltered |
 | `GET /skills/packages/{package_id}` | `CurrentUser` | `SkillPackageDetailPublic` (+ full revision history) |
+| `GET /skills/packages/by-package-id/{package_id}` | `CurrentUser` | The same detail keyed by the reverse-DNS `package_id`, for the public skill-link page. `SkillCatalogService.get_package_by_package_id` resolves the row, then applies `get_package`'s visibility rule, so a missing package and one the caller may not see both answer 404 `package_not_found`. The path pattern `^[A-Za-z0-9._-]{1,255}$` (a superset of what publish mints) rejects anything else with 422. **Declared before the `/packages/{package_id}/…` routes** so the literal segment is never parsed as a uuid. Cinna Desktop does not call it; it resolves links through `GET /catalog/items` |
 | `PATCH /skills/packages/{package_id}` | publisher | `display_name` / `description` / `visibility` / `is_listed` |
 | `POST /skills/packages/{package_id}/delist` | superuser | hide, never delete |
 | `GET /skills/packages/{package_id}/revisions/{n}/content` | `CurrentUser` + visibility | `SKILL.md` preview |
@@ -1348,6 +1349,15 @@ Regenerate the client after each backend phase:
 
 ---
 
+### Skill links
+
+| File | Role |
+|------|------|
+| `routes/get/skill/$packageId.tsx` | Public route, no `beforeLoad` (same as `routes/desktop.tsx`). `$packageId` is the reverse-DNS id |
+| `components/SkillLink/SkillLinkPage.tsx` | The page. It runs the lookup only when the id is well formed and a token is present (`retry: false`). Any failure renders as nothing, so a 404 is the signed-out page exactly. `main.tsx` keeps `/get/` out of the 401/403 login redirect, so a stale token also reads as signed out |
+| `utils/skillLinks.ts` | `SKILL_LINK_PACKAGE_ID_RE`, `skillInstallLink` (`window.location.origin` + `/get/skill/<id>`), `cinnaSkillDeepLink` (`cinna://skill/<id>?server=<resolveServerOrigin()>`, unencoded). Cross-repo contract with cinna-desktop's link parser |
+| `components/Catalog/useCopySkillInstallLink.ts` | **Copy install link** with its copied / failed toasts, shared by `SkillPackageCard` (through `CatalogItemMenu`'s new `readerItems`, which every reader gets) and `CatalogItemCard` (a skill-only `⋯` in the tile header, wrapped in a click-propagation boundary) |
+
 ## Local Agent Kit — contract 1.1.0
 
 | File | Change |
@@ -1385,6 +1395,8 @@ to the skill discovery and catalog tests below:
 | `backend/tests/api/credentials/test_credential_deletion_impact_skills.py` | Skill Tier 2 impact, including installs upgraded past the providing revision |
 | `backend/tests/api/credentials/test_credential_share_revocation.py` | Individual-share and both sharing-disable paths remove recipient links |
 | `frontend/tests/skillCredentials.test.mjs` | Install readiness/outcome copy and producer facts; run with `npm run test:skill-credentials` from `frontend/` |
+| `backend/tests/api/catalog/catalog_skill_link_lookup_test.py` | `by-package-id` lookup: found (same body as the uuid route), not visible and missing both 404 with the same body, 401 unauthenticated, 422 malformed |
+| `frontend/tests/skillLink.test.mjs` | `/get/skill/<id>` page in Chromium (harness `fixtures/skillLinkHarness.tsx`): signed out, signed in and visible, signed in and not visible (same text as signed out), same page for any well-formed id, malformed, macOS-only paste hint, the exact `cinna://` href, and the link **Copy install link** copies; run with `npm run test:skill-links:ui` from `frontend/` |
 | `frontend/tests/skillInstallDialog.test.mjs` | Real catalog install dialog (S2): failed/unsupported/partial sync warnings, reused-placeholder setup and focus, Done/Escape/Credentials close paths, and clean success; run with `npm run test:skill-credentials:ui` from `frontend/` |
 
 The browser tests use `frontend/tests/fixtures/skillInstallHarness.tsx` to mount

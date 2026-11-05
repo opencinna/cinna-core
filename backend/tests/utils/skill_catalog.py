@@ -238,6 +238,23 @@ def get_skill_package(
     return r.json()
 
 
+
+def get_skill_package_by_package_id(
+    client: TestClient,
+    headers: dict[str, str],
+    package_id: str,
+    *,
+    expected_status: int = 200,
+) -> dict:
+    """``GET /skills/packages/by-package-id/{package_id}`` — the skill-link lookup."""
+    r = client.get(
+        f"{API}/skills/packages/by-package-id/{package_id}", headers=headers
+    )
+    assert r.status_code == expected_status, (
+        f"get package by id: expected {expected_status}, got {r.status_code}: {r.text}"
+    )
+    return r.json()
+
 def get_revision_content(
     client: TestClient,
     headers: dict[str, str],

@@ -14227,6 +14227,12 @@ export type SkillsPublishDesktopSkillData = {
 
 export type SkillsPublishDesktopSkillResponse = (SkillPackageRevisionPublic);
 
+export type SkillsGetSkillPackageByPackageIdData = {
+    packageId: string;
+};
+
+export type SkillsGetSkillPackageByPackageIdResponse = (SkillPackageDetailPublic);
+
 export type SkillsGetSkillPackageData = {
     packageId: string;
 };

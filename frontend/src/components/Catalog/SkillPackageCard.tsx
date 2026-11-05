@@ -6,6 +6,7 @@ import {
   GraduationCap,
   History,
   KeyRound,
+  Link2,
   Loader2,
   Pencil,
 } from "lucide-react"
@@ -50,6 +51,7 @@ import { CatalogItemMenu } from "./CatalogItemMenu"
 import { EditSkillPackageDialog } from "./EditSkillPackageDialog"
 import { SkillRevisionCredentialsSheet } from "./SkillRevisionCredentialsSheet"
 import { SkillRevisionFilesSheet } from "./SkillRevisionFilesSheet"
+import { useCopySkillInstallLink } from "./useCopySkillInstallLink"
 
 interface SkillPackageCardProps {
   pkg: SkillPackageDetailPublic
@@ -94,6 +96,7 @@ export function SkillPackageCard({
   const [filesOpen, setFilesOpen] = useState(false)
   const [credentialsOpen, setCredentialsOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
+  const copyInstallLink = useCopySkillInstallLink()
 
   // What the shown revision ships. Its own read rather than a field on the
   // package: the file list is a walk of an immutable snapshot on disk, it
@@ -205,9 +208,11 @@ export function SkillPackageCard({
             <GraduationCap className="h-5 w-5 shrink-0" />
             Package
           </CardTitle>
-          {/* S3c: People…, Edit details…, the superuser's listing switch,
-              Delete…. The menu renders nothing for a reader who may not
-              manage the package (maintain, or a superuser — P2). */}
+          {/* S3c: Copy install link, then People…, Edit details…, the
+              superuser's listing switch, Delete…. A reader who may not manage
+              the package (maintain, or a superuser — P2) gets Copy install
+              link alone: the link grants nothing, so anyone who sees the
+              package may pass it on. */}
           <div className="shrink-0">
             <CatalogItemMenu
               item={{
@@ -219,6 +224,14 @@ export function SkillPackageCard({
                 is_listed: pkg.is_listed,
               }}
               canMaintain={!!pkg.can_manage}
+              readerItems={
+                <DropdownMenuItem
+                  onSelect={() => copyInstallLink(pkg.package_id)}
+                >
+                  <Link2 />
+                  Copy install link
+                </DropdownMenuItem>
+              }
               extraItems={
                 pkg.can_manage ? (
                   <DropdownMenuItem onSelect={() => setEditOpen(true)}>

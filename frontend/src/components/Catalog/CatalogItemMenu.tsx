@@ -18,18 +18,26 @@ interface CatalogItemMenuProps {
   canMaintain: boolean
   /** Host-specific items between People… and the listing item (Edit details…). */
   extraItems?: ReactNode
+  /**
+   * Items for anyone who can see the item (Copy install link), first in the
+   * menu. With these, a reader who may not manage still gets a menu holding
+   * only them.
+   */
+  readerItems?: ReactNode
 }
 
 /**
  * S3c — the maintainer's `⋯` on a detail card's title row: People…, the host's
  * own items, the superuser's listing switch, then Delete…. Renders nothing for
- * someone who may not manage the item. The confirms live here, beside the
+ * someone who may not manage the item, unless the host passes `readerItems`,
+ * which every reader gets. The confirms live here, beside the
  * menu, not inside its items. Deleting from a detail page lands on `/catalog`.
  */
 export function CatalogItemMenu({
   item,
   canMaintain,
   extraItems,
+  readerItems,
 }: CatalogItemMenuProps) {
   const { user } = useAuth()
   const navigate = useNavigate()
@@ -38,7 +46,11 @@ export function CatalogItemMenu({
     onDeleted: () => navigate({ to: "/catalog" }),
   })
 
-  if (!canMaintain && !isSuperuser) return null
+  if (!canMaintain && !isSuperuser) {
+    return readerItems ? (
+      <RowActionsMenu label={item.display_name}>{readerItems}</RowActionsMenu>
+    ) : null
+  }
   const pending = actions.pendingLabel(item.uuid)
 
   return (
@@ -47,6 +59,8 @@ export function CatalogItemMenu({
         <PendingSlot label={pending} />
       ) : (
         <RowActionsMenu label={item.display_name}>
+          {readerItems}
+          {readerItems && <DropdownMenuSeparator />}
           <DropdownMenuItem onSelect={() => actions.openPeople(item)}>
             <UserCog />
             People…

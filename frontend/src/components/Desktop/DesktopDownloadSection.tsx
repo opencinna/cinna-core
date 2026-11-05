@@ -47,7 +47,7 @@ interface UserAgentDataLike {
  * platforms instead of guessing and rendering a button that installs the wrong
  * thing.
  */
-function detectPlatform(): Platform | null {
+export function detectPlatform(): Platform | null {
   if (typeof navigator === "undefined") return null
   const ua = navigator.userAgent
 

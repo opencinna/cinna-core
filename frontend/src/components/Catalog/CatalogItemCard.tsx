@@ -10,11 +10,12 @@
  */
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
-import { GraduationCap, KeyRound } from "lucide-react"
+import { GraduationCap, KeyRound, Link2 } from "lucide-react"
 import { useState } from "react"
 
 import { type CatalogItem, InstallsService } from "@/client"
 import { RelativeTime } from "@/components/Common/RelativeTime"
+import { RowActionsMenu } from "@/components/Common/RowActionsMenu"
 import { useQuickInstall } from "@/components/Install/useQuickInstall"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -25,6 +26,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu"
 import useCustomToast from "@/hooks/useCustomToast"
 import { getErrorMessage } from "@/utils"
 import {
@@ -38,6 +40,7 @@ import {
 } from "@/utils/catalogItems"
 import { AddSkillToAgentDialog } from "./AddSkillToAgentDialog"
 import { CatalogItemAction } from "./CatalogItemAction"
+import { useCopySkillInstallLink } from "./useCopySkillInstallLink"
 
 /** Names shown on the skills line before the "+N more" tail. */
 const MAX_SKILL_NAMES = 3
@@ -51,6 +54,7 @@ export function CatalogItemCard({ item }: CatalogItemCardProps) {
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
   const [addOpen, setAddOpen] = useState(false)
+  const copyInstallLink = useCopySkillInstallLink()
 
   const kind = catalogKindOf(item)
   const KindIcon = CATALOG_KINDS[kind].icon
@@ -135,6 +139,25 @@ export function CatalogItemCard({ item }: CatalogItemCardProps) {
                 by {item.publisher?.display_name || "unknown publisher"}
               </p>
             </div>
+            {/* Skills only: the link is how a skill reaches Cinna Desktop
+                from a chat message. Clicks stop here — the tile is a
+                navigation target, and a menu item's portal still bubbles
+                React events up to it. */}
+            {kind === "skill" && (
+              // biome-ignore lint/a11y/noStaticElementInteractions: a propagation boundary, not a control
+              <div
+                className="-mr-2 -mt-1 shrink-0"
+                onClick={(e) => e.stopPropagation()}
+                onKeyDown={(e) => e.stopPropagation()}
+              >
+                <RowActionsMenu label={item.display_name}>
+                  <DropdownMenuItem onSelect={() => copyInstallLink(item.id)}>
+                    <Link2 />
+                    Copy install link
+                  </DropdownMenuItem>
+                </RowActionsMenu>
+              </div>
+            )}
           </div>
         </CardHeader>
 

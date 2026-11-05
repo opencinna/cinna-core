@@ -111,6 +111,12 @@ C4 — skills from a desktop:
   revisions, a removed pin and lost agent access answer 404; the skill's
   catalog item never opens this way.
 
+Skill links:
+- `catalog_skill_link_lookup_test.py` — `GET /skills/packages/by-package-id/{package_id}`:
+  found (same body as the uuid route), not visible == missing (404
+  `package_not_found`, same body), public opens it to a stranger, 401
+  unauthenticated, 422 malformed, a well-formed `_` id 404s.
+
 C5 — skill credentials for local installs:
 - `catalog_skill_provision_local_test.py` — desktop publish with
   `meta.publisher_credentials` freezes `publisher` / `template` / `user`

@@ -22,7 +22,7 @@ import uuid
 from collections.abc import Callable, Coroutine
 from typing import Any
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Path, Request, Response, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
@@ -171,6 +171,34 @@ router.add_api_route(
     response_model=SkillPackageRevisionPublic,
     route_class_override=_UploadSizeGuardRoute,
 )
+
+
+#: The id grammar a skill link accepts (`/get/skill/<package_id>`). A superset
+#: of what publish mints, so a link never 422s an id the catalog could hold.
+SKILL_LINK_PACKAGE_ID_PATTERN = r"^[A-Za-z0-9._-]{1,255}$"
+
+
+# Declared before ``/packages/{package_id}``'s sub-routes so the literal
+# ``by-package-id`` segment is never parsed as a uuid.
+@router.get(
+    "/packages/by-package-id/{package_id}",
+    response_model=SkillPackageDetailPublic,
+)
+def get_skill_package_by_package_id(
+    session: SessionDep,
+    current_user: CurrentUser,
+    package_id: str = Path(pattern=SKILL_LINK_PACKAGE_ID_PATTERN, max_length=255),
+) -> Any:
+    """One package by its reverse-DNS ``package_id`` — the id a skill link
+    carries. Same shape and access rule as ``GET /packages/{uuid}``; a missing
+    package and one the caller may not see both answer 404."""
+    try:
+        package = SkillCatalogService.get_package_by_package_id(
+            session, package_id, current_user
+        )
+    except SkillCatalogError as exc:
+        raise http_error_for(exc)
+    return SkillCatalogService.package_to_detail(session, package, current_user)
 
 
 @router.get("/packages/{package_id}", response_model=SkillPackageDetailPublic)
