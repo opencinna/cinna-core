@@ -1,8 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router"
 import { z } from "zod"
-import { ensureSessionValid } from "@/hooks/useAuth"
 import { AppAuthService } from "@/client"
 import { NativeAuthConsentPage } from "@/components/Auth/NativeAuthConsentPage"
+import { ensureSessionValid } from "@/hooks/useAuth"
 import { APP_NAME } from "@/utils"
 
 const searchSchema = z.object({
@@ -27,6 +27,7 @@ function AppAuthConsentPage() {
     <NativeAuthConsentPage
       nonce={nonce}
       queryKeyPrefix="app-auth-request"
+      branded
       getRequest={(nonce) => AppAuthService.getAppAuthRequest({ nonce })}
       submitConsent={(nonce, action) =>
         AppAuthService.appConsent({

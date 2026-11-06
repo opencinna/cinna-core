@@ -1,17 +1,4 @@
 import { useMutation, useQuery } from "@tanstack/react-query"
-import { useState } from "react"
-import { CliService, UsersService } from "@/client"
-import { redirectToLoginPreservingTarget } from "@/hooks/useAuth"
-import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
 import {
   AlertTriangle,
   CheckCircle2,
@@ -22,6 +9,20 @@ import {
   Terminal,
   UserCircle2,
 } from "lucide-react"
+import { useState } from "react"
+import { CliService, UsersService } from "@/client"
+import { ConsentShell } from "@/components/Auth/ConsentShell"
+import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
+import { redirectToLoginPreservingTarget } from "@/hooks/useAuth"
 
 /**
  * Browser consent screen for the `cinna login` device-authorization flow
@@ -94,10 +95,10 @@ export function DeviceLoginConsentPage({ code }: { code?: string }) {
 
   if (authorized) {
     return (
-      <div className="flex min-h-screen items-center justify-center p-4">
+      <ConsentShell branded>
         <Card className="w-full max-w-md">
           <CardHeader className="text-center">
-            <CheckCircle2 className="mx-auto h-12 w-12 text-green-500" />
+            <CheckCircle2 className="mx-auto h-12 w-12 text-success" />
             <CardTitle className="mt-2">Device Authorized</CardTitle>
             <CardDescription>
               Return to your terminal — the CLI will finish signing in. You can
@@ -105,13 +106,13 @@ export function DeviceLoginConsentPage({ code }: { code?: string }) {
             </CardDescription>
           </CardHeader>
         </Card>
-      </div>
+      </ConsentShell>
     )
   }
 
   if (denied) {
     return (
-      <div className="flex min-h-screen items-center justify-center p-4">
+      <ConsentShell branded>
         <Card className="w-full max-w-md">
           <CardHeader className="text-center">
             <ShieldX className="mx-auto h-12 w-12 text-muted-foreground" />
@@ -119,7 +120,7 @@ export function DeviceLoginConsentPage({ code }: { code?: string }) {
             <CardDescription>You can close this tab.</CardDescription>
           </CardHeader>
         </Card>
-      </div>
+      </ConsentShell>
     )
   }
 
@@ -127,7 +128,7 @@ export function DeviceLoginConsentPage({ code }: { code?: string }) {
 
   if (userCode.length === 0) {
     return (
-      <div className="flex min-h-screen items-center justify-center p-4 bg-background">
+      <ConsentShell branded paintBackground>
         <Card className="w-full max-w-md">
           <CardHeader className="text-center">
             <Terminal className="mx-auto h-12 w-12 text-primary" />
@@ -167,25 +168,21 @@ export function DeviceLoginConsentPage({ code }: { code?: string }) {
             </CardFooter>
           </form>
         </Card>
-      </div>
+      </ConsentShell>
     )
   }
 
   // --- Loading metadata for the entered/prefilled code ---
 
   if (isLoading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-      </div>
-    )
+    return <ConsentShell branded loading />
   }
 
   // --- Unknown / expired / invalid code ---
 
   if (error) {
     return (
-      <div className="flex min-h-screen items-center justify-center p-4">
+      <ConsentShell branded>
         <Card className="w-full max-w-md">
           <CardHeader className="text-center">
             <AlertTriangle className="mx-auto h-12 w-12 text-destructive" />
@@ -196,7 +193,7 @@ export function DeviceLoginConsentPage({ code }: { code?: string }) {
             </CardDescription>
           </CardHeader>
         </Card>
-      </div>
+      </ConsentShell>
     )
   }
 
@@ -208,14 +205,12 @@ export function DeviceLoginConsentPage({ code }: { code?: string }) {
   if (requestInfo && requestInfo.status !== "pending") {
     const resolvedExpired = requestInfo.status === "expired"
     return (
-      <div className="flex min-h-screen items-center justify-center p-4">
+      <ConsentShell branded>
         <Card className="w-full max-w-md">
           <CardHeader className="text-center">
             <AlertTriangle className="mx-auto h-12 w-12 text-muted-foreground" />
             <CardTitle className="mt-2">
-              {resolvedExpired
-                ? "Login Request Expired"
-                : "Already Resolved"}
+              {resolvedExpired ? "Login Request Expired" : "Already Resolved"}
             </CardTitle>
             <CardDescription>
               {resolvedExpired ? (
@@ -229,14 +224,14 @@ export function DeviceLoginConsentPage({ code }: { code?: string }) {
             </CardDescription>
           </CardHeader>
         </Card>
-      </div>
+      </ConsentShell>
     )
   }
 
   // --- Pending: the approve / deny consent screen ---
 
   return (
-    <div className="flex min-h-screen items-center justify-center p-4 bg-background">
+    <ConsentShell branded paintBackground>
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
           <Terminal className="mx-auto h-12 w-12 text-primary" />
@@ -339,6 +334,6 @@ export function DeviceLoginConsentPage({ code }: { code?: string }) {
           </button>
         </div>
       </Card>
-    </div>
+    </ConsentShell>
   )
 }

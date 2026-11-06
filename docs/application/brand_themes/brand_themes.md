@@ -14,7 +14,7 @@ A **brand theme** is the look of a Cinna server: a color for each of a fixed set
 
 Themes are not meant to be written by hand. They are produced as a package (`theme.json` plus an `assets/` folder, or a zip of both), and core is the gatekeeper: a package that is incomplete, unreadable or unsafe is refused when it is uploaded, with errors specific enough for the author (a person or an agent) to fix and retry.
 
-This is the backend of the feature. Core's own in-app pages, the branded sign-in pages and the admin page are not yet built; today everything is driven through the admin API.
+Core's web app applies the theme to its sign-in pages (login, MFA, signup, password recovery and reset, email confirmation, invitation acceptance, and the browser consent pages for Cinna Desktop, Cinna Mobile and `cinna login`). The rest of core's web app keeps its own look, and the admin page is not yet built; today themes are managed through the admin API.
 
 ## Core Capabilities
 
@@ -24,6 +24,7 @@ This is the backend of the feature. Core's own in-app pages, the branded sign-in
 - **Validation on save.** The same checks run at upload and again at publish, because the rules may have tightened since the upload. A failing re-check refuses the publish with the list of errors.
 - **Public endpoint.** The published theme is readable without authentication so that sign-in screens can be branded before anyone has a token. Clients revalidate cheaply with the theme's revision.
 - **Discovery.** When a theme is published, the desktop discovery document announces it, so a desktop knows to fetch it.
+- **Branded sign-in pages.** The web sign-in pages take the theme's colors for the visitor's own light or dark mode. On wide screens the decorative panel beside the form shows the brand logo over the brand background (or a flat brand surface); the consent pages (Cinna Desktop, Cinna Mobile, `cinna login` device authorization) show the logo above their card with the background behind the whole page. Nothing moves when the theme arrives: only colors and images change, and with no theme, or a theme that fails the page's own safety check, the pages look exactly as before. Menus, toasts and tooltips opened from these pages keep the stock look.
 
 ## What Counts as a Valid Theme
 
@@ -67,7 +68,7 @@ Discovery shows a `brand_theme` entry, the desktop fetches the theme endpoint, r
 
 ## Not Yet
 
-- Applying the theme inside core's own web app, including the sign-in pages.
+- Applying the theme inside the rest of core's web app (only the sign-in and consent pages are branded).
 - An admin page for uploading, previewing and publishing (until then, the admin API).
 - An authoring skill that turns a company brandbook into a package.
 - Fonts, radius or density, and app icons are outside the scheme.
@@ -75,3 +76,4 @@ Discovery shows a `brand_theme` entry, the desktop fetches the theme endpoint, r
 ## Changelog
 
 - Backend (first phase): schema and validator, storage, admin API, public endpoint, discovery field, shared fixtures.
+- Web sign-in pages adopt the published theme.

@@ -18,6 +18,12 @@ Business rules: [Brand Themes](brand_themes.md).
 | Routes | `backend/app/api/routes/brand_theme.py` |
 | Shared fixtures | `backend/app/services/brand_theme/fixtures/` |
 | Fixture test | `backend/tests/unit/test_brand_theme_fixtures.py` |
+| Web: parser, role → token map, CSS builder | `frontend/src/components/BrandTheme/brandTheme.ts` |
+| Web: scope wrapper, logo | `frontend/src/components/BrandTheme/AuthBrandScope.tsx`, `BrandLogo.tsx` |
+| Web: query hook | `frontend/src/hooks/useBrandTheme.ts` |
+| Web: skin hand-back inside the scope | `frontend/src/styles/brand-scope.css` |
+| Web: hosts | `frontend/src/components/Common/AuthLayout.tsx`; `frontend/src/components/Auth/ConsentShell.tsx`, used by `NativeAuthConsentPage.tsx` (`branded` prop, set by the desktop and mobile consent routes) and `DeviceLoginConsentPage.tsx` (always branded) |
+| Web tests | `frontend/tests/brandTheme.test.mjs` (`npm run test:brand-theme:ui`) |
 
 `schema.py`, `validator.py`, `colors.py`, `images.py`, `package.py`, `served.py` and `svg_sanitizer.py` have no FastAPI or database imports, so they can be copied verbatim into an offline authoring tool.
 
@@ -133,6 +139,18 @@ BRAND_THEME_REGEN_FIXTURES=1 python -m pytest tests/unit/test_brand_theme_fixtur
 then review the diff and re-copy the fixtures into Cinna Desktop.
 
 API behaviour (upload, publish, public endpoint, headers) is covered in `backend/tests/api/brand_theme/`.
+
+## Web sign-in pages
+
+`useBrandTheme()` queries `GET /api/v1/brand-theme` under the key `["brandTheme"]` (30 min stale time, 3 s timeout); a 204, an error or a timeout all mean stock. `parseBrandTheme` re-checks every color it uses against `^#[0-9a-f]{6}$` and drops the whole theme on any failure; an asset whose path is not `/api/v1/brand-theme/assets/<sha256>` is dropped alone. Asset paths are relative in the payload and are prefixed with the API base, so split-host deployments work.
+
+`AuthBrandScope` always renders its wrapper element (so the form never remounts when the theme arrives) and, with a theme, sets `data-skin="brand"` on that element, never on `<html>`, plus a `<style>` built only from parsed tokens: light under `[data-skin="brand"]`, dark under `.dark [data-skin="brand"]`. The user's mode class decides which applies.
+
+Role → token map (`BRAND_TOKEN_ROLES`, the only map on the web): `--background` surface.base; `--card`, `--popover` surface.raised; `--muted`, `--secondary` surface.tertiary; `--accent` surface.hover; `--foreground` and the card, popover, secondary and accent foregrounds text.primary; `--muted-foreground` **text.secondary** (body copy on these pages; text.muted is only validated at 3:1); `--primary`, `--ring` accent; `--primary-foreground` accent.on; `--border`, `--input` border; `--destructive` **status.danger.text** (it only paints error text here); `--success`, `--warning` the status roles; `--chart-1..5` chart.1–5. Not mapped: status foregrounds and sidebar tokens.
+
+Placement: in `AuthLayout` the decorative panel (≥ 1024 px only) shows the background as an `<img>` with `object-cover` over `surface.base`, or a flat `surface.raised`, and the logo in a 240×62 `object-contain` box; the form column only changes color. `ConsentShell` (the consent pages: `NativeAuthConsentPage` with `branded`, and `DeviceLoginConsentPage`) puts the background behind the whole page and the logo above the card, and holds its spinner until the theme query settles. A logo or background that fails to load falls back to the stock mark or the flat fill.
+
+Skins: under a skin set on `<html>` (hacker-1980), the brand wins inside the scope. Tier A tokens come from the map; `brand-scope.css` resets `--radius` and the skin's decorative tokens and hands the skin's card, title, button, input and scrollbar rules back to the stock styles with `revert-layer`, keeping the stock focus ring. Portalled menus, toasts and tooltips render outside the scope and keep the stock or skin look.
 
 ## Configuration
 

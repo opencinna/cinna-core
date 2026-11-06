@@ -1,8 +1,17 @@
 import { useMutation, useQuery } from "@tanstack/react-query"
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Loader2,
+  Monitor,
+  ShieldCheck,
+  ShieldX,
+  Smartphone,
+  UserCircle2,
+} from "lucide-react"
 import { useEffect, useState } from "react"
 import { UsersService } from "@/client"
-import { redirectToLoginPreservingTarget } from "@/hooks/useAuth"
-import { cinnaConnectDeepLink } from "@/utils"
+import { ConsentShell } from "@/components/Auth/ConsentShell"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -12,16 +21,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import {
-  Loader2,
-  Monitor,
-  Smartphone,
-  ShieldCheck,
-  ShieldX,
-  AlertTriangle,
-  CheckCircle2,
-  UserCircle2,
-} from "lucide-react"
+import { redirectToLoginPreservingTarget } from "@/hooks/useAuth"
+import { cinnaConnectDeepLink } from "@/utils"
 
 /** Non-secret metadata returned by the consent-request endpoint. */
 export interface NativeAuthRequestInfo {
@@ -43,6 +44,11 @@ interface NativeAuthConsentPageProps {
   ) => Promise<{ redirect_to: string }>
   /** React Query key namespace so the two surfaces don't collide in cache. */
   queryKeyPrefix: string
+  /**
+   * Paint the server's brand theme (logo, background, colors). Opt-in per
+   * route; the Cinna Desktop and Cinna Mobile consent routes both opt in.
+   */
+  branded?: boolean
 }
 
 /**
@@ -56,6 +62,7 @@ export function NativeAuthConsentPage({
   getRequest,
   submitConsent,
   queryKeyPrefix,
+  branded = false,
 }: NativeAuthConsentPageProps) {
   const [authorized, setAuthorized] = useState(false)
   const [denied, setDenied] = useState(false)
@@ -119,19 +126,15 @@ export function NativeAuthConsentPage({
   const AppIcon = isMobile ? Smartphone : Monitor
 
   if (isLoading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-      </div>
-    )
+    return <ConsentShell branded={branded} loading />
   }
 
   if (authorized) {
     return (
-      <div className="flex min-h-screen items-center justify-center p-4">
+      <ConsentShell branded={branded}>
         <Card className="w-full max-w-md">
           <CardHeader className="text-center">
-            <CheckCircle2 className="mx-auto h-12 w-12 text-green-500" />
+            <CheckCircle2 className="mx-auto h-12 w-12 text-success" />
             <CardTitle className="mt-2">Authorization Successful</CardTitle>
             <CardDescription>
               You can close this tab and return to {appLabel}.
@@ -153,13 +156,13 @@ export function NativeAuthConsentPage({
             </CardContent>
           )}
         </Card>
-      </div>
+      </ConsentShell>
     )
   }
 
   if (denied) {
     return (
-      <div className="flex min-h-screen items-center justify-center p-4">
+      <ConsentShell branded={branded}>
         <Card className="w-full max-w-md">
           <CardHeader className="text-center">
             <ShieldX className="mx-auto h-12 w-12 text-muted-foreground" />
@@ -167,13 +170,13 @@ export function NativeAuthConsentPage({
             <CardDescription>You can close this tab.</CardDescription>
           </CardHeader>
         </Card>
-      </div>
+      </ConsentShell>
     )
   }
 
   if (error) {
     return (
-      <div className="flex min-h-screen items-center justify-center p-4">
+      <ConsentShell branded={branded}>
         <Card className="w-full max-w-md">
           <CardHeader className="text-center">
             <AlertTriangle className="mx-auto h-12 w-12 text-destructive" />
@@ -184,7 +187,7 @@ export function NativeAuthConsentPage({
             </CardDescription>
           </CardHeader>
         </Card>
-      </div>
+      </ConsentShell>
     )
   }
 
@@ -193,7 +196,7 @@ export function NativeAuthConsentPage({
   const appVersion = requestInfo?.app_version as string | undefined
 
   return (
-    <div className="flex min-h-screen items-center justify-center p-4 bg-background">
+    <ConsentShell branded={branded} paintBackground>
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
           <AppIcon className="mx-auto h-12 w-12 text-primary" />
@@ -229,7 +232,9 @@ export function NativeAuthConsentPage({
             {platform && (
               <div className="flex justify-between">
                 <span className="text-sm text-muted-foreground">Platform</span>
-                <span className="text-sm font-medium capitalize">{platform}</span>
+                <span className="text-sm font-medium capitalize">
+                  {platform}
+                </span>
               </div>
             )}
             {appVersion && (
@@ -240,8 +245,8 @@ export function NativeAuthConsentPage({
             )}
           </div>
           <p className="text-sm text-muted-foreground text-center">
-            This will allow {appLabel} to sign in using your account and
-            access the platform on your behalf.
+            This will allow {appLabel} to sign in using your account and access
+            the platform on your behalf.
           </p>
         </CardContent>
         <CardFooter className="flex gap-3">
@@ -286,6 +291,6 @@ export function NativeAuthConsentPage({
           </button>
         </div>
       </Card>
-    </div>
+    </ConsentShell>
   )
 }

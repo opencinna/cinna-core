@@ -68,7 +68,7 @@ function ConfirmEmail() {
 
         {status === "success" && (
           <>
-            <CheckCircle2 className="h-10 w-10 text-green-600" />
+            <CheckCircle2 className="h-10 w-10 text-success" />
             <div className="flex flex-col gap-2">
               <h1 className="text-2xl font-bold">Email confirmed</h1>
               <p className="text-sm text-muted-foreground">

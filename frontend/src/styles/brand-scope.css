@@ -1,0 +1,107 @@
+/* ===========================================================================
+ * Brand scope — the auth pages' `[data-skin="brand"]` element (AuthBrandScope)
+ * ---------------------------------------------------------------------------
+ * A published brand theme is the server's identity; a skin is a personal
+ * preference. Inside the scope the brand wins completely: stock geometry and
+ * typography in brand colours, whatever skin is on <html>.
+ *
+ *   Tier A — the colour tokens come from the generated <style> AuthBrandScope
+ *            renders (brandTheme.ts). `--radius` is reset here to stock.
+ *   Tier B — the Tailwind palette remap is still inherited; nothing on the
+ *            brand path reads a palette class.
+ *   Tier C — reset to the default skin's no-op values (index.css `:root`);
+ *            the two `inherit` ones become `initial` here, because on a
+ *            custom property `inherit` would pick up the skin's value from
+ *            <html> (it is a no-op only on `:root`, which has no parent).
+ *   Effects — the skin rules that match on the auth pages are handed back to
+ *            the stock utilities with `revert-layer`. The skin files are
+ *            unlayered, so an unlayered rule here rolls the property back to
+ *            Tailwind's layers. Each selector requires a skin attribute on
+ *            <html> (the default skin carries none) and out-specifies the
+ *            skin's selectors. The skin files themselves stay untouched.
+ * ======================================================================== */
+
+[data-skin="brand"] {
+  --radius: 0.625rem;
+
+  --skin-line: transparent;
+  --skin-glow: transparent;
+  --skin-glow-soft: transparent;
+  --skin-grid: transparent;
+  --skin-grid-size: 0;
+  --skin-scanline: transparent;
+  --skin-surface-tint: var(--card);
+  --skin-label-color: initial;
+  --skin-sweep: transparent;
+  --skin-active-fg: initial;
+  --skin-active-text-glow: transparent;
+}
+
+/* --- Cards: no frame, glow, blur, corner brackets or frame-in animation -- */
+
+:root[data-skin] [data-skin="brand"] [data-slot="card"],
+:root[data-skin] [data-skin="brand"] [data-slot="card"]:hover {
+  background-color: revert-layer;
+  backdrop-filter: revert-layer;
+  border: revert-layer;
+  box-shadow: revert-layer;
+  position: revert-layer;
+  transition: revert-layer;
+  animation: revert-layer;
+}
+
+:root[data-skin] [data-skin="brand"] [data-slot="card"]::before {
+  content: revert-layer;
+  position: revert-layer;
+  inset: revert-layer;
+  background: revert-layer;
+  opacity: revert-layer;
+}
+
+/* --- Titles: no monospaced uppercase labels ------------------------------ */
+
+:root[data-skin] [data-skin="brand"] [data-slot="card-title"],
+:root[data-skin] [data-skin="brand"] [data-slot="alert-title"] {
+  font-family: revert-layer;
+  text-transform: revert-layer;
+  letter-spacing: revert-layer;
+  font-weight: revert-layer;
+  font-size: revert-layer;
+  color: revert-layer;
+}
+
+/* --- Buttons: stock type, no hover glow ---------------------------------- */
+
+:root[data-skin] [data-skin="brand"] [data-ui="button"],
+:root[data-skin] [data-skin="brand"] [data-ui="button"]:not(:disabled):hover {
+  font-family: revert-layer;
+  letter-spacing: revert-layer;
+  text-transform: revert-layer;
+  font-size: revert-layer;
+  box-shadow: revert-layer;
+}
+
+/* --- Inputs: the stock focus ring (`focus-visible:ring-*`), not the skin's
+ *     `--skin-line` one, which the Tier C reset above would make invisible. */
+
+:root[data-skin] [data-skin="brand"] [data-slot="input"],
+:root[data-skin] [data-skin="brand"] [data-slot="textarea"],
+:root[data-skin] [data-skin="brand"] [data-slot="select-trigger"],
+:root[data-skin] [data-skin="brand"] [data-slot="input"]:focus-visible,
+:root[data-skin] [data-skin="brand"] [data-slot="textarea"]:focus-visible,
+:root[data-skin]
+  [data-skin="brand"]
+  [data-slot="select-trigger"]:focus-visible {
+  background-color: revert-layer;
+  border-color: revert-layer;
+  box-shadow: revert-layer;
+  transition: revert-layer;
+}
+
+/* --- Scrollbars ---------------------------------------------------------- */
+
+:root[data-skin] [data-skin="brand"],
+:root[data-skin] [data-skin="brand"] * {
+  scrollbar-color: revert-layer;
+  scrollbar-width: revert-layer;
+}
