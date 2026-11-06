@@ -213,6 +213,7 @@ dependencies = [
 dev = [
     { name = "coverage" },
     { name = "mypy" },
+    { name = "numpy" },
     { name = "pre-commit" },
     { name = "pytest" },
     { name = "pytest-xdist" },
@@ -265,6 +266,7 @@ requires-dist = [
 dev = [
     { name = "coverage", specifier = ">=7.4.3,<8.0.0" },
     { name = "mypy", specifier = ">=1.8.0,<2.0.0" },
+    { name = "numpy", specifier = ">=2.0" },
     { name = "pre-commit", specifier = ">=3.6.2,<4.0.0" },
     { name = "pytest", specifier = ">=7.4.3,<8.0.0" },
     { name = "pytest-xdist", specifier = ">=3.8.0,<4.0.0" },

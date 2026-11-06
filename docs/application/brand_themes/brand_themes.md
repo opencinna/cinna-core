@@ -45,6 +45,16 @@ The exact rules, thresholds and error codes are in [Brand Themes - Technical Det
 3. If it is valid, a draft is created. The draft carries the exact document desktops would receive, so it can be previewed.
 4. The superuser publishes the draft. Core re-validates it, assigns it a new revision, demotes the previous theme to draft, and broadcasts a `brand_theme.updated` event.
 
+### An agent turns a brandbook into a package (`brand-theme` skill)
+Core ships a catalog skill, `brand-theme`, that an agent uses with a company brandbook. A superuser publishes it to the server's skills catalog once (see the technical details); after that any agent it is installed on can produce a package.
+1. The agent copies the skill's template (stock Cinna colors that already pass every rule, plus the two stock backgrounds) and reads the role list, one sentence per role.
+2. It picks a color for every role in both modes from the brandbook, and exports the logo if there is one.
+3. It takes the backgrounds from the brandbook, or generates soft gradient meshes from the theme's own colors. The generator makes the blobs as strong as readability allows and says so; if even a faint mesh is unreadable, it says the text colors, not the image, must change. The same seed always gives the same image, so an admin can ask for "candidate 3 again, a bit softer".
+4. It runs the skill's validator, which is the server's own validator copied verbatim, fixes what it names and repeats until the package is valid. A package that passes there passes on upload.
+5. It writes a preview page (a mock of the desktop's main screen and the sign-in card in both modes, one row per background candidate, each marked accepted or refused) and a zip holding only what the theme uses, and hands both to the admin, who uploads the zip.
+
+A soft, low-contrast image (a mesh, a blur, a subtle texture) passes the readability rule; a photo or a busy pattern usually does not.
+
 ### Admin unpublishes
 The superuser unpublishes; the server returns to stock Cinna and a `brand_theme.updated` event (published false) is broadcast. Repeating it is harmless.
 
@@ -70,10 +80,10 @@ Discovery shows a `brand_theme` entry, the desktop fetches the theme endpoint, r
 
 - Applying the theme inside the rest of core's web app (only the sign-in and consent pages are branded).
 - An admin page for uploading, previewing and publishing (until then, the admin API).
-- An authoring skill that turns a company brandbook into a package.
 - Fonts, radius or density, and app icons are outside the scheme.
 
 ## Changelog
 
 - Backend (first phase): schema and validator, storage, admin API, public endpoint, discovery field, shared fixtures.
 - Web sign-in pages adopt the published theme.
+- The `brand-theme` authoring skill: template, validator copy, mesh background generator, preview and packager, publishable to the skills catalog.

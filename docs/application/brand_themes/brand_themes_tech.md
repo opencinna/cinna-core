@@ -18,6 +18,9 @@ Business rules: [Brand Themes](brand_themes.md).
 | Routes | `backend/app/api/routes/brand_theme.py` |
 | Shared fixtures | `backend/app/services/brand_theme/fixtures/` |
 | Fixture test | `backend/tests/unit/test_brand_theme_fixtures.py` |
+| Authoring skill source (`brand-theme`) | `backend/app/services/brand_theme/skill/brand-theme/` |
+| Skill archive builder | `backend/app/scripts/build_brand_theme_skill.py` (`make brand-theme-skill`) |
+| Skill test (copy sync, scripts, publish gate) | `backend/tests/unit/test_brand_theme_skill.py` |
 | Web: parser, role → token map, CSS builder | `frontend/src/components/BrandTheme/brandTheme.ts` |
 | Web: scope wrapper, logo | `frontend/src/components/BrandTheme/AuthBrandScope.tsx`, `BrandLogo.tsx` |
 | Web: query hook | `frontend/src/hooks/useBrandTheme.ts` |
@@ -25,7 +28,7 @@ Business rules: [Brand Themes](brand_themes.md).
 | Web: hosts | `frontend/src/components/Common/AuthLayout.tsx`; `frontend/src/components/Auth/ConsentShell.tsx`, used by `NativeAuthConsentPage.tsx` (`branded` prop, set by the desktop and mobile consent routes) and `DeviceLoginConsentPage.tsx` (always branded) |
 | Web tests | `frontend/tests/brandTheme.test.mjs` (`npm run test:brand-theme:ui`) |
 
-`schema.py`, `validator.py`, `colors.py`, `images.py`, `package.py`, `served.py` and `svg_sanitizer.py` have no FastAPI or database imports, so they can be copied verbatim into an offline authoring tool.
+`schema.py`, `validator.py`, `colors.py`, `images.py`, `package.py`, `served.py` and `svg_sanitizer.py` have no FastAPI or database imports, so they can be copied verbatim into an offline authoring tool; the `brand-theme` skill does exactly that (see [Authoring Skill](#authoring-skill-brand-theme)).
 
 ## The Contract: `cinna.brand-theme/1`
 
@@ -151,6 +154,37 @@ Role → token map (`BRAND_TOKEN_ROLES`, the only map on the web): `--background
 Placement: in `AuthLayout` the decorative panel (≥ 1024 px only) shows the background as an `<img>` with `object-cover` over `surface.base`, or a flat `surface.raised`, and the logo in a 240×62 `object-contain` box; the form column only changes color. `ConsentShell` (the consent pages: `NativeAuthConsentPage` with `branded`, and `DeviceLoginConsentPage`) puts the background behind the whole page and the logo above the card, and holds its spinner until the theme query settles. A logo or background that fails to load falls back to the stock mark or the flat fill.
 
 Skins: under a skin set on `<html>` (hacker-1980), the brand wins inside the scope. Tier A tokens come from the map; `brand-scope.css` resets `--radius` and the skin's decorative tokens and hands the skin's card, title, button, input and scrollbar rules back to the stock styles with `revert-layer`, keeping the stock focus ring. Portalled menus, toasts and tooltips render outside the scope and keep the stock or skin look.
+
+## Authoring Skill (`brand-theme`)
+
+A catalog skill an agent uses to turn a brandbook into a package. Business flow: [Brand Themes](brand_themes.md#an-agent-turns-a-brandbook-into-a-package-brand-theme-skill).
+
+**Layout** (`backend/app/services/brand_theme/skill/brand-theme/`; kept under `backend/app/` so the container's test run sees it):
+
+```
+SKILL.md                     the workflow: template → colors → logo → backgrounds → validate → preview + package
+template/theme.json          stock Cinna colors adjusted to pass every rule (the valid/minimal fixture palette)
+template/assets/             the stock meshes, upscaled to 1652×1000 (the valid/full fixture images)
+template/README.md           one sentence per role, from schema.ROLE_MEANINGS
+scripts/validate|mesh|preview|package
+scripts/_lib/skill_lib       shared helpers; loads the copy below as package cinna_brand_theme
+scripts/_lib/brand_theme/    schema, colors, images, svg_sanitizer, validator, package: verbatim copies, no extension
+```
+
+**No `.py` files anywhere in the skill.** A core whose reload watch covers published skills restarts when one holds a `.py` file, so the scripts and the copied modules are extensionless and loaded with `SourceFileLoader` (a meta-path finder maps `cinna_brand_theme.<name>` to `scripts/_lib/brand_theme/<name>`, so the copies' relative imports work unchanged). Scripts set `sys.dont_write_bytecode`. Each script is a PEP 723 script with its dependencies inline (Pillow, resvg-py; `mesh` adds numpy) and runs as `uv run --script scripts/<name> …`. Any file under `scripts/` makes the prompt generator's `## Skill Scripts` block name the skill.
+
+**Scripts.**
+- `validate PACKAGE [--json]`: a folder, its `theme.json` or a zip (read with `read_folder` / `read_zip`), then `check_package`. One line per issue, `ERROR <path> [<code>]: <message>` / `WARN …`, then `VALID|INVALID: n errors, m warnings.` Exit 0 valid, 1 invalid, 2 unreadable (code `invalid_package` / `missing_theme` from the package reader, else `unreadable`).
+- `mesh theme.json --mode dark|light|both [--colors …] [--seed N] [--candidates N] [--softness 0–1] [--strength auto|0–1] [--format webp|svg] [--out DIR]`: 3–6 gaussian blobs from a seeded `random.Random` layout (edges and corners, calm center; one layout for both modes), colors from roles or literals (default `accent,chart.2,chart.3`), averaged in OKLab and mixed toward `surface.base` by coverage × strength. WebP is 2560×1600 with seeded triangular dither (the field is computed at a quarter size and upscaled); SVG is `radialGradient` fills on `rect`s written in the sanitiser's canonical form, so sanitising it changes no byte. `auto` bisects the strength against the **validator itself** (`skill_lib.background_errors` runs `check_package` with only that background; rasters are probed at 1600×1000), keeps 85 % of the strongest readable strength, re-checks the final file, and reports "the text roles, not the image, need changing" when even strength 0.06 is refused as `background_unreadable` (any other refusal, such as a rendering failure, is printed as the validator gives it). Files are `bg-<mode>-s<seed>.<ext>`; with both modes the pair is checked for swapped modes. Exit 0 all readable, 1 a mode failed, 2 bad input.
+- `preview PACKAGE [--candidates DIR] [--out FILE]`: self-contained `preview.html` (images inlined): desktop main screen (sidebar, new-chat logo and heading, user and agent bubbles, status chips, chart strip, composer) and the sign-in card, dark and light, one `section.row` per background: the one `theme.json` names, then every `bg-<mode>-s<seed>` group in `assets/`, each with the validator's verdict (a background file `theme.json` names but the package lacks is refused, and rows read "not measured" while `surface.base` or the text roles do not parse).
+- `package PACKAGE [--out FILE]`: validates, then zips `theme.json` and only the referenced assets at the zip root with fixed timestamps, reads the zip back through `read_zip` + `check_package`, and writes nothing when invalid.
+
+**Sync check.** `test_brand_theme_skill.py` fails when any file in `scripts/_lib/brand_theme/` differs byte for byte from its core module, or the folder holds anything else. After changing a pure module, copy it again (`cp backend/app/services/brand_theme/<m>.py backend/app/services/brand_theme/skill/brand-theme/scripts/_lib/brand_theme/<m>`) and republish the skill. The same test runs every `invalid/` fixture through the skill's `validate` and expects exactly core's errors, checks mesh determinism, stock roles passing with `auto` in both modes, the weak-`text.secondary` report, the SVG sanitiser round trip, the CLI exit codes, the zip, the preview rows, and that the built archive passes the catalog publish gate (`safe_extract`, `parse_skill_dir`, `SkillCatalogService.validate_entry`).
+
+**Publishing.** The skill is published like any catalog skill, by a superuser (or anyone they choose), as a new package or a new version:
+1. `make brand-theme-skill` (or `python3 backend/app/scripts/build_brand_theme_skill.py OUT.tgz`) writes `drafts/brand-theme.tgz`: a deterministic `brand-theme/…` tar.gz without caches or OS junk, the format the desktop publish path takes.
+2. Upload it: `POST /api/v1/skills/packages/publish` (multipart `archive`, `meta` JSON such as `{"visibility": "users", "version": "1"}`; a later version adds `package_uuid` and `base_revision_number`), see [Agent Skills](../../agents/agent_skills/agent_skills.md#5c-publishing-a-skill-from-a-desktop). Alternatively copy the folder into a cloud agent's `workspace/skills/brand-theme/` and publish from the agent's Addons tab or `cinna skills publish <agent> brand-theme`.
+3. Install it on the agent that will do the authoring; its environment needs `uv` and network access for the scripts' first run.
 
 ## Configuration
 

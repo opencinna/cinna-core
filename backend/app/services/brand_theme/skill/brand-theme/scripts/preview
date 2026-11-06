@@ -1,0 +1,314 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["pillow>=10", "resvg-py>=0.5,<0.6"]
+# ///
+"""Write preview.html: a static mock of Cinna Desktop's main screen and core's
+sign-in card in both modes, with the theme's colors, logo and backgrounds.
+
+    uv run --script scripts/preview PACKAGE_DIR [--candidates DIR] [--out preview.html]
+
+One row per background: the one theme.json names, then every mesh candidate
+(bg-<mode>-s<seed>.<ext>) found in --candidates (default: the package's
+assets/). Each row says whether the validator accepts that background with
+these colors, so the admin can pick. The file is self-contained (images are
+embedded) and can be sent as is.
+
+Exit codes: 0 written, 2 the package could not be read.
+"""
+from __future__ import annotations
+
+import argparse
+import base64
+import html
+import importlib.machinery
+import importlib.util
+import re
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+from types import ModuleType
+from typing import Any
+
+sys.dont_write_bytecode = True
+
+
+def _skill_lib() -> ModuleType:
+    name = "brand_theme_skill_lib"
+    if name not in sys.modules:
+        path = Path(__file__).resolve().parent / "_lib" / "skill_lib"
+        loader = importlib.machinery.SourceFileLoader(name, str(path))
+        module = importlib.util.module_from_spec(importlib.util.spec_from_loader(name, loader))
+        sys.modules[name] = module
+        loader.exec_module(module)
+    return sys.modules[name]
+
+
+lib = _skill_lib()
+
+CANDIDATE_RE = re.compile(r"^bg-(dark|light)-s(\d+)\.(webp|svg|png|jpe?g)$", re.IGNORECASE)
+DEFAULT_HEADING = "What can I help you with?"
+# Shown when a role is missing or not a color, so the gap is impossible to miss.
+MISSING_COLOR = "#ff00ff"
+
+
+@dataclass
+class Row:
+    label: str
+    # mode → (file name, bytes) or None for flat surface.base
+    backgrounds: dict[str, tuple[str, bytes] | None]
+    errors: list[str] = field(default_factory=list)
+
+
+def _data_uri(bt, data: bytes) -> str:
+    mime = bt.images.sniff_mime(data) or "application/octet-stream"
+    return f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"
+
+
+def _css_name(role: str) -> str:
+    return "--" + role.replace(".", "-")
+
+
+def _mode_vars(bt, theme: dict[str, Any], mode: str) -> str:
+    values = (theme.get("modes") or {}).get(mode) or {}
+    decls = []
+    for role in bt.schema.ROLES:
+        try:
+            color = bt.colors.normalise(values.get(role))
+        except bt.colors.ColorError:
+            color = MISSING_COLOR
+        decls.append(f"{_css_name(role)}:{color}")
+    return ";".join(decls)
+
+
+def collect_rows(bt, theme: dict[str, Any], assets: dict[str, bytes], candidates_dir: Path | None) -> list[Row]:
+    rows: list[Row] = []
+    block = theme.get("background")
+    if isinstance(block, dict):
+        current = {}
+        missing = []
+        for mode in bt.schema.MODES:
+            path = block.get(mode)
+            if isinstance(path, str) and path in assets:
+                current[mode] = (Path(path).name, assets[path])
+            else:
+                current[mode] = None
+                if path is not None:
+                    missing.append(f"background.{mode} names {path!r}, which is not in the package.")
+        rows.append(Row("theme.json background", current, missing))
+    elif block is None:
+        rows.append(Row("theme.json: no background (flat surface.base)", {m: None for m in bt.schema.MODES}))
+    groups: dict[tuple[int, str], dict[str, tuple[str, bytes]]] = {}
+    if candidates_dir is not None and candidates_dir.is_dir():
+        for file in sorted(candidates_dir.iterdir()):
+            match = CANDIDATE_RE.match(file.name)
+            if match and file.is_file():
+                mode, seed, ext = match.group(1).lower(), int(match.group(2)), match.group(3).lower()
+                groups.setdefault((seed, ext), {})[mode] = (file.name, file.read_bytes())
+    for (seed, ext), found in sorted(groups.items()):
+        rows.append(Row(f"mesh seed {seed} ({ext})", {m: found.get(m) for m in bt.schema.MODES}))
+    # The validator skips readability when a mode's colors do not parse, so
+    # say "not measured" instead of letting the row read as accepted.
+    unmeasurable = []
+    for mode in bt.schema.MODES:
+        for role in ("surface.base", *bt.schema.READABILITY_ROLES):
+            try:
+                lib.mode_color(bt, theme, mode, role)
+            except lib.UsageError:
+                unmeasurable.append(f"modes.{mode}.{role}")
+    for row in rows:
+        if unmeasurable:
+            row.errors.append("Not measured: fix " + ", ".join(unmeasurable) + " first (run validate).")
+            continue
+        row.errors.extend(e.message for e in lib.background_errors(bt, theme, row.backgrounds))
+    return rows
+
+
+def _logo(bt, theme: dict[str, Any], assets: dict[str, bytes], stored: dict[str, Any], mode: str) -> str:
+    block = theme.get("logo")
+    path = block.get(mode) if isinstance(block, dict) else None
+    if isinstance(path, str) and path in assets:
+        # The sanitised SVG when the package validates: that is what core serves.
+        data = stored[path].data if path in stored else assets[path]
+        alt = html.escape(str(theme.get("name", "")))
+        return f'<img class="logo-img" alt="{alt}" src="{_data_uri(bt, data)}">'
+    return '<span class="wordmark">cinna</span>'
+
+
+def _desktop(logo: str, heading: str) -> str:
+    bars = "".join(
+        f'<span style="height:{h}%;background:var(--chart-{i})"></span>'
+        for i, h in zip(range(1, 9), (62, 80, 45, 70, 38, 55, 90, 48))
+    )
+    chips = "".join(
+        f'<span class="chip"><i style="background:var(--status-{k})"></i>'
+        f'<b style="color:var(--status-{k}-text)">{k}</b></span>'
+        for k in ("danger", "warning", "success", "info")
+    )
+    return f"""
+<div class="desktop">
+  <aside class="sidebar">
+    <div class="newchat-btn">+ New chat</div>
+    <div class="item active">Quarterly report</div>
+    <div class="item">Onboarding checklist</div>
+    <div class="item">Release notes draft</div>
+    <div class="ts">Yesterday</div>
+  </aside>
+  <main class="chat">
+    <div class="hero">{logo}<h1>{html.escape(heading)}</h1></div>
+    <div class="msg user">Summarise last week's sales by region.</div>
+    <div class="msg agent"><p>Sales rose 12 % week over week, led by the <span class="hl">north</span> region.</p>
+      <p class="meta">Agent · 2 sources</p>
+      <div class="chips">{chips}</div>
+      <div class="chart"><div class="grid"></div>{bars}
+        <span class="pn" style="background:var(--chart-pos)"></span><span class="pn" style="background:var(--chart-neg)"></span>
+      </div>
+    </div>
+    <div class="composer"><span class="placeholder">Message the agent…</span><span class="send">Send</span></div>
+  </main>
+</div>"""
+
+
+def _login(logo: str) -> str:
+    return f"""
+<div class="login">
+  <div class="card">
+    <div class="card-logo">{logo}</div>
+    <h2>Sign in</h2>
+    <p class="sub">Use your work account.</p>
+    <div class="input">name@company.com</div>
+    <div class="input muted">Password</div>
+    <div class="btn">Continue</div>
+    <p class="err">Wrong email or password.</p>
+  </div>
+</div>"""
+
+
+STYLE = """
+*{box-sizing:border-box}body{margin:0;font:14px/1.4 system-ui,-apple-system,Segoe UI,sans-serif;background:#888;color:#111}
+header.top{padding:16px 24px;background:#fff}header.top h1{margin:0 0 4px;font-size:18px}
+.issues{color:#b91c1c;margin:4px 0 0;padding-left:18px}.okline{color:#15803d;margin:4px 0 0}
+section.row{padding:16px 24px;border-top:4px solid #555}section.row>h2{margin:0 0 4px;color:#fff;font-size:16px}
+.verdict{margin:0 0 10px;color:#fff}.verdict.fail{color:#ffd1d1}
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.mode{display:grid;gap:8px;color:var(--text-primary)}
+.mode>.label{color:#fff;font-weight:600}
+.stage{background-color:var(--surface-base);background-size:cover;background-position:center;border-radius:8px;overflow:hidden}
+.desktop{display:grid;grid-template-columns:150px 1fr;height:420px}
+.sidebar{background:var(--surface-raised);border-right:1px solid var(--border);padding:10px;display:flex;flex-direction:column;gap:4px;opacity:.96}
+.newchat-btn{background:var(--accent);color:var(--accent-on);border-radius:6px;padding:6px 8px;font-weight:600;margin-bottom:6px}
+.item{padding:5px 8px;border-radius:6px;color:var(--text-secondary);font-size:12px}.item.active{background:var(--surface-hover);color:var(--text-primary)}
+.ts{color:var(--text-muted);font-size:11px;margin-top:auto}
+.chat{padding:14px 18px;display:flex;flex-direction:column;gap:8px;overflow:hidden}
+.hero{display:flex;flex-direction:column;align-items:center;gap:4px}.hero h1{font-size:15px;margin:0;color:var(--text-primary)}
+.logo-img{max-width:240px;max-height:62px;object-fit:contain}
+.wordmark{font:700 30px/1 Georgia,serif;background:linear-gradient(90deg,var(--logo-from),var(--logo-to));-webkit-background-clip:text;background-clip:text;color:transparent}
+.msg{border-radius:10px;padding:7px 10px;max-width:80%;font-size:12px}.msg p{margin:0 0 4px}
+.msg.user{align-self:flex-end;background:var(--bubble-user);color:var(--text-primary)}
+.msg.agent{align-self:flex-start;color:var(--text-primary)}.meta{color:var(--text-secondary);font-size:11px}
+.hl{color:var(--highlight);font-weight:600}
+.chips{display:flex;gap:6px;flex-wrap:wrap}.chip{display:inline-flex;align-items:center;gap:4px;font-size:11px}
+.chip i{width:8px;height:8px;border-radius:50%;display:inline-block}
+.chart{position:relative;display:flex;align-items:flex-end;gap:4px;height:56px;margin-top:6px}
+.chart .grid{position:absolute;inset:0;border-top:1px solid var(--chart-grid);border-bottom:1px solid var(--chart-grid)}
+.chart span{width:12px;border-radius:2px 2px 0 0;position:relative}.chart .pn{height:30%;margin-left:6px}
+.composer{margin-top:auto;background:var(--surface-input);border:1px solid var(--border);border-radius:10px;padding:8px 10px;display:flex;justify-content:space-between;align-items:center}
+.placeholder{color:var(--text-muted);font-size:12px}.send{background:var(--accent);color:var(--accent-on);border-radius:6px;padding:3px 10px;font-size:12px}
+.send:hover{background:var(--accent-hover)}
+.login{height:300px;display:flex;align-items:center;justify-content:center}
+.card{width:260px;background:var(--surface-raised);border:1px solid var(--border);border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:6px}
+.card h2{margin:0;font-size:16px;color:var(--text-primary)}.sub{margin:0;color:var(--text-secondary);font-size:12px}
+.card-logo{display:flex;justify-content:center}
+.input{background:var(--surface-input);border:1px solid var(--border);border-radius:6px;padding:5px 8px;font-size:12px;color:var(--text-primary)}
+.input.muted{color:var(--text-muted)}.btn{background:var(--accent);color:var(--accent-on);border-radius:6px;padding:6px;text-align:center;font-weight:600}
+.err{margin:0;color:var(--status-danger-text);font-size:12px}
+.stages{display:grid;grid-template-rows:420px 300px;gap:8px}
+"""
+
+
+def build_html(bt, theme: dict[str, Any], assets: dict[str, bytes], rows: list[Row], package_errors: list[Any]) -> str:
+    result = bt.validator.check_package(theme, assets)
+    stored = result.assets
+    copy_block = theme.get("copy")
+    heading = copy_block.get("newChatHeading") if isinstance(copy_block, dict) else None
+    heading = heading if isinstance(heading, str) and heading.strip() else DEFAULT_HEADING
+
+    # Keyed by name and bytes: a candidate may share a name with the theme's own file.
+    image_classes: dict[tuple[str, bytes], str] = {}
+    image_css: list[str] = []
+    for row in rows:
+        for item in row.backgrounds.values():
+            if item is not None and item not in image_classes:
+                cls = f"img{len(image_classes)}"
+                image_classes[item] = cls
+                image_css.append(f".{cls}{{background-image:url({_data_uri(bt, item[1])})}}")
+
+    if package_errors:
+        items = "".join(f"<li>{html.escape(f'{e.path}: {e.message}')}</li>" for e in package_errors)
+        status = f'<ul class="issues">{items}</ul>'
+    else:
+        status = '<p class="okline">theme.json passes the validator.</p>'
+
+    sections = []
+    for row in rows:
+        if row.errors:
+            verdict = '<p class="verdict fail">Refused: ' + " ".join(html.escape(m) for m in row.errors) + "</p>"
+        else:
+            verdict = '<p class="verdict ok">This background passes the validator with these colors.</p>'
+        modes = []
+        for mode in bt.schema.MODES:
+            item = row.backgrounds.get(mode)
+            cls = f" {image_classes[item]}" if item else ""
+            name = html.escape(item[0]) if item else "flat surface.base"
+            logo = _logo(bt, theme, assets, stored, mode)
+            modes.append(
+                f'<div class="mode" data-mode="{mode}" style="{_mode_vars(bt, theme, mode)}">'
+                f'<div class="label">{mode} · {name}</div><div class="stages">'
+                f'<div class="stage{cls}">{_desktop(logo, heading)}</div>'
+                f'<div class="stage{cls}">{_login(logo)}</div></div></div>'
+            )
+        sections.append(
+            f'<section class="row" data-candidate="{html.escape(row.label)}"><h2>{html.escape(row.label)}</h2>'
+            f'{verdict}<div class="pair">{"".join(modes)}</div></section>'
+        )
+    title = html.escape(f"Brand theme preview: {theme.get('name', '')}")
+    return (
+        f"<!doctype html><html><head><meta charset=\"utf-8\"><title>{title}</title>"
+        f"<style>{STYLE}{''.join(image_css)}</style></head><body>"
+        f'<header class="top"><h1>{title}</h1>{status}</header>{"".join(sections)}</body></html>'
+    )
+
+
+def run(package_dir: str, candidates: str | None = None, out_path: str | None = None, out=None) -> int:
+    out = out or sys.stdout
+    bt = lib.load()
+    try:
+        root, theme = lib.load_theme_dict(package_dir)
+        theme_bytes, assets = lib.read_package(bt, str(root))
+    except lib.UsageError as exc:
+        print(f"ERROR: {exc}", file=out)
+        return 2
+    package_errors = bt.validator.check_package(theme_bytes, assets).errors
+    candidates_dir = Path(candidates) if candidates else root / "assets"
+    rows = collect_rows(bt, theme, assets, candidates_dir)
+    target = Path(out_path) if out_path else root / "preview.html"
+    target.write_text(build_html(bt, theme, assets, rows, package_errors), encoding="utf-8")
+    print(f"Wrote {target}: {len(rows)} background row(s), dark and light.", file=out)
+    for row in rows:
+        print(f"  {row.label}: {'refused' if row.errors else 'passes'}", file=out)
+    if package_errors:
+        print(f"theme.json has {len(package_errors)} error(s); run validate.", file=out)
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="preview", description=__doc__.split("\n\n")[0])
+    parser.add_argument("package", help="package folder (theme.json + assets/)")
+    parser.add_argument("--candidates", help="folder with bg-<mode>-s<seed>.<ext> files (default: assets/)")
+    parser.add_argument("--out", help="HTML file to write (default: <PACKAGE_DIR>/preview.html)")
+    args = parser.parse_args(argv)
+    return run(args.package, args.candidates, args.out)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

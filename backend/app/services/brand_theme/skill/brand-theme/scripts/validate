@@ -1,0 +1,87 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["pillow>=10", "resvg-py>=0.5,<0.6"]
+# ///
+"""Check a brand theme package with the same validator Cinna core runs on upload.
+
+    uv run --script scripts/validate PACKAGE [--json]
+
+PACKAGE is a package folder (theme.json + assets/), its theme.json, or a .zip.
+Prints one line per error and warning: dotted path, stable code, what to change.
+
+Exit codes: 0 valid (warnings never block), 1 invalid, 2 the package could not
+be read at all.
+"""
+from __future__ import annotations
+
+import argparse
+import importlib.machinery
+import importlib.util
+import json
+import sys
+from pathlib import Path
+from types import ModuleType
+
+sys.dont_write_bytecode = True
+
+
+def _skill_lib() -> ModuleType:
+    name = "brand_theme_skill_lib"
+    if name not in sys.modules:
+        path = Path(__file__).resolve().parent / "_lib" / "skill_lib"
+        loader = importlib.machinery.SourceFileLoader(name, str(path))
+        module = importlib.util.module_from_spec(importlib.util.spec_from_loader(name, loader))
+        sys.modules[name] = module
+        loader.exec_module(module)
+    return sys.modules[name]
+
+
+lib = _skill_lib()
+
+EXIT_VALID = 0
+EXIT_INVALID = 1
+EXIT_UNREADABLE = 2
+
+
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}{'' if n == 1 else 's'}"
+
+
+def run(path: str, as_json: bool = False, out=None) -> int:
+    out = out or sys.stdout
+    bt = lib.load()
+    try:
+        theme, assets = lib.read_package(bt, path)
+    except lib.UsageError as exc:
+        if as_json:
+            print(json.dumps({"ok": False, "errors": [{"path": "package", "code": exc.code, "message": str(exc)}],
+                              "warnings": []}, indent=2), file=out)
+        else:
+            print(f"ERROR package [{exc.code}]: {exc}", file=out)
+        return EXIT_UNREADABLE
+    result = bt.validator.check_package(theme, assets)
+    if as_json:
+        print(json.dumps({"ok": result.ok, "errors": [e.to_dict() for e in result.errors],
+                          "warnings": [w.to_dict() for w in result.warnings]}, indent=2), file=out)
+    else:
+        for e in result.errors:
+            print(f"ERROR {e.path} [{e.code}]: {e.message}", file=out)
+        for w in result.warnings:
+            print(f"WARN  {w.path} [{w.code}]: {w.message}", file=out)
+        verdict = "VALID" if result.ok else "INVALID"
+        print(f"{verdict}: {_plural(len(result.errors), 'error')}, {_plural(len(result.warnings), 'warning')}.",
+              file=out)
+    return EXIT_VALID if result.ok else EXIT_INVALID
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="validate", description=__doc__.split("\n\n")[0])
+    parser.add_argument("package", help="package folder, its theme.json, or a .zip")
+    parser.add_argument("--json", action="store_true", help="print {ok, errors, warnings} as JSON")
+    args = parser.parse_args(argv)
+    return run(args.package, as_json=args.json)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

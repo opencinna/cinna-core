@@ -1,0 +1,196 @@
+"""Shared helpers for the brand-theme skill scripts.
+
+The skill ships no ``.py`` files: a Cinna core that holds a published skill
+restarts when one of its files ends in ``.py``. Every module here, and the
+validator copy in ``brand_theme/``, is therefore extensionless and loaded with
+``SourceFileLoader``.
+
+``brand_theme/`` is a verbatim copy of core's
+``backend/app/services/brand_theme/`` pure modules (schema, colors, images,
+svg_sanitizer, validator, package). A core test fails when the two differ, so
+``validate`` here and the server's upload check are the same code. They load
+as the package ``cinna_brand_theme``; their relative imports resolve through
+the finder below.
+"""
+from __future__ import annotations
+
+import importlib
+import importlib.abc
+import importlib.machinery
+import importlib.util
+import json
+import os
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from types import ModuleType
+from typing import Any
+
+sys.dont_write_bytecode = True
+
+VENDORED_PACKAGE = "cinna_brand_theme"
+VENDORED_DIR = Path(__file__).resolve().parent / "brand_theme"
+VENDORED_MODULES: tuple[str, ...] = ("schema", "colors", "images", "svg_sanitizer", "validator", "package")
+THEME_FILE = "theme.json"
+
+
+class _VendoredFinder(importlib.abc.MetaPathFinder):
+    """Finds ``cinna_brand_theme.<name>`` as the extensionless file ``brand_theme/<name>``."""
+
+    def find_spec(self, fullname: str, path: Any = None, target: Any = None) -> importlib.machinery.ModuleSpec | None:
+        prefix = VENDORED_PACKAGE + "."
+        if not fullname.startswith(prefix):
+            return None
+        leaf = fullname[len(prefix):]
+        source = VENDORED_DIR / leaf
+        if "." in leaf or not source.is_file():
+            return None
+        loader = importlib.machinery.SourceFileLoader(fullname, str(source))
+        return importlib.util.spec_from_loader(fullname, loader)
+
+
+def _install_package() -> None:
+    if VENDORED_PACKAGE in sys.modules:
+        return
+    if not any(isinstance(f, _VendoredFinder) for f in sys.meta_path):
+        sys.meta_path.insert(0, _VendoredFinder())
+    spec = importlib.machinery.ModuleSpec(VENDORED_PACKAGE, None, is_package=True)
+    spec.submodule_search_locations = [str(VENDORED_DIR)]
+    package = importlib.util.module_from_spec(spec)
+    sys.modules[VENDORED_PACKAGE] = package
+
+
+@dataclass(frozen=True)
+class BrandTheme:
+    """The vendored validator modules."""
+
+    schema: ModuleType
+    colors: ModuleType
+    images: ModuleType
+    svg_sanitizer: ModuleType
+    validator: ModuleType
+    package: ModuleType
+
+
+def load() -> BrandTheme:
+    _install_package()
+    modules = {name: importlib.import_module(f"{VENDORED_PACKAGE}.{name}") for name in VENDORED_MODULES}
+    return BrandTheme(**modules)
+
+
+class UsageError(Exception):
+    """A problem with the command line or the files it names (exit code 2).
+
+    ``code`` is core's own code (``invalid_package``, ``missing_theme``) when
+    the package reader refused it, else ``unreadable``."""
+
+    def __init__(self, message: str, code: str = "unreadable") -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def package_root(path: str) -> Path:
+    """The package folder for a folder or a ``theme.json`` path."""
+    p = Path(path)
+    if p.is_file() and p.name == THEME_FILE:
+        return p.parent
+    if p.is_dir():
+        if not (p / THEME_FILE).is_file():
+            raise UsageError(f"{p} has no {THEME_FILE}.")
+        return p
+    raise UsageError(f"{p} is not a package folder or a {THEME_FILE} file.")
+
+
+def read_package(bt: BrandTheme, path: str) -> tuple[bytes, dict[str, bytes]]:
+    """``(theme.json bytes, {"assets/<name>": bytes})`` from a folder, a
+    ``theme.json`` path or a ``.zip``, read the way core reads an upload."""
+    p = Path(path)
+    try:
+        if p.is_file() and p.suffix.lower() == ".zip":
+            return bt.package.read_zip(p.read_bytes())
+        return bt.package.read_folder(str(package_root(path)))
+    except bt.package.PackageError as exc:
+        raise UsageError(f"{p}: {exc.message}", exc.code) from None
+    except OSError as exc:
+        raise UsageError(f"{p}: {exc}") from None
+
+
+def load_theme_dict(path: str) -> tuple[Path, dict[str, Any]]:
+    """The package folder and its parsed ``theme.json``."""
+    root = package_root(path)
+    try:
+        doc = json.loads((root / THEME_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise UsageError(f"{root / THEME_FILE} could not be read as JSON ({exc}); run validate.") from None
+    if not isinstance(doc, dict):
+        raise UsageError(f"{root / THEME_FILE} is not a JSON object; run validate.")
+    return root, doc
+
+
+def mode_color(bt: BrandTheme, theme: dict[str, Any], mode: str, role: str) -> str:
+    """A role's color in one mode as ``#rrggbb``, or :class:`UsageError`."""
+    modes = theme.get("modes")
+    values = modes.get(mode) if isinstance(modes, dict) else None
+    if not isinstance(values, dict) or role not in values:
+        raise UsageError(f"theme.json has no modes.{mode}.{role}; run validate and fix it first.")
+    try:
+        return bt.colors.normalise(values[role])
+    except bt.colors.ColorError as exc:
+        raise UsageError(f"modes.{mode}.{role}: {exc.message} Run validate and fix it first.") from None
+
+
+def resolve_color(bt: BrandTheme, theme: dict[str, Any], mode: str, token: str) -> str:
+    """A role name (``chart.2``) or a literal color (``#7a3cff``) as ``#rrggbb``."""
+    token = token.strip()
+    if token in bt.schema.ROLE_MEANINGS:
+        return mode_color(bt, theme, mode, token)
+    try:
+        return bt.colors.normalise(token)
+    except bt.colors.ColorError as exc:
+        raise UsageError(f"{token!r} is neither a role nor a color: {exc.message}") from None
+
+
+def split_color_list(text: str) -> list[str]:
+    """Split ``accent,rgb(1, 2, 3),#7a3cff`` on the commas outside parentheses."""
+    items: list[str] = []
+    depth = 0
+    current = ""
+    for ch in text:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        if ch == "," and depth == 0:
+            items.append(current)
+            current = ""
+        else:
+            current += ch
+    items.append(current)
+    return [item.strip() for item in items if item.strip()]
+
+
+def background_errors(
+    bt: BrandTheme, theme: dict[str, Any], backgrounds: dict[str, tuple[str, bytes] | None]
+) -> list[Any]:
+    """Run the validator's background rules (size, readability, swapped
+    modes) for the given images against ``theme``'s colors.
+
+    ``backgrounds`` maps a mode to ``(file name, bytes)`` or ``None`` (flat).
+    Returns the validator's own errors under ``background``, so ``mesh``,
+    ``preview`` and ``validate`` can never disagree about an image.
+    """
+    probe = {key: value for key, value in theme.items() if key not in ("logo", "background")}
+    block: dict[str, str | None] = {}
+    assets: dict[str, bytes] = {}
+    for mode in bt.schema.MODES:
+        item = backgrounds.get(mode)
+        if item is None:
+            block[mode] = None
+            continue
+        name, data = item
+        path = f"{bt.schema.ASSET_DIR}{mode}-{os.path.basename(name)}"
+        block[mode] = path
+        assets[path] = data
+    probe["background"] = block
+    result = bt.validator.check_package(probe, assets)
+    return [e for e in result.errors if e.path == "background" or e.path.startswith("background.")]

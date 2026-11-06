@@ -255,6 +255,10 @@ check-docs: # check docs: broken file references + index/frontmatter/route/orpha
 docs-registry: # regenerate the Feature Registry block in docs/README.md from doc frontmatter
 	python3 .cinna-core-kit/scripts/docs_index.py registry
 
+.PHONY: brand-theme-skill
+brand-theme-skill: # build the brand-theme catalog skill archive for upload (OUT=drafts/brand-theme.tgz)
+	python3 backend/app/scripts/build_brand_theme_skill.py $(or $(OUT),drafts/brand-theme.tgz)
+
 .PHONY: sync-platform-knowledge
 sync-platform-knowledge: # sync docs + auto-generate API reference into platform-knowledge env template
 	python3 .cinna-core-kit/scripts/sync_platform_knowledge.py

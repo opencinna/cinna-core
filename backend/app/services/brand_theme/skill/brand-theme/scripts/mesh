@@ -1,0 +1,426 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["pillow>=10", "numpy>=1.26", "resvg-py>=0.5,<0.6"]
+# ///
+"""Generate soft gradient-mesh backgrounds from a theme's own colors.
+
+    uv run --script scripts/mesh theme.json --mode dark|light|both
+        [--colors accent,chart.2,#7a3cff] [--seed 7] [--candidates 4]
+        [--softness 0.6] [--strength auto|0.0-1.0] [--format webp|svg] [--out assets/]
+
+The canvas is the mode's surface.base; the blobs default to accent, chart.2
+and chart.3 (roles or literal colors with --colors). Three to six large, soft
+color fields, blended in OKLab, sit toward the edges and corners and leave the
+center calm. The same seed always gives the same image; --mode both draws one
+layout in each mode's palette.
+
+--strength auto (the default) finds how strong the blobs can be while the
+validator's background readability rule still passes, then backs off for a
+margin. If even a very faint mesh fails, the text roles must change, not the
+image. Files are named bg-<mode>-s<seed>.<ext>.
+
+Exit codes: 0 every image written and readable, 1 a mode could not be made
+readable (or a fixed --strength fails), 2 bad arguments or theme.
+"""
+from __future__ import annotations
+
+import argparse
+import importlib.machinery
+import importlib.util
+import io
+import math
+import random
+import sys
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
+from types import ModuleType
+
+import numpy as np
+from PIL import Image
+
+sys.dont_write_bytecode = True
+
+
+def _skill_lib() -> ModuleType:
+    name = "brand_theme_skill_lib"
+    if name not in sys.modules:
+        path = Path(__file__).resolve().parent / "_lib" / "skill_lib"
+        loader = importlib.machinery.SourceFileLoader(name, str(path))
+        module = importlib.util.module_from_spec(importlib.util.spec_from_loader(name, loader))
+        sys.modules[name] = module
+        loader.exec_module(module)
+    return sys.modules[name]
+
+
+lib = _skill_lib()
+
+WIDTH, HEIGHT = 2560, 1600
+# The color field is smooth, so it is computed at a quarter of the size and
+# upscaled before dithering.
+FIELD_DIVISOR = 4
+DEFAULT_COLORS = "accent,chart.2,chart.3"
+SVG_NS = "http://www.w3.org/2000/svg"
+SVG_STOPS = 6
+# Strength search: the faintest mesh worth drawing, the bisection steps, and
+# the share of the strongest readable strength actually used (the margin).
+FAINTEST = 0.06
+SEARCH_STEPS = 7
+MARGIN = 0.85
+FINAL_RETRIES = 4
+
+
+@dataclass(frozen=True)
+class Blob:
+    """One soft color field, in canvas-height units (x runs 0…width/height)."""
+
+    cx: float
+    cy: float
+    radius: float  # gaussian sigma
+    peak: float
+    color_index: int
+
+
+def layout(seed: int, softness: float, n_colors: int, aspect: float = WIDTH / HEIGHT) -> list[Blob]:
+    """A seeded arrangement of 3–6 blobs around the edges, center left calm.
+
+    Uses ``random.Random`` so the layout never changes with a numpy release,
+    and draws the same numbers whatever the colors, so ``--mode both`` gives
+    one layout in two palettes."""
+    rnd = random.Random(seed)
+    count = rnd.randint(3, 6)
+    offset = rnd.uniform(0, 2 * math.pi)
+    rotation = rnd.random()
+    step = 2 * math.pi / count
+    blobs = []
+    for i in range(count):
+        angle = offset + i * step + rnd.uniform(-0.35, 0.35) * step
+        reach = rnd.uniform(0.8, 1.15)
+        radius = (0.12 + 0.22 * softness) * rnd.uniform(0.8, 1.25)
+        peak = rnd.uniform(0.7, 1.0)
+        blobs.append(
+            Blob(
+                cx=0.5 * aspect + 0.5 * aspect * reach * math.cos(angle),
+                cy=0.5 + 0.5 * reach * math.sin(angle),
+                radius=radius,
+                peak=peak,
+                color_index=(i + int(rotation * n_colors)) % n_colors,
+            )
+        )
+    return blobs
+
+
+def _srgb_encode(linear: np.ndarray) -> np.ndarray:
+    linear = np.clip(linear, 0.0, 1.0)
+    return np.where(linear <= 0.0031308, 12.92 * linear, 1.055 * np.power(linear, 1 / 2.4) - 0.055)
+
+
+def render_field(
+    bt, blobs: list[Blob], base_hex: str, blob_hexes: list[str], strength: float, width: int, height: int
+) -> np.ndarray:
+    """The mesh as gamma-encoded sRGB floats (height × width × 3, 0…1).
+
+    Blob colors are averaged in OKLab, weighted by each blob's falloff, and
+    mixed toward ``surface.base`` by coverage × strength, so overlaps stay
+    clean instead of turning grey."""
+    base = np.array(bt.colors.to_oklab(bt.colors.hex_to_rgb(base_hex)), dtype=np.float64)
+    labs = [np.array(bt.colors.to_oklab(bt.colors.hex_to_rgb(h)), dtype=np.float64) for h in blob_hexes]
+    ys = (np.arange(height, dtype=np.float64) + 0.5) / height
+    xs = (np.arange(width, dtype=np.float64) + 0.5) / height
+    gx, gy = np.meshgrid(xs, ys)
+    sum_w = np.zeros((height, width))
+    sum_lab = np.zeros((height, width, 3))
+    uncovered = np.ones((height, width))
+    for blob in blobs:
+        w = blob.peak * np.exp(-((gx - blob.cx) ** 2 + (gy - blob.cy) ** 2) / (2 * blob.radius ** 2))
+        sum_w += w
+        sum_lab += w[..., None] * labs[blob.color_index]
+        uncovered *= 1 - w
+    mix = sum_lab / np.maximum(sum_w, 1e-9)[..., None]
+    amount = (strength * (1 - uncovered))[..., None]
+    lab = base + amount * (mix - base)
+    # The vendored conversion is plain arithmetic, so it runs on arrays as is.
+    r, g, b = bt.colors.oklab_to_linear_srgb(lab[..., 0], lab[..., 1], lab[..., 2])
+    return _srgb_encode(np.stack([r, g, b], axis=-1))
+
+
+def render_raster(
+    bt, blobs, base_hex, blob_hexes, strength, size: tuple[int, int], seed: int, dither: bool = True
+) -> Image.Image:
+    width, height = size
+    field = render_field(
+        bt, blobs, base_hex, blob_hexes, strength,
+        max(2, width // FIELD_DIVISOR), max(2, height // FIELD_DIVISOR),
+    )
+    channels = [
+        np.asarray(Image.fromarray(field[..., c].astype(np.float32), mode="F").resize(size, Image.Resampling.BICUBIC))
+        for c in range(3)
+    ]
+    pixels = np.stack(channels, axis=-1) * 255.0
+    if dither:
+        # Triangular noise of about one level against banding; seeded, so
+        # the output stays deterministic.
+        rng = np.random.default_rng(seed)
+        pixels += rng.random(pixels.shape) - rng.random(pixels.shape)
+    return Image.fromarray(np.clip(np.rint(pixels), 0, 255).astype(np.uint8), mode="RGB")
+
+
+def encode_webp(image: Image.Image) -> bytes:
+    buffer = io.BytesIO()
+    image.save(buffer, "WEBP", quality=90, method=6)
+    return buffer.getvalue()
+
+
+def encode_png(image: Image.Image) -> bytes:
+    buffer = io.BytesIO()
+    image.save(buffer, "PNG", compress_level=1)
+    return buffer.getvalue()
+
+
+def _num(value: float) -> str:
+    text = f"{value:.3f}".rstrip("0").rstrip(".")
+    return text if text not in ("", "-0") else "0"
+
+
+def render_svg(blobs: list[Blob], base_hex: str, blob_hexes: list[str], strength: float,
+               size: tuple[int, int] = (WIDTH, HEIGHT)) -> bytes:
+    """Overlapping radialGradient fills on a rect: only elements and
+    attributes the core sanitiser keeps, in its own canonical form, so the
+    sanitised file is byte-identical."""
+    width, height = size
+    defs, rects = [], []
+    for i, blob in enumerate(blobs):
+        stops = []
+        for k in range(SVG_STOPS):
+            offset = k / (SVG_STOPS - 1)
+            # A gaussian sampled out to three sigmas, then zero at the edge.
+            alpha = 0.0 if k == SVG_STOPS - 1 else strength * blob.peak * math.exp(-((3 * offset) ** 2) / 2)
+            stops.append(
+                f'<stop offset="{_num(offset)}" stop-color="{blob_hexes[blob.color_index]}" '
+                f'stop-opacity="{_num(alpha)}"/>'
+            )
+        defs.append(
+            f'<radialGradient id="m{i}" gradientUnits="userSpaceOnUse" cx="{_num(blob.cx * height)}" '
+            f'cy="{_num(blob.cy * height)}" r="{_num(3 * blob.radius * height)}">' + "".join(stops) + "</radialGradient>"
+        )
+        rects.append(f'<rect width="{width}" height="{height}" fill="url(#m{i})"/>')
+    svg = (
+        f'<svg xmlns="{SVG_NS}" viewBox="0 0 {width} {height}" width="{width}" height="{height}" '
+        f'preserveAspectRatio="xMidYMid slice"><defs>{"".join(defs)}</defs>'
+        f'<rect width="{width}" height="{height}" fill="{base_hex}"/>{"".join(rects)}</svg>'
+    )
+    return svg.encode("utf-8")
+
+
+@dataclass
+class ModeResult:
+    mode: str
+    seed: int
+    path: Path | None = None
+    strength: float | None = None
+    strongest: float | None = None
+    size: int = 0
+    errors: list[str] | None = None
+    roles_must_change: bool = False
+
+
+def settle_strength(failures: Callable[[float], list]) -> tuple[float | None, float | None, list]:
+    """``(chosen, strongest readable, errors)``. ``failures(strength)`` returns
+    the validator's errors for a mesh at that strength (empty: readable).
+    ``chosen`` is None when even the faintest mesh fails, with its errors."""
+    errors = failures(FAINTEST)
+    if errors:
+        return None, None, errors
+    if not failures(1.0):
+        return MARGIN, 1.0, []
+    readable, unreadable = FAINTEST, 1.0
+    for _ in range(SEARCH_STEPS):
+        mid = (readable + unreadable) / 2
+        if failures(mid):
+            unreadable = mid
+        else:
+            readable = mid
+    return round(readable * MARGIN, 3), round(readable, 3), []
+
+
+class MeshMaker:
+    """Renders one mode of one seed and checks it with the validator."""
+
+    def __init__(self, bt, theme: dict, mode: str, color_tokens: list[str], softness: float, fmt: str,
+                 size: tuple[int, int] = (WIDTH, HEIGHT)) -> None:
+        self.bt = bt
+        self.theme = theme
+        self.mode = mode
+        self.fmt = fmt
+        self.size = size
+        self.softness = softness
+        self.base_hex = lib.mode_color(bt, theme, mode, "surface.base")
+        for role in bt.schema.READABILITY_ROLES:
+            lib.mode_color(bt, theme, mode, role)
+        self.blob_hexes = [lib.resolve_color(bt, theme, mode, token) for token in color_tokens]
+        # The readability probe for rasters: the smallest size the rules accept.
+        self.probe_size = (bt.schema.BACKGROUND_MIN_WIDTH, bt.schema.BACKGROUND_MIN_HEIGHT)
+
+    def render(self, blobs: list[Blob], strength: float, seed: int, probe: bool = False) -> bytes:
+        if self.fmt == "svg":
+            return render_svg(blobs, self.base_hex, self.blob_hexes, strength, self.size)
+        size = self.probe_size if probe else self.size
+        image = render_raster(self.bt, blobs, self.base_hex, self.blob_hexes, strength, size, seed, dither=not probe)
+        return encode_png(image) if probe else encode_webp(image)
+
+    def check(self, data: bytes) -> list:
+        """The validator's background errors for this image (ValidationError objects)."""
+        name = f"probe.{'svg' if self.fmt == 'svg' else 'img'}"
+        return lib.background_errors(self.bt, self.theme, {self.mode: (name, data)})
+
+    def make(self, seed: int, strength: float | None) -> tuple[bytes | None, ModeResult]:
+        result = ModeResult(self.mode, seed)
+        blobs = layout(seed, self.softness, len(self.blob_hexes))
+        if strength is None:
+            chosen, strongest, errors = settle_strength(
+                lambda s: self.check(self.render(blobs, s, seed, probe=True))
+            )
+            if chosen is None:
+                result.errors = [e.message for e in errors]
+                # Only an unreadable faint mesh is the text roles' fault; any
+                # other refusal (a rendering failure) is reported as is.
+                result.roles_must_change = all(e.code == "background_unreadable" for e in errors)
+                return None, result
+            result.strongest = strongest
+            data = self.render(blobs, chosen, seed)
+            errors = self.check(data)
+            for _ in range(FINAL_RETRIES):
+                if not errors:
+                    break
+                chosen = round(chosen * MARGIN, 3)
+                data = self.render(blobs, chosen, seed)
+                errors = self.check(data)
+            result.strength = chosen
+        else:
+            data = self.render(blobs, strength, seed)
+            errors = self.check(data)
+            result.strength = strength
+        result.errors = [e.message for e in errors]
+        result.size = len(data)
+        return data, result
+
+
+def _parse_strength(value: str) -> float | None:
+    if value == "auto":
+        return None
+    try:
+        strength = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("use auto or a number from 0.0 to 1.0") from None
+    if not 0.0 <= strength <= 1.0:
+        raise argparse.ArgumentTypeError("use auto or a number from 0.0 to 1.0")
+    return strength
+
+
+def _parse_softness(value: str) -> float:
+    try:
+        softness = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("use a number from 0.0 to 1.0") from None
+    if not 0.0 <= softness <= 1.0:
+        raise argparse.ArgumentTypeError("use a number from 0.0 to 1.0")
+    return softness
+
+
+def run(
+    theme_path: str, modes: list[str], colors: str = DEFAULT_COLORS, seed: int = 7, candidates: int = 1,
+    softness: float = 0.6, strength: float | None = None, fmt: str = "webp", out_dir: str | None = None,
+    size: tuple[int, int] = (WIDTH, HEIGHT), out=None,
+) -> tuple[int, list[ModeResult]]:
+    out = out or sys.stdout
+    bt = lib.load()
+    try:
+        root, theme = lib.load_theme_dict(theme_path)
+        tokens = lib.split_color_list(colors)
+        if not tokens:
+            raise lib.UsageError("--colors names no colors.")
+        makers = [MeshMaker(bt, theme, mode, tokens, softness, fmt, size) for mode in modes]
+    except lib.UsageError as exc:
+        print(f"ERROR: {exc}", file=out)
+        return 2, []
+    target = Path(out_dir) if out_dir else root / "assets"
+    target.mkdir(parents=True, exist_ok=True)
+    ext = "svg" if fmt == "svg" else "webp"
+
+    results: list[ModeResult] = []
+    for s in range(seed, seed + candidates):
+        for maker in makers:
+            data, result = maker.make(s, strength)
+            results.append(result)
+            if result.roles_must_change:
+                print(
+                    f"{maker.mode} s{s}: even a very faint mesh (strength {FAINTEST}) fails the readability "
+                    f"rule. The text roles, not the image, need changing: adjust text.primary / text.secondary "
+                    f"(or surface.base) in modes.{maker.mode}, then run mesh again.",
+                    file=out,
+                )
+                for message in result.errors or []:
+                    print(f"    validator: {message}", file=out)
+                continue
+            if data is None:
+                print(f"{maker.mode} s{s}: the mesh could not be checked:", file=out)
+                for message in result.errors or []:
+                    print(f"    validator: {message}", file=out)
+                continue
+            path = target / f"bg-{maker.mode}-s{s}.{ext}"
+            path.write_bytes(data)
+            result.path = path
+            how = (f"strength {_num(result.strength)} (auto; strongest readable {_num(result.strongest)})"
+                   if strength is None else f"strength {_num(result.strength)}")
+            print(f"{path}  {how}, {max(1, result.size // 1024)} KB", file=out)
+            for message in result.errors or []:
+                print(f"    FAILS validator: {message}", file=out)
+
+    for s in range(seed, seed + candidates):
+        pair = {r.mode: r for r in results if r.seed == s and r.path is not None}
+        if len(pair) == 2:
+            backgrounds = {m: (r.path.name, r.path.read_bytes()) for m, r in pair.items()}
+            for error in lib.background_errors(bt, theme, backgrounds):
+                if error.path == "background":
+                    print(f"s{s}: FAILS validator: {error.message}", file=out)
+                    pair["dark"].errors = [*(pair["dark"].errors or []), error.message]
+
+    written = [r for r in results if r.path is not None]
+    if written:
+        first = {r.mode: r.path for r in written if r.seed == min(w.seed for w in written)}
+        block = {m: (f"assets/{first[m].name}" if m in first else None) for m in bt.schema.MODES}
+        if target.resolve() != (root / "assets").resolve():
+            print(f"Move the chosen files into {root / 'assets'} before using them.", file=out)
+        print('To use one candidate, set in theme.json: "background": '
+              + "{" + ", ".join(f'"{m}": ' + (f'"{v}"' if v else "null") for m, v in block.items()) + "}",
+              file=out)
+        print("Then run validate; run preview to compare candidates.", file=out)
+    failed = any(r.path is None or r.errors for r in results)
+    return (1 if failed else 0), results
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="mesh", description=__doc__.split("\n\n")[0])
+    parser.add_argument("theme", help="theme.json, or the package folder holding it")
+    parser.add_argument("--mode", choices=("dark", "light", "both"), default="both")
+    parser.add_argument("--colors", default=DEFAULT_COLORS,
+                        help=f"blob colors: roles or literal colors, comma-separated (default {DEFAULT_COLORS})")
+    parser.add_argument("--seed", type=int, default=7, help="layout seed (default 7)")
+    parser.add_argument("--candidates", type=int, default=1, help="how many seeds to write, from --seed up")
+    parser.add_argument("--softness", type=_parse_softness, default=0.6, help="0.0 tight … 1.0 very soft (default 0.6)")
+    parser.add_argument("--strength", type=_parse_strength, default=None,
+                        help="auto (default) or 0.0–1.0, how far the blobs move away from surface.base")
+    parser.add_argument("--format", choices=("webp", "svg"), default="webp")
+    parser.add_argument("--out", help="output folder (default: the package's assets/)")
+    args = parser.parse_args(argv)
+    if args.candidates < 1 or args.candidates > 12:
+        parser.error("--candidates must be between 1 and 12")
+    modes = ["dark", "light"] if args.mode == "both" else [args.mode]
+    code, _ = run(args.theme, modes, args.colors, args.seed, args.candidates, args.softness,
+                  args.strength, args.format, args.out)
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())
