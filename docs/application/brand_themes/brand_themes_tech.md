@@ -27,6 +27,10 @@ Business rules: [Brand Themes](brand_themes.md).
 | Web: skin hand-back inside the scope | `frontend/src/styles/brand-scope.css` |
 | Web: hosts | `frontend/src/components/Common/AuthLayout.tsx`; `frontend/src/components/Auth/ConsentShell.tsx`, used by `NativeAuthConsentPage.tsx` (`branded` prop, set by the desktop and mobile consent routes) and `DeviceLoginConsentPage.tsx` (always branded) |
 | Web tests | `frontend/tests/brandTheme.test.mjs` (`npm run test:brand-theme:ui`) |
+| Admin page route | `frontend/src/routes/_layout/admin/brand-theme.tsx` (menu entry in `Sidebar/AdminMenu.tsx`) |
+| Admin page components | `frontend/src/components/Admin/BrandTheme/` (page body, published card, drafts card/row/sheet, upload dialog, preview dialog, grouped issue list, unpublish dialog, queries) |
+| Admin preview mock | `frontend/src/components/BrandTheme/BrandThemePreview.tsx` |
+| Admin tests | `frontend/tests/brandThemeAdmin.test.mjs` (`npm run test:brand-theme:admin:ui`) |
 
 `schema.py`, `validator.py`, `colors.py`, `images.py`, `package.py`, `served.py` and `svg_sanitizer.py` have no FastAPI or database imports, so they can be copied verbatim into an offline authoring tool; the `brand-theme` skill does exactly that (see [Authoring Skill](#authoring-skill-brand-theme)).
 
@@ -154,6 +158,15 @@ Role → token map (`BRAND_TOKEN_ROLES`, the only map on the web): `--background
 Placement: in `AuthLayout` the decorative panel (≥ 1024 px only) shows the background as an `<img>` with `object-cover` over `surface.base`, or a flat `surface.raised`, and the logo in a 240×62 `object-contain` box; the form column only changes color. `ConsentShell` (the consent pages: `NativeAuthConsentPage` with `branded`, and `DeviceLoginConsentPage`) puts the background behind the whole page and the logo above the card, and holds its spinner until the theme query settles. A logo or background that fails to load falls back to the stock mark or the flat fill.
 
 Skins: under a skin set on `<html>` (hacker-1980), the brand wins inside the scope. Tier A tokens come from the map; `brand-scope.css` resets `--radius` and the skin's decorative tokens and hands the skin's card, title, button, input and scrollbar rules back to the stock styles with `revert-layer`, keeping the stock focus ring. Portalled menus, toasts and tooltips render outside the scope and keep the stock or skin look.
+
+## Admin Page
+
+`/admin/brand-theme` (superuser) reads `GET /api/v1/admin/brand-theme/drafts`; each draft's `document` is the served shape, so previews need no further request. Mutations invalidate the drafts query and the shared `["brandTheme"]` query.
+
+- **Upload** uses the shared `Common/UploadSourcePicker`: a zip goes as `package`; a folder or loose files go as `theme` (the root `theme.json`) plus `files` (Upload stays disabled without a `theme.json`). A refused upload keeps the dialog open with the issues; an accepted one opens the new draft's preview with the warnings.
+- **Grouped issues** (`brandThemeIssues.ts`): `modes.dark.*`, `logo.dark`, `background.dark` → Dark; the light equivalents → Light; everything else → General; shown in that order with counts, path in monospace and the message. The same list renders a publish refusal (the 409 body's `errors`), after which Publish is disabled.
+- **Publish** happens only from the preview dialog; the row menu's Publish opens it. **Unpublish** and **Delete** confirm in an `AlertDialog`; Delete is disabled on the published row.
+- **Preview** (`BrandThemePreview`): one scoped element per pane with an explicit mode, so previews ignore the page's `.dark` class and never leak into each other. `buildScopedBrandCss` writes the tokens under a unique `data-brand-preview` id (the id is validated) from the same `BRAND_TOKEN_ROLES` map; the extra roles the mock shows (`PREVIEW_ROLES`: bubble.user, status.*, chart.1–8, …) go through the same hex check, and a draft that fails it shows "This draft can't be previewed" rather than a partial palette. The mock is `inert` with `role="img"`.
 
 ## Authoring Skill (`brand-theme`)
 

@@ -4,6 +4,10 @@ import { AlertCircle, Upload } from "lucide-react"
 import { type FormEvent, type ReactNode, useState } from "react"
 
 import { type ArtifactPublished, ArtifactsService } from "@/client"
+import {
+  type UploadSource,
+  UploadSourcePicker,
+} from "@/components/Common/UploadSourcePicker"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
@@ -26,7 +30,6 @@ import {
 import { formatBytes, plural } from "./artifactFormat"
 import { invalidateArtifact, useArtifactCapabilities } from "./artifactQueries"
 import { PublishResultPanel } from "./PublishResultPanel"
-import { type UploadSource, UploadSourcePicker } from "./UploadSourcePicker"
 
 const EMPTY: ArtifactDetailsValues = {
   title: "",

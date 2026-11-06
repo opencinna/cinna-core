@@ -9,14 +9,14 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
-import { formatBytes, plural } from "./artifactFormat"
+import { formatBytes, plural } from "@/utils/format"
 
-/** What the user picked, normalised to the D14 upload shape. */
+/** What the user picked: one archive, or a set of files under their paths. */
 export type UploadSource =
   | { kind: "archive"; file: File; size: number; suggestedTitle: string }
   | {
       kind: "files"
-      /** Each file renamed to its path inside the artifact. */
+      /** Each file renamed to its path inside the pick. */
       files: File[]
       size: number
       suggestedTitle: string
@@ -85,8 +85,9 @@ interface UploadSourcePickerProps {
 }
 
 /**
- * S3 block 1 — a dashed drop zone with "Choose files" and "Choose folder";
- * once something is picked, one summary line with a Clear button instead.
+ * A dashed drop zone with "Choose files" and "Choose folder"; once something
+ * is picked, one summary line with a Clear button instead. Used by the
+ * artifact upload and the brand theme upload.
  */
 export function UploadSourcePicker({
   source,
@@ -178,7 +179,7 @@ export function UploadSourcePicker({
         multiple
         className="hidden"
         onChange={fromInput}
-        data-testid="artifact-upload-files"
+        data-testid="upload-source-files"
       />
       <input
         ref={folderInput}

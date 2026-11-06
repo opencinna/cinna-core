@@ -1,5 +1,5 @@
 import { Link as RouterLink, useRouterState } from "@tanstack/react-router"
-import { Shield, User, Users, Store, BookOpen, Library, Plug, Server, Sparkles, SlidersHorizontal } from "lucide-react"
+import { Shield, User, Users, Store, BookOpen, Library, Palette, Plug, Server, Sparkles, SlidersHorizontal } from "lucide-react"
 
 import {
   SidebarMenuButton,
@@ -96,6 +96,12 @@ export function AdminMenu() {
             <RouterLink to="/admin/server-configuration" onClick={handleMenuClick}>
               <SlidersHorizontal className="mr-2 h-4 w-4" />
               Server Configuration
+            </RouterLink>
+          </DropdownMenuItem>
+          <DropdownMenuItem asChild>
+            <RouterLink to="/admin/brand-theme" onClick={handleMenuClick}>
+              <Palette className="mr-2 h-4 w-4" />
+              Brand Theme
             </RouterLink>
           </DropdownMenuItem>
         </DropdownMenuContent>

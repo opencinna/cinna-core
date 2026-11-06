@@ -14,7 +14,7 @@ A **brand theme** is the look of a Cinna server: a color for each of a fixed set
 
 Themes are not meant to be written by hand. They are produced as a package (`theme.json` plus an `assets/` folder, or a zip of both), and core is the gatekeeper: a package that is incomplete, unreadable or unsafe is refused when it is uploaded, with errors specific enough for the author (a person or an agent) to fix and retry.
 
-Core's web app applies the theme to its sign-in pages (login, MFA, signup, password recovery and reset, email confirmation, invitation acceptance, and the browser consent pages for Cinna Desktop, Cinna Mobile and `cinna login`). The rest of core's web app keeps its own look, and the admin page is not yet built; today themes are managed through the admin API.
+Core's web app applies the theme to its sign-in pages (login, MFA, signup, password recovery and reset, email confirmation, invitation acceptance, and the browser consent pages for Cinna Desktop, Cinna Mobile and `cinna login`). The rest of core's web app keeps its own look. Superusers manage themes on the **Admin → Brand Theme** page.
 
 ## Core Capabilities
 
@@ -40,10 +40,13 @@ The exact rules, thresholds and error codes are in [Brand Themes - Technical Det
 ## User Flows
 
 ### Admin publishes a theme
-1. A superuser uploads a package (zip, or `theme.json` plus loose asset files).
-2. If it is invalid, the response carries every problem (dotted path, stable code, what to change) and nothing is saved. Non-blocking warnings (for example what the SVG sanitiser removed) are returned alongside.
-3. If it is valid, a draft is created. The draft carries the exact document desktops would receive, so it can be previewed.
-4. The superuser publishes the draft. Core re-validates it, assigns it a new revision, demotes the previous theme to draft, and broadcasts a `brand_theme.updated` event.
+1. On **Admin → Brand Theme**, a superuser opens **Upload** and drops a zip, a package folder, or `theme.json` with its asset files.
+2. If it is invalid, nothing is saved and the dialog stays open with every problem grouped as General, Dark and Light: the dotted path (`modes.dark.text.muted`) and a sentence saying what to change. The admin fixes the package and uploads again.
+3. If it is valid, a draft is created and its preview opens: a mock sign-in card and app chrome (sidebar, user bubble, status chips, chart colors) over the theme's background, dark and light side by side, whatever mode the admin's own page is in. Non-blocking warnings (for example what the SVG sanitiser removed) are shown there, once.
+4. The admin publishes from the preview. Choosing **Publish** in a draft's menu also opens the preview first, so a theme is never published unseen. Core re-validates it; if the rules have tightened since the upload, the grouped problems appear instead and nothing changes. Otherwise it gets a new revision, the previous theme returns to draft, and a `brand_theme.updated` event is broadcast.
+5. The **Published theme** card shows what is live: name, revision, who published it and when.
+
+The drafts list keeps up to 20 themes, newest first (five on the card, the rest under **Show all**). A draft can be deleted; the published one must be unpublished first.
 
 ### An agent turns a brandbook into a package (`brand-theme` skill)
 Core ships a catalog skill, `brand-theme`, that an agent uses with a company brandbook. A superuser publishes it to the server's skills catalog once (see the technical details); after that any agent it is installed on can produce a package.
@@ -56,7 +59,7 @@ Core ships a catalog skill, `brand-theme`, that an agent uses with a company bra
 A soft, low-contrast image (a mesh, a blur, a subtle texture) passes the readability rule; a photo or a busy pattern usually does not.
 
 ### Admin unpublishes
-The superuser unpublishes; the server returns to stock Cinna and a `brand_theme.updated` event (published false) is broadcast. Repeating it is harmless.
+The superuser chooses **Unpublish** on the Published theme card or the published draft's menu and confirms; the server returns to stock Cinna and a `brand_theme.updated` event (published false) is broadcast. Repeating it is harmless.
 
 ### Desktop applies the theme
 Discovery shows a `brand_theme` entry, the desktop fetches the theme endpoint, revalidates with the revision on later visits, and downloads the logo and background files through content-addressed URLs. A server with no theme answers "no content" and the desktop shows stock Cinna. In this release the desktop learns about changes by revalidating, not by listening to the event.
@@ -79,7 +82,6 @@ Discovery shows a `brand_theme` entry, the desktop fetches the theme endpoint, r
 ## Not Yet
 
 - Applying the theme inside the rest of core's web app (only the sign-in and consent pages are branded).
-- An admin page for uploading, previewing and publishing (until then, the admin API).
 - Fonts, radius or density, and app icons are outside the scheme.
 
 ## Changelog
@@ -87,3 +89,4 @@ Discovery shows a `brand_theme` entry, the desktop fetches the theme endpoint, r
 - Backend (first phase): schema and validator, storage, admin API, public endpoint, discovery field, shared fixtures.
 - Web sign-in pages adopt the published theme.
 - The `brand-theme` authoring skill: template, validator copy, mesh background generator, preview and packager, publishable to the skills catalog.
+- Admin → Brand Theme page: upload with grouped errors, drafts, two-mode preview, publish, unpublish, delete.
