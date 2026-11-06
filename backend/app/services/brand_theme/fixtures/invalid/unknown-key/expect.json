@@ -1,0 +1,9 @@
+{
+  "tag": "incompatible",
+  "errors": [
+    {
+      "path": "fonts",
+      "code": "unknown_key"
+    }
+  ]
+}

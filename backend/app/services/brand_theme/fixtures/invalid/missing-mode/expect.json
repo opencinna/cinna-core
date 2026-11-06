@@ -1,0 +1,9 @@
+{
+  "tag": "unsafe",
+  "errors": [
+    {
+      "path": "modes.light",
+      "code": "missing_key"
+    }
+  ]
+}

@@ -1,0 +1,77 @@
+---
+feature: brand_themes
+domain: application
+one_liner: "Lets a server admin publish one brand theme - colors for both modes, a logo, backgrounds and a line of copy - that core validates on save and serves publicly for Cinna Desktop to apply."
+docs:
+  tech: brand_themes_tech.md
+affects: [desktop_auth]
+---
+# Brand Themes
+
+## Overview
+
+A **brand theme** is the look of a Cinna server: a color for each of a fixed set of named roles in both dark and light mode, an optional logo and background image per mode, and an optional line of copy. An admin publishes one theme; every Cinna Desktop signed in to that server can then look like the brand. A server with no published theme looks like stock Cinna.
+
+Themes are not meant to be written by hand. They are produced as a package (`theme.json` plus an `assets/` folder, or a zip of both), and core is the gatekeeper: a package that is incomplete, unreadable or unsafe is refused when it is uploaded, with errors specific enough for the author (a person or an agent) to fix and retry.
+
+This is the backend of the feature. Core's own in-app pages, the branded sign-in pages and the admin page are not yet built; today everything is driven through the admin API.
+
+## Core Capabilities
+
+- **One theme per server.** At most one theme is published at a time. There are no per-team or per-user themes, and users cannot opt out.
+- **Drafts.** Every package that passes validation is stored as a draft. A package that fails is never stored: the upload response lists the problems. A bounded number of drafts is kept; deleting one frees its slot.
+- **Publish and unpublish.** Publishing a draft makes it the server's theme and returns the previously published one to draft. Unpublishing returns everyone to stock Cinna. Publishing the theme that is already live with unchanged content is a no-op and does not change its revision.
+- **Validation on save.** The same checks run at upload and again at publish, because the rules may have tightened since the upload. A failing re-check refuses the publish with the list of errors.
+- **Public endpoint.** The published theme is readable without authentication so that sign-in screens can be branded before anyone has a token. Clients revalidate cheaply with the theme's revision.
+- **Discovery.** When a theme is published, the desktop discovery document announces it, so a desktop knows to fetch it.
+
+## What Counts as a Valid Theme
+
+- Both modes are present and every required color role is set in each; colors are literal values only (no CSS functions, variables or URLs).
+- Text, accent, status and chart colors meet contrast thresholds against the surfaces they sit on; chart slots are distinguishable from each other; the user's chat bubble stands out; the accent does not read as the error color.
+- A logo, when given, is one file per mode (SVG, PNG, JPEG or WebP), large enough, and not so wide it would be drawn too small.
+- A background, when given, has both keys (an image or a deliberate "no image"), is large enough, and keeps the main text readable over almost all of the image. The dark background must be darker than the light one.
+- SVG files are sanitised: anything that could run code or load something external is removed or the file refused. What the server stores and serves is the sanitised file.
+- Unknown keys are refused so a typo cannot silently disappear.
+
+The exact rules, thresholds and error codes are in [Brand Themes - Technical Details](brand_themes_tech.md).
+
+## User Flows
+
+### Admin publishes a theme
+1. A superuser uploads a package (zip, or `theme.json` plus loose asset files).
+2. If it is invalid, the response carries every problem (dotted path, stable code, what to change) and nothing is saved. Non-blocking warnings (for example what the SVG sanitiser removed) are returned alongside.
+3. If it is valid, a draft is created. The draft carries the exact document desktops would receive, so it can be previewed.
+4. The superuser publishes the draft. Core re-validates it, assigns it a new revision, demotes the previous theme to draft, and broadcasts a `brand_theme.updated` event.
+
+### Admin unpublishes
+The superuser unpublishes; the server returns to stock Cinna and a `brand_theme.updated` event (published false) is broadcast. Repeating it is harmless.
+
+### Desktop applies the theme
+Discovery shows a `brand_theme` entry, the desktop fetches the theme endpoint, revalidates with the revision on later visits, and downloads the logo and background files through content-addressed URLs. A server with no theme answers "no content" and the desktop shows stock Cinna. In this release the desktop learns about changes by revalidating, not by listening to the event.
+
+## Business Rules
+
+- Only superusers manage themes; the read endpoints are public and rate-limited per caller.
+- Drafts are immutable apart from their status: a new look is a new upload.
+- A theme version that was handed to a client is never reused: revisions only increase, even if all themes are deleted.
+- A published theme cannot be deleted; unpublish it first.
+- Users on the same server always share the same theme.
+
+## Integration Points
+
+- [Desktop App Authentication](../desktop_auth/desktop_auth.md): the `/.well-known/cinna-desktop` discovery document gains the `brand_theme` entry when a theme is published.
+- [Real-Time Event Bus System](../realtime_events/event_bus_system.md): publish and unpublish broadcast `brand_theme.updated`.
+- [Server Configuration](../server_configuration/server_configuration.md): the other admin-managed, server-wide public settings (disclaimer, landing page); a brand theme is stored separately from that singleton.
+- Cinna Desktop copies the shared test fixtures that ship with the validator, so its parser and safety checks are tested against what core really produces.
+
+## Not Yet
+
+- Applying the theme inside core's own web app, including the sign-in pages.
+- An admin page for uploading, previewing and publishing (until then, the admin API).
+- An authoring skill that turns a company brandbook into a package.
+- Fonts, radius or density, and app icons are outside the scheme.
+
+## Changelog
+
+- Backend (first phase): schema and validator, storage, admin API, public endpoint, discovery field, shared fixtures.

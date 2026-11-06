@@ -1,0 +1,48 @@
+{
+  "schema": "cinna.brand-theme/1",
+  "revision": 1,
+  "theme": {
+    "schema": "cinna.brand-theme/1",
+    "name": "Stock Cinna (adjusted)",
+    "modes": {
+      "dark": {
+        "surface.base": "#0f0f0f",
+        "surface.raised": "#1a1a1a",
+        "surface.tertiary": "#252525",
+        "surface.hover": "#2a2a2a",
+        "surface.input": "#1e1e2e",
+        "border": "#333333",
+        "text.primary": "#e0e0e0",
+        "text.secondary": "#999999",
+        "text.muted": "#666666",
+        "accent": "#d97a4a",
+        "accent.hover": "#e8a87c",
+        "accent.on": "#1a1a1a",
+        "bubble.user": "#3d2818",
+        "highlight": "#a78bfa",
+        "status.danger": "#ef4444",
+        "status.warning": "#eab308",
+        "status.success": "#22c55e",
+        "status.info": "#38bdf8",
+        "status.danger.text": "#f87171",
+        "status.warning.text": "#fbbf24",
+        "status.success.text": "#34d399",
+        "status.info.text": "#38bdf8",
+        "chart.1": "#d4733f",
+        "chart.2": "#3987e5",
+        "chart.3": "#199e70",
+        "chart.4": "#d9a514",
+        "chart.5": "#d95fa6",
+        "chart.6": "#008300",
+        "chart.7": "#9085e9",
+        "chart.8": "#ee5d6c",
+        "chart.pos": "#3987e5",
+        "chart.neg": "#e66767",
+        "chart.grid": "#1f1f1f",
+        "logo.from": "#c8693d",
+        "logo.to": "#eab08a"
+      }
+    }
+  },
+  "assets": {}
+}

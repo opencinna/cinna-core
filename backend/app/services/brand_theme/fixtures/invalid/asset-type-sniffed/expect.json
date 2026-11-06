@@ -1,0 +1,13 @@
+{
+  "tag": "unsafe",
+  "errors": [
+    {
+      "path": "logo.dark",
+      "code": "unsupported_asset_type"
+    },
+    {
+      "path": "logo.light",
+      "code": "unsupported_asset_type"
+    }
+  ]
+}

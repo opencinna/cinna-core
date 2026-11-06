@@ -1,0 +1,13 @@
+{
+  "tag": "unsafe",
+  "errors": [
+    {
+      "path": "logo.dark",
+      "code": "svg_missing_viewbox"
+    },
+    {
+      "path": "logo.light",
+      "code": "svg_missing_viewbox"
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "core": "sanitised",
+  "must_not_contain": [
+    "data:"
+  ]
+}

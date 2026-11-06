@@ -1,0 +1,13 @@
+{
+  "tag": "incompatible",
+  "errors": [
+    {
+      "path": "modes.light.accent.on",
+      "code": "low_contrast"
+    },
+    {
+      "path": "modes.light.accent.on",
+      "code": "low_contrast"
+    }
+  ]
+}

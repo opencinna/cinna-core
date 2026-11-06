@@ -1,0 +1,9 @@
+{
+  "tag": "unsafe",
+  "errors": [
+    {
+      "path": "theme.json",
+      "code": "invalid_json"
+    }
+  ]
+}

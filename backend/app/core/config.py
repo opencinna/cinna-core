@@ -181,6 +181,14 @@ class Settings(BaseSettings):
     # degrade rather than error — so err generous.
     ACCESS_POLICY_RATE_LIMIT_PER_MIN: int = 240
 
+    # Per-IP budget shared by the public brand-theme reads
+    # (``GET /brand-theme`` and its assets). Every Cinna Desktop signed in to
+    # this server revalidates the theme every few minutes, and a sign-in page
+    # load costs up to three requests (theme, logo, background), so an office
+    # behind one NAT address needs a large budget. A 304 or an immutable
+    # asset is cheap; this is a backstop, not a quota.
+    BRAND_THEME_RATE_LIMIT_PER_MIN: int = 600
+
     # ── Environment console (web terminal + logs follow) ─────────────────
     # Idle timeout for an interactive PTY shell: the env-core /shell/pty
     # endpoint and the backend terminal tunnel both auto-close a terminal

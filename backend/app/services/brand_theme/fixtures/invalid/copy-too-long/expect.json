@@ -1,0 +1,9 @@
+{
+  "tag": "unsafe",
+  "errors": [
+    {
+      "path": "copy.newChatHeading",
+      "code": "text_too_long"
+    }
+  ]
+}

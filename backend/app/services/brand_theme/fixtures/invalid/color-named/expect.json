@@ -1,0 +1,9 @@
+{
+  "tag": "unsafe",
+  "errors": [
+    {
+      "path": "modes.light.surface.base",
+      "code": "invalid_color"
+    }
+  ]
+}

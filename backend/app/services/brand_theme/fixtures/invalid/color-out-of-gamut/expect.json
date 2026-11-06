@@ -1,0 +1,9 @@
+{
+  "tag": "incompatible",
+  "errors": [
+    {
+      "path": "modes.dark.chart.6",
+      "code": "color_out_of_gamut"
+    }
+  ]
+}

@@ -3308,6 +3308,21 @@ export type Body_artifacts_republish_artifact = {
     files?: (Array<((Blob | File))> | null);
 };
 
+export type Body_brand_theme_upload_brand_theme_draft = {
+    /**
+     * The package as a .zip
+     */
+    package?: ((Blob | File) | null);
+    /**
+     * theme.json, when not sending a zip
+     */
+    theme?: ((Blob | File) | null);
+    /**
+     * Asset files, keyed by file name
+     */
+    files?: (Array<((Blob | File))> | null);
+};
+
 export type Body_cli_account_create_artifact = {
     title: string;
     description?: (string | null);
@@ -3380,6 +3395,98 @@ export type Body_skills_publish_desktop_skill = {
 
 export type Body_tasks_upload_task_attachment = {
     file: (Blob | File);
+};
+
+export type BrandThemeAssetRef = {
+    url: string;
+    type: string;
+    bytes: number;
+    sha256: string;
+    width?: (number | null);
+    height?: (number | null);
+};
+
+export type BrandThemeBackgroundRefs = {
+    dark: (BrandThemeAssetRef | null);
+    light: (BrandThemeAssetRef | null);
+};
+
+export type BrandThemeContent = {
+    schema: string;
+    name: string;
+    modes: {
+        [key: string]: {
+            [key: string]: (string);
+        };
+    };
+    logo?: (BrandThemeLogoRefs | null);
+    background?: (BrandThemeBackgroundRefs | null);
+    copy?: (BrandThemeCopy | null);
+};
+
+export type BrandThemeCopy = {
+    newChatHeading?: (string | null);
+};
+
+export type BrandThemeDraftPublic = {
+    id: string;
+    status: string;
+    name: string;
+    revision: (number | null);
+    created_at: string;
+    created_by_email?: (string | null);
+    published_at?: (string | null);
+    published_by_email?: (string | null);
+    document: {
+        [key: string]: unknown;
+    };
+};
+
+export type BrandThemeDraftsPublic = {
+    data: Array<BrandThemeDraftPublic>;
+    count: number;
+    max_drafts?: number;
+};
+
+/**
+ * One validator finding. ``path`` is dotted (``modes.dark.text.muted``),
+ * ``code`` is stable, ``message`` says what to change.
+ */
+export type BrandThemeIssue = {
+    path: string;
+    code: string;
+    message: string;
+};
+
+export type BrandThemeLogoRefs = {
+    dark: BrandThemeAssetRef;
+    light: BrandThemeAssetRef;
+};
+
+export type BrandThemePublic = {
+    schema: string;
+    revision: number;
+    theme: BrandThemeContent;
+    assets: {
+        [key: string]: BrandThemeAssetRef;
+    };
+};
+
+/**
+ * 409 body when a draft no longer passes the (possibly tightened) rules.
+ */
+export type BrandThemePublishErrors = {
+    errors: Array<BrandThemeIssue>;
+};
+
+/**
+ * ``id`` is null when the package was refused; ``errors`` then says why.
+ * ``warnings`` never block (what the SVG sanitiser removed, unreferenced files).
+ */
+export type BrandThemeUploadResult = {
+    id?: (string | null);
+    errors?: Array<BrandThemeIssue>;
+    warnings?: Array<BrandThemeIssue>;
 };
 
 export type BulkDeleteRequest = {
@@ -11762,6 +11869,42 @@ export type ArtifactsPublishArtifactFromEnvironmentData = {
 };
 
 export type ArtifactsPublishArtifactFromEnvironmentResponse = (ArtifactPublished);
+
+export type BrandThemeGetBrandThemeResponse = (BrandThemePublic | void);
+
+export type BrandThemeGetBrandThemeAssetData = {
+    sha256: string;
+};
+
+export type BrandThemeGetBrandThemeAssetResponse = (unknown);
+
+export type BrandThemeListBrandThemeDraftsResponse = (BrandThemeDraftsPublic);
+
+export type BrandThemeUploadBrandThemeDraftData = {
+    formData?: Body_brand_theme_upload_brand_theme_draft;
+};
+
+export type BrandThemeUploadBrandThemeDraftResponse = (BrandThemeUploadResult);
+
+export type BrandThemeGetBrandThemeDraftData = {
+    themeId: string;
+};
+
+export type BrandThemeGetBrandThemeDraftResponse = (BrandThemeDraftPublic);
+
+export type BrandThemeDeleteBrandThemeDraftData = {
+    themeId: string;
+};
+
+export type BrandThemeDeleteBrandThemeDraftResponse = (void);
+
+export type BrandThemePublishBrandThemeDraftData = {
+    themeId: string;
+};
+
+export type BrandThemePublishBrandThemeDraftResponse = (BrandThemeDraftPublic);
+
+export type BrandThemeUnpublishBrandThemeResponse = (void);
 
 export type BundlesListBundlesResponse = (AgentBundlesPublic);
 

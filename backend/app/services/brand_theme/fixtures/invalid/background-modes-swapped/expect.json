@@ -1,0 +1,9 @@
+{
+  "tag": "incompatible",
+  "errors": [
+    {
+      "path": "background",
+      "code": "background_modes_swapped"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "tag": "unsafe",
+  "errors": [
+    {
+      "path": "logo.dark",
+      "code": "svg_entities"
+    },
+    {
+      "path": "logo.light",
+      "code": "svg_entities"
+    }
+  ]
+}

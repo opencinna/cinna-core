@@ -1,0 +1,9 @@
+{
+  "tag": "unsafe",
+  "errors": [
+    {
+      "path": "modes.light.chart.7",
+      "code": "missing_role"
+    }
+  ]
+}

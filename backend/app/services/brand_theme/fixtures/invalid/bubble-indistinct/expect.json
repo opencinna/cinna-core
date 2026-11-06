@@ -1,0 +1,9 @@
+{
+  "tag": "incompatible",
+  "errors": [
+    {
+      "path": "modes.dark.bubble.user",
+      "code": "bubble_indistinct"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "tag": "incompatible",
+  "errors": [
+    {
+      "path": "background.dark",
+      "code": "background_unreadable"
+    },
+    {
+      "path": "background.dark",
+      "code": "background_unreadable"
+    }
+  ]
+}

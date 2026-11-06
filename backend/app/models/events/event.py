@@ -167,6 +167,12 @@ class EventType:
     DASHBOARD_TILE_UPDATED = "dashboard_tile_updated"
     DASHBOARD_TILE_HIGHLIGHT = "dashboard_tile_highlight"
 
+    # Brand theme — ``brand_theme.updated`` meta ``{published, revision}``
+    # (``revision`` null after an unpublish), broadcast after a publish or an
+    # unpublish commits. Broadcast is safe: the theme itself is public. Cinna
+    # Desktop polls ``GET /brand-theme`` in v1 and does not listen yet.
+    BRAND_THEME_UPDATED = "brand_theme.updated"
+
     # Generic notification
     NOTIFICATION = "notification"
 

@@ -1,0 +1,7 @@
+{
+  "core": "sanitised",
+  "must_not_contain": [
+    "DOCTYPE",
+    "example.com"
+  ]
+}

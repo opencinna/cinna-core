@@ -1,0 +1,9 @@
+{
+  "tag": "incompatible",
+  "errors": [
+    {
+      "path": "modes.dark.accent",
+      "code": "accent_reads_as_danger"
+    }
+  ]
+}

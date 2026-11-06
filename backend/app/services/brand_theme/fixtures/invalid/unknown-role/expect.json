@@ -1,0 +1,9 @@
+{
+  "tag": "incompatible",
+  "errors": [
+    {
+      "path": "modes.dark.surface.sunken",
+      "code": "unknown_key"
+    }
+  ]
+}

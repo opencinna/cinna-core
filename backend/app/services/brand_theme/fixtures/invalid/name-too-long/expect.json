@@ -1,0 +1,9 @@
+{
+  "tag": "incompatible",
+  "errors": [
+    {
+      "path": "name",
+      "code": "name_too_long"
+    }
+  ]
+}

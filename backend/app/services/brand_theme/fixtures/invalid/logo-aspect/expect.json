@@ -1,0 +1,13 @@
+{
+  "tag": "incompatible",
+  "errors": [
+    {
+      "path": "logo.dark",
+      "code": "logo_aspect"
+    },
+    {
+      "path": "logo.light",
+      "code": "logo_aspect"
+    }
+  ]
+}

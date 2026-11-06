@@ -62,6 +62,7 @@ Frontend Components                    Backend Services
 **Tasks**: `task_created`, `task_updated`, `task_status_updated`, `task_status_changed`, `task_comment_added`, `task_attachment_added`, `task_subtask_created`, `subtask_completed`
 **Todo Progress**: `todo_list_updated`, `task_todo_updated`
 **Catalog**: `catalog.updated` (meta `kind`, `uuid`, `id`, `revision_number`, `head_sha`) and `catalog.granted` (meta `kind`, `uuid`) go to each reader's own `user_{id}` room, never broadcast; they are refresh hints for Cinna Desktop. See [Desktop Agents in the Catalog](../catalog/desktop_agents.md).
+**Brand theme**: `brand_theme.updated` (meta `published`, `revision`), broadcast after a publish or unpublish. See [Brand Themes](../brand_themes/brand_themes.md).
 **Generic**: `notification`
 
 ### Desktop task subscriptions

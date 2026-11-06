@@ -1,0 +1,9 @@
+{
+  "tag": "unsafe",
+  "errors": [
+    {
+      "path": "background.dark",
+      "code": "asset_too_large"
+    }
+  ]
+}

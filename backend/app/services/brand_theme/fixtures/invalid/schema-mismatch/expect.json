@@ -1,0 +1,9 @@
+{
+  "tag": "unsafe",
+  "errors": [
+    {
+      "path": "schema",
+      "code": "schema_mismatch"
+    }
+  ]
+}

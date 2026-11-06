@@ -10,6 +10,7 @@ from app.api.routes import (
     admin_llm_providers,
     admin_routing,
     admin_user_groups,
+    brand_theme,
     agent_api,
     agent_api_public,
     agent_dashboards,
@@ -177,6 +178,8 @@ api_router.include_router(admin_routing.router)
 api_router.include_router(admin_user_groups.router)
 api_router.include_router(user_groups.router)
 api_router.include_router(server_config.router)
+# /brand-theme (public) and /admin/brand-theme/* (superuser).
+api_router.include_router(brand_theme.router)
 api_router.include_router(server_channels.router)
 # Per-user channel settings on /users/me/channels/*. Separate router from
 # server_channels: that one is superuser-only and its projections carry the

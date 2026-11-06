@@ -1,0 +1,8 @@
+{
+  "core": "sanitised",
+  "must_not_contain": [
+    "onload",
+    "onclick",
+    "alert"
+  ]
+}

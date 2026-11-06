@@ -14632,6 +14632,55 @@ export const Body_artifacts_republish_artifactSchema = {
     title: 'Body_artifacts-republish_artifact'
 } as const;
 
+export const Body_brand_theme_upload_brand_theme_draftSchema = {
+    properties: {
+        package: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'binary'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Package',
+            description: 'The package as a .zip'
+        },
+        theme: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'binary'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Theme',
+            description: 'theme.json, when not sending a zip'
+        },
+        files: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string',
+                        format: 'binary'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Files',
+            description: 'Asset files, keyed by file name'
+        }
+    },
+    type: 'object',
+    title: 'Body_brand-theme-upload_brand_theme_draft'
+} as const;
+
 export const Body_cli_account_create_artifactSchema = {
     properties: {
         title: {
@@ -15020,6 +15069,369 @@ export const Body_tasks_upload_task_attachmentSchema = {
     type: 'object',
     required: ['file'],
     title: 'Body_tasks-upload_task_attachment'
+} as const;
+
+export const BrandThemeAssetRefSchema = {
+    properties: {
+        url: {
+            type: 'string',
+            title: 'Url'
+        },
+        type: {
+            type: 'string',
+            title: 'Type'
+        },
+        bytes: {
+            type: 'integer',
+            title: 'Bytes'
+        },
+        sha256: {
+            type: 'string',
+            title: 'Sha256'
+        },
+        width: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Width'
+        },
+        height: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Height'
+        }
+    },
+    type: 'object',
+    required: ['url', 'type', 'bytes', 'sha256'],
+    title: 'BrandThemeAssetRef'
+} as const;
+
+export const BrandThemeBackgroundRefsSchema = {
+    properties: {
+        dark: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/BrandThemeAssetRef'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        light: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/BrandThemeAssetRef'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        }
+    },
+    type: 'object',
+    required: ['dark', 'light'],
+    title: 'BrandThemeBackgroundRefs'
+} as const;
+
+export const BrandThemeContentSchema = {
+    properties: {
+        schema: {
+            type: 'string',
+            title: 'Schema'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        modes: {
+            additionalProperties: {
+                additionalProperties: {
+                    type: 'string'
+                },
+                type: 'object'
+            },
+            type: 'object',
+            title: 'Modes'
+        },
+        logo: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/BrandThemeLogoRefs'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        background: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/BrandThemeBackgroundRefs'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        copy: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/BrandThemeCopy'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        }
+    },
+    type: 'object',
+    required: ['schema', 'name', 'modes'],
+    title: 'BrandThemeContent'
+} as const;
+
+export const BrandThemeCopySchema = {
+    properties: {
+        newChatHeading: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Newchatheading'
+        }
+    },
+    type: 'object',
+    title: 'BrandThemeCopy'
+} as const;
+
+export const BrandThemeDraftPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        status: {
+            type: 'string',
+            title: 'Status'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        revision: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Revision'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        created_by_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Created By Email'
+        },
+        published_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Published At'
+        },
+        published_by_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Published By Email'
+        },
+        document: {
+            additionalProperties: true,
+            type: 'object',
+            title: 'Document'
+        }
+    },
+    type: 'object',
+    required: ['id', 'status', 'name', 'revision', 'created_at', 'document'],
+    title: 'BrandThemeDraftPublic'
+} as const;
+
+export const BrandThemeDraftsPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/BrandThemeDraftPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        },
+        max_drafts: {
+            type: 'integer',
+            title: 'Max Drafts',
+            default: 20
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'BrandThemeDraftsPublic'
+} as const;
+
+export const BrandThemeIssueSchema = {
+    properties: {
+        path: {
+            type: 'string',
+            title: 'Path'
+        },
+        code: {
+            type: 'string',
+            title: 'Code'
+        },
+        message: {
+            type: 'string',
+            title: 'Message'
+        }
+    },
+    type: 'object',
+    required: ['path', 'code', 'message'],
+    title: 'BrandThemeIssue',
+    description: `One validator finding. \`\`path\`\` is dotted (\`\`modes.dark.text.muted\`\`),
+\`\`code\`\` is stable, \`\`message\`\` says what to change.`
+} as const;
+
+export const BrandThemeLogoRefsSchema = {
+    properties: {
+        dark: {
+            '$ref': '#/components/schemas/BrandThemeAssetRef'
+        },
+        light: {
+            '$ref': '#/components/schemas/BrandThemeAssetRef'
+        }
+    },
+    type: 'object',
+    required: ['dark', 'light'],
+    title: 'BrandThemeLogoRefs'
+} as const;
+
+export const BrandThemePublicSchema = {
+    properties: {
+        schema: {
+            type: 'string',
+            title: 'Schema'
+        },
+        revision: {
+            type: 'integer',
+            title: 'Revision'
+        },
+        theme: {
+            '$ref': '#/components/schemas/BrandThemeContent'
+        },
+        assets: {
+            additionalProperties: {
+                '$ref': '#/components/schemas/BrandThemeAssetRef'
+            },
+            type: 'object',
+            title: 'Assets'
+        }
+    },
+    type: 'object',
+    required: ['schema', 'revision', 'theme', 'assets'],
+    title: 'BrandThemePublic'
+} as const;
+
+export const BrandThemePublishErrorsSchema = {
+    properties: {
+        errors: {
+            items: {
+                '$ref': '#/components/schemas/BrandThemeIssue'
+            },
+            type: 'array',
+            title: 'Errors'
+        }
+    },
+    type: 'object',
+    required: ['errors'],
+    title: 'BrandThemePublishErrors',
+    description: '409 body when a draft no longer passes the (possibly tightened) rules.'
+} as const;
+
+export const BrandThemeUploadResultSchema = {
+    properties: {
+        id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Id'
+        },
+        errors: {
+            items: {
+                '$ref': '#/components/schemas/BrandThemeIssue'
+            },
+            type: 'array',
+            title: 'Errors',
+            default: []
+        },
+        warnings: {
+            items: {
+                '$ref': '#/components/schemas/BrandThemeIssue'
+            },
+            type: 'array',
+            title: 'Warnings',
+            default: []
+        }
+    },
+    type: 'object',
+    title: 'BrandThemeUploadResult',
+    description: `\`\`id\`\` is null when the package was refused; \`\`errors\`\` then says why.
+\`\`warnings\`\` never block (what the SVG sanitiser removed, unreferenced files).`
 } as const;
 
 export const BulkDeleteRequestSchema = {

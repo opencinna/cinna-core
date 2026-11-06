@@ -1,0 +1,9 @@
+{
+  "tag": "unsafe",
+  "errors": [
+    {
+      "path": "modes.dark.border",
+      "code": "color_alpha"
+    }
+  ]
+}

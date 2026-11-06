@@ -1,0 +1,13 @@
+{
+  "core": "sanitised",
+  "must_not_contain": [
+    "inkscape",
+    "metadata",
+    "class=",
+    "font-family"
+  ],
+  "must_contain": [
+    "fill=\"url(#g)\"",
+    "opacity:0.9"
+  ]
+}

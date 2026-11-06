@@ -1,0 +1,9 @@
+{
+  "tag": "unsafe",
+  "errors": [
+    {
+      "path": "modes.dark.surface.base",
+      "code": "invalid_color"
+    }
+  ]
+}

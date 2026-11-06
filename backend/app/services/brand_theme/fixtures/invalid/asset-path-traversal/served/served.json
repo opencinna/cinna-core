@@ -1,0 +1,112 @@
+{
+  "schema": "cinna.brand-theme/1",
+  "revision": 1,
+  "theme": {
+    "schema": "cinna.brand-theme/1",
+    "name": "Stock Cinna (adjusted)",
+    "modes": {
+      "dark": {
+        "surface.base": "#0f0f0f",
+        "surface.raised": "#1a1a1a",
+        "surface.tertiary": "#252525",
+        "surface.hover": "#2a2a2a",
+        "surface.input": "#1e1e2e",
+        "border": "#333333",
+        "text.primary": "#e0e0e0",
+        "text.secondary": "#999999",
+        "text.muted": "#666666",
+        "accent": "#d97a4a",
+        "accent.hover": "#e8a87c",
+        "accent.on": "#1a1a1a",
+        "bubble.user": "#3d2818",
+        "highlight": "#a78bfa",
+        "status.danger": "#ef4444",
+        "status.warning": "#eab308",
+        "status.success": "#22c55e",
+        "status.info": "#38bdf8",
+        "status.danger.text": "#f87171",
+        "status.warning.text": "#fbbf24",
+        "status.success.text": "#34d399",
+        "status.info.text": "#38bdf8",
+        "chart.1": "#d4733f",
+        "chart.2": "#3987e5",
+        "chart.3": "#199e70",
+        "chart.4": "#d9a514",
+        "chart.5": "#d95fa6",
+        "chart.6": "#008300",
+        "chart.7": "#9085e9",
+        "chart.8": "#ee5d6c",
+        "chart.pos": "#3987e5",
+        "chart.neg": "#e66767",
+        "chart.grid": "#1f1f1f",
+        "logo.from": "#c8693d",
+        "logo.to": "#eab08a"
+      },
+      "light": {
+        "surface.base": "#ffffff",
+        "surface.raised": "#f5f5f5",
+        "surface.tertiary": "#ebebeb",
+        "surface.hover": "#e0e0e0",
+        "surface.input": "#f0f0f5",
+        "border": "#d4d4d4",
+        "text.primary": "#1a1a1a",
+        "text.secondary": "#555555",
+        "text.muted": "#8a8a8a",
+        "accent": "#2e88b8",
+        "accent.hover": "#4aa0cf",
+        "accent.on": "#0a0a0a",
+        "bubble.user": "#d4e6f1",
+        "highlight": "#7c3aed",
+        "status.danger": "#dc2626",
+        "status.warning": "#b07800",
+        "status.success": "#16a34a",
+        "status.info": "#0284c7",
+        "status.danger.text": "#b91c1c",
+        "status.warning.text": "#a16207",
+        "status.success.text": "#15803d",
+        "status.info.text": "#0369a1",
+        "chart.1": "#2e88b8",
+        "chart.2": "#eb6834",
+        "chart.3": "#16936a",
+        "chart.4": "#b07c00",
+        "chart.5": "#d0547f",
+        "chart.6": "#008300",
+        "chart.7": "#6250d6",
+        "chart.8": "#c0392b",
+        "chart.pos": "#2a78d6",
+        "chart.neg": "#e34948",
+        "chart.grid": "#eeeeee",
+        "logo.from": "#1d4e76",
+        "logo.to": "#4aa7a3"
+      }
+    },
+    "logo": {
+      "dark": {
+        "url": "/api/v1/brand-theme/assets/0000000000000000000000000000000000000000000000000000000000000000",
+        "type": "application/octet-stream",
+        "bytes": 0,
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "light": {
+        "url": "/api/v1/brand-theme/assets/0000000000000000000000000000000000000000000000000000000000000000",
+        "type": "application/octet-stream",
+        "bytes": 0,
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    }
+  },
+  "assets": {
+    "logo.dark": {
+      "url": "/api/v1/brand-theme/assets/0000000000000000000000000000000000000000000000000000000000000000",
+      "type": "application/octet-stream",
+      "bytes": 0,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "logo.light": {
+      "url": "/api/v1/brand-theme/assets/0000000000000000000000000000000000000000000000000000000000000000",
+      "type": "application/octet-stream",
+      "bytes": 0,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  }
+}

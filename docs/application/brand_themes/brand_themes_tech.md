@@ -1,0 +1,139 @@
+# Brand Themes - Technical Details
+
+Business rules: [Brand Themes](brand_themes.md).
+
+## Code Map
+
+| Piece | Path |
+|-------|------|
+| Contract: roles, limits | `backend/app/services/brand_theme/schema.py` |
+| Validator | `backend/app/services/brand_theme/validator.py` |
+| Color math (hex parsing, contrast, OKLab, OKLCH) | `backend/app/services/brand_theme/colors.py` |
+| SVG sanitiser | `backend/app/services/brand_theme/svg_sanitizer.py` |
+| Image sniffing, raster facts, readability sample | `backend/app/services/brand_theme/images.py` |
+| Package reader (zip, loose files, folder) | `backend/app/services/brand_theme/package.py` |
+| Served projection | `backend/app/services/brand_theme/served.py` |
+| Storage and publish logic, event emission | `backend/app/services/brand_theme/brand_theme_service.py` |
+| Models and API shapes | `backend/app/models/brand_theme/brand_theme.py` |
+| Routes | `backend/app/api/routes/brand_theme.py` |
+| Shared fixtures | `backend/app/services/brand_theme/fixtures/` |
+| Fixture test | `backend/tests/unit/test_brand_theme_fixtures.py` |
+
+`schema.py`, `validator.py`, `colors.py`, `images.py`, `package.py`, `served.py` and `svg_sanitizer.py` have no FastAPI or database imports, so they can be copied verbatim into an offline authoring tool.
+
+## The Contract: `cinna.brand-theme/1`
+
+`schema.py` is the **only** place the 35 required color roles are defined (`ROLES`, with a one-sentence meaning each in `ROLE_MEANINGS`). Every consumer takes the names from there; this document does not repeat them. A role added in a later `1.x` revision must be optional and go in a separate tuple, never into `ROLES`.
+
+`schema.py` also holds the package shape (`TOP_LEVEL_KEYS`: `schema`, `name`, `modes`, `logo`, `background`, `copy`; `copy.newChatHeading`), the text limits, the asset size and dimension limits, and every contrast or distance threshold. `SCHEMA_MAJOR` (1) is the value discovery advertises.
+
+Package layout: `theme.json` plus `assets/`. Asset paths in `theme.json` are relative to the package root and sit under `assets/`. A `logo` block has both modes; a `background` block, when present, has both keys with `null` meaning flat `surface.base`; omitting it means flat in both modes.
+
+## Validator API
+
+```
+check_package(theme_json, assets) -> PackageResult   # errors, warnings, normalised theme, stored assets
+validate_package(theme_json, assets) -> list[ValidationError]
+```
+
+`theme_json` is a dict, str or bytes; `assets` maps package path (`assets/logo-dark.svg`) to bytes. `PackageResult.ok` is true with no errors; then `theme` is the normalised theme (colors as `#rrggbb`, asset values still package paths) and `assets` maps each referenced path to a `StoredAsset` (mime sniffed from bytes, sha256 of the bytes to store, SVGs sanitised, raster width/height).
+
+**Error shape.** `ValidationError {path, code, message}`: `path` is dotted (`modes.dark.text.muted`, `logo.light`), `code` is stable, `message` says what to change. API form: `BrandThemeIssue`. Warnings use the same shape and never block (`unreferenced_asset`, what the sanitiser removed).
+
+**Codes and tags.** `ERROR_CODES` maps each code to a tag. `unsafe` means Cinna Desktop's safety checks must also catch it; `incompatible` means only core refuses it.
+
+- `unsafe`: `invalid_json`, `invalid_type`, `schema_mismatch`, `missing_key`, `missing_role`, `invalid_color`, `color_alpha`, `invalid_text`, `text_too_long`, `invalid_asset_path`, `missing_asset`, `unsupported_asset_type`, `asset_too_large`, `asset_corrupt`, `svg_encoding`, `svg_entities`, `svg_parse`, `svg_not_svg`, `svg_missing_viewbox`, `svg_too_complex`.
+- `incompatible`: `color_out_of_gamut`, `asset_animated`, `unknown_key`, `name_too_long`, `low_contrast`, `chart_slots_too_similar`, `bubble_indistinct`, `accent_reads_as_danger`, `logo_too_small`, `logo_aspect`, `background_too_small`, `background_unreadable`, `background_modes_swapped`.
+
+Unknown keys are `incompatible` on purpose: the desktop ignores them for forward compatibility, only core refuses them.
+
+**Rules in `incompatible`.**
+- Contrast, per mode: `text.primary` against `surface.base`, `surface.raised` and `surface.input`, and `text.secondary` against `surface.base` and `surface.raised`, at 4.5; `accent.on` on `accent` and `accent.hover` at 4.5; each `status.<kind>.text` on `surface.base` at 4.5; `text.muted`, `accent`, each `status.<kind>`, the chart categorical slots, `chart.pos` and `chart.neg` against `surface.base` at 3.0; `text.primary` on `bubble.user` at 4.5.
+- Chart slots 1-8 are at least OKLab delta E 0.08 apart; `bubble.user` is at least 0.03 from `surface.base`.
+- `accent` with OKLCH chroma above 0.1 must be at least 20 degrees of hue away from `status.danger`.
+- Logo: SVG up to 256 KiB, raster up to 1 MiB and at least 124 px tall, aspect at most 10:1 (drawn `contain` into 240x62, must stay 24 px or taller).
+- Background: SVG up to 512 KiB, raster up to 3 MiB and at least 1600x1000, at most 4096 on a side; with both modes present the dark median luminance must be lower than the light one.
+- **Readability.** Each background is reduced to a 64x40 sample (rasters with Pillow, SVGs rasterised with `resvg-py`, imported lazily; the sample is composited over `surface.base`). For `text.primary` and `text.secondary`, at least 95 % of sampled pixels must give a contrast of 4.5 or more; otherwise `background_unreadable`, with advice to lighten or darken the image or the text color. Soft images (mesh, blur) pass, photos and busy patterns usually do not.
+
+Asset type is decided from the bytes, not the file name.
+
+## SVG Sanitiser
+
+`sanitise_svg(data)` returns the bytes core stores and serves (the upload is never kept) and a list of what it removed; it raises `SvgRefused(code, message)` for refusals. Output is re-serialised deterministically and the function is idempotent.
+
+- Refused: not UTF-8, an internal DTD subset or any `<!ENTITY` (`svg_entities`), not well-formed XML, root other than `<svg xmlns="http://www.w3.org/2000/svg">`, no usable `viewBox`, more than 20,000 elements (`svg_too_complex`).
+- Element allowlist (`ALLOWED_ELEMENTS`): `svg g path rect circle ellipse line polyline polygon defs linearGradient radialGradient stop clipPath mask title`. Other elements are removed with their subtree (`script`, `foreignObject`, `image`, `use`, `style`, `a`, editor metadata).
+- Attributes: only `ALLOWED_ATTRIBUTES` (presentation properties plus geometry and structure attributes); `on*` handlers, `class` and editor namespaces go. `href` survives only as a local `#id`; `url(...)` survives only as `url(#id)`; `style` keeps only allowed presentation properties with safe values.
+- Comments, processing instructions, a plain DOCTYPE and text outside `<title>` are dropped.
+- A DTD internal subset (including `<!ATTLIST>` defaults) or any entity declaration is refused (`svg_entities`). Detection is done by expat while parsing, not by pattern matching, so a `>` inside a quoted system id or a decoy DOCTYPE in a comment cannot slip past it.
+- More than 20,000 elements or nesting deeper than 64 is refused (`svg_too_complex`).
+
+Clients also draw the logo and background only through an image element, never inline.
+
+## Package Reader
+
+`package.py`: `read_zip` (at most 64 entries, per-file cap, 16 MiB total uncompressed, no absolute, backslash or `..` entry names, `theme.json` at the root or inside one top-level folder, OS junk ignored, reads capped regardless of the zip header), `assets_from_files` (loose uploads keyed by base name under `assets/`, with the same 64-file and 16 MiB caps; two files with one name are refused), `read_folder` (for tools and fixtures). Failures raise `PackageError(code, message)` with `invalid_package` or `missing_theme`; the route turns them into an upload result with path `package`.
+
+## Storage
+
+Migration: `backend/app/alembic/versions/f725f8313224_add_brand_theme_tables.py`.
+
+**`brand_theme`** (`BrandTheme`): `id`, `status` (`draft` | `published`), `name`, `theme_json` (JSONB, normalised, asset values are package paths), `asset_map` (JSONB, package path to sha256), `revision` (null until first published), `created_by_id`, `published_by_id` (FK `user.id`, SET NULL), `published_at`, `created_at`, `updated_at`. A partial unique index `uq_brand_theme_one_published` allows at most one row with `status = 'published'`. A new look is a new upload. The only content change a row sees is at publish, when re-validation stores the current sanitiser's and normaliser's output. At most `BRAND_THEME_MAX_DRAFTS` (20) rows are kept.
+
+**`brand_theme_asset`** (`BrandThemeAsset`): `sha256` (PK), `mime`, `bytes` column (attribute `size`), `width`, `height`, `data` (bytea), `created_at`. Content-addressed and shared between drafts; an asset no remaining draft uses is deleted with the draft.
+
+**Revisions** come from the Postgres sequence `brand_theme_revision_seq` on every publish, not from `max(revision) + 1`, so deleting all rows can never make a later publish reuse a revision a client holds as its ETag.
+
+Service behaviour (`BrandThemeService`): creating a draft runs `check_package` and stores nothing on failure; every write (create, delete, publish, unpublish) holds one transaction-level advisory lock, so asset reuse and asset garbage collection never interleave; `publish` re-validates, rewrites the stored theme and assets if the current sanitiser would produce different bytes, demotes the current published row, assigns a new revision, and returns whether anything changed (no-op when the theme is already live and unchanged); deleting a published theme gives 409; `unpublish` returns the previous row or none.
+
+## Routes
+
+Prefix `/api/v1`. Router tag `brand-theme`.
+
+Public, unauthenticated, rate-limited per caller (`BRAND_THEME_RATE_LIMIT_PER_MIN`, default 600, one budget shared by both reads, 429 with `Retry-After`):
+
+| Method and path | Behaviour |
+|-----------------|-----------|
+| `GET /api/v1/brand-theme` | The served document (`BrandThemePublic`), or 204 when none is published. Headers: `ETag: "<revision>"`, `Cache-Control: no-cache`; a matching `If-None-Match` gets 304. |
+| `GET /api/v1/brand-theme/assets/{sha256}` | Stored bytes, 404 unless a 64-hex hash matches. Headers: `Cache-Control: public, max-age=31536000, immutable`, `X-Content-Type-Options: nosniff`, `ETag: "<sha256>"`; SVG also gets `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'`. |
+
+Superuser only (`get_current_active_superuser`):
+
+| Method and path | Behaviour |
+|-----------------|-----------|
+| `POST /api/v1/admin/brand-theme/drafts` | Multipart: either `package` (zip) or `theme` (+ optional `files`), not both (400). Returns `BrandThemeUploadResult {id, errors, warnings}`; `id` is null and nothing saved when `errors` is non-empty. 413 for oversize bodies; 409 when the draft limit is reached. |
+| `GET /api/v1/admin/brand-theme/drafts` | `BrandThemeDraftsPublic {data, count, max_drafts}`, newest first, published included. |
+| `GET /api/v1/admin/brand-theme/drafts/{theme_id}` | `BrandThemeDraftPublic`, including `document`, the served projection with asset URLs. |
+| `DELETE /api/v1/admin/brand-theme/drafts/{theme_id}` | 204; 409 while published. |
+| `POST /api/v1/admin/brand-theme/drafts/{theme_id}/publish` | Re-validates; 409 with `{errors: [...]}` if it fails; returns the draft. |
+| `POST /api/v1/admin/brand-theme/unpublish` | 204, idempotent. |
+
+The served document is built by `served.served_document(theme, assets_by_path, revision)`: `{schema, revision, theme, assets}`, where each logo and background path in `theme` is replaced by an asset object `{url, type, bytes, sha256, width?, height?}` (`url` is relative to the server, `/api/v1/brand-theme/assets/<sha256>`) and the same objects are listed under `assets` keyed `logo.dark`, `logo.light`, `background.dark`, `background.light`. A `null` background mode stays `null`.
+
+nginx: `/api/` already reaches the backend, so no proxy change is needed.
+
+## Discovery
+
+`GET /.well-known/cinna-desktop` (`cinna_desktop_discovery` in `backend/app/main.py`) adds `brand_theme: {schema: <SCHEMA_MAJOR>, url: <backend base>/api/v1/brand-theme}` only while a theme is published. Discovery is cached by the desktop for a whole session, so freshness comes from the theme endpoint's ETag, not from discovery. See [Desktop App Authentication](../desktop_auth/desktop_auth.md).
+
+## Event
+
+`EventType.BRAND_THEME_UPDATED` = `brand_theme.updated`, meta `{published: bool, revision: int | null}` (`revision` null after an unpublish). Emitted by `BrandThemeEvents.updated` as a background task after a publish that changed something or an unpublish that removed something; broadcast to all connected clients (the theme is public). It never raises, because the change has already committed. Cinna Desktop polls the endpoint in this release and does not listen. See [Real-Time Event Bus System](../realtime_events/event_bus_system.md).
+
+## Shared Fixtures
+
+`backend/app/services/brand_theme/fixtures/` is part of the contract and is **copied by Cinna Desktop** so its parser and safety checks are tested against what core produces. The layout is described in `backend/app/services/brand_theme/fixtures/README.md`.
+
+`backend/tests/unit/test_brand_theme_fixtures.py` checks every `invalid/` package fails with exactly the errors in its `expect.json`, each tag agrees with `ERROR_CODES`, SVG cases match their goldens, the sanitiser is idempotent, and every `served/` snapshot equals what the projection produces. After an intended change, regenerate the goldens and snapshots:
+
+```
+BRAND_THEME_REGEN_FIXTURES=1 python -m pytest tests/unit/test_brand_theme_fixtures.py
+```
+
+then review the diff and re-copy the fixtures into Cinna Desktop.
+
+API behaviour (upload, publish, public endpoint, headers) is covered in `backend/tests/api/brand_theme/`.
+
+## Configuration
+
+`BRAND_THEME_RATE_LIMIT_PER_MIN` (`backend/app/core/config.py`, default 600): per-IP budget for the two public reads. Dependency: `resvg-py` (`backend/pyproject.toml`).

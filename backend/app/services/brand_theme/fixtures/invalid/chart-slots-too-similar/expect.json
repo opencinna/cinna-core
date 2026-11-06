@@ -1,0 +1,9 @@
+{
+  "tag": "incompatible",
+  "errors": [
+    {
+      "path": "modes.light.chart.6",
+      "code": "chart_slots_too_similar"
+    }
+  ]
+}

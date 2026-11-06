@@ -1,0 +1,9 @@
+{
+  "tag": "unsafe",
+  "errors": [
+    {
+      "path": "background.light",
+      "code": "missing_key"
+    }
+  ]
+}

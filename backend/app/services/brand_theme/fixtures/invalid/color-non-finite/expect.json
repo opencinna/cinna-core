@@ -1,0 +1,9 @@
+{
+  "tag": "unsafe",
+  "errors": [
+    {
+      "path": "modes.dark.chart.6",
+      "code": "invalid_color"
+    }
+  ]
+}

@@ -66,11 +66,15 @@ if settings.SENTRY_DSN and settings.ENVIRONMENT != "local":
 # Registered at root level (not under /api/v1) per RFC 8615 /.well-known/
 from fastapi import APIRouter as _APIRouter
 
+from app.api.deps import SessionDep
+from app.services.brand_theme.brand_theme_service import BrandThemeService
+from app.services.brand_theme.schema import SCHEMA_MAJOR as BRAND_THEME_SCHEMA_MAJOR
+
 _desktop_wellknown_router = _APIRouter(tags=["desktop-auth"])
 
 
 @_desktop_wellknown_router.get("/.well-known/cinna-desktop")
-def cinna_desktop_discovery() -> dict:
+def cinna_desktop_discovery(session: SessionDep) -> dict:
     """Return instance metadata for Cinna Desktop app discovery.
 
     Endpoint field names follow RFC 8414 (OAuth 2.0 Authorization Server
@@ -113,6 +117,24 @@ def cinna_desktop_discovery() -> dict:
             # Same value /cli/agents/{id}/sync-runtime returns, from the same
             # setting, so the two can never diverge.
             "mutagen_version": settings.MUTAGEN_VERSION,
+        }
+
+    # Brand theme (README B8): present only while a theme is published. It
+    # advertises the schema major version, never the revision — a desktop
+    # caches discovery for its whole session, so freshness comes from the
+    # theme endpoint's ETag. Backend origin, like the endpoints above.
+    # Optional and never worth failing discovery for: the auth endpoints
+    # above must survive a brand-theme query error.
+    try:
+        has_brand_theme = BrandThemeService.published(session) is not None
+    except Exception:
+        logger.exception("Brand theme lookup failed; omitting it from discovery")
+        session.rollback()
+        has_brand_theme = False
+    if has_brand_theme:
+        payload["brand_theme"] = {
+            "schema": BRAND_THEME_SCHEMA_MAJOR,
+            "url": f"{settings.backend_base_url}{settings.API_V1_STR}/brand-theme",
         }
 
     return payload

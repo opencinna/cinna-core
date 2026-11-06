@@ -1,0 +1,9 @@
+{
+  "tag": "incompatible",
+  "errors": [
+    {
+      "path": "modes.dark.text.muted",
+      "code": "low_contrast"
+    }
+  ]
+}

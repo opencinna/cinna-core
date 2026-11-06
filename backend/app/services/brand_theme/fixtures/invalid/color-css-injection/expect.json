@@ -1,0 +1,9 @@
+{
+  "tag": "unsafe",
+  "errors": [
+    {
+      "path": "modes.dark.highlight",
+      "code": "invalid_color"
+    }
+  ]
+}
