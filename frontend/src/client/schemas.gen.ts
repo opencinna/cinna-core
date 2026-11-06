@@ -15344,10 +15344,24 @@ export const BrandThemeIssueSchema = {
 export const BrandThemeLogoRefsSchema = {
     properties: {
         dark: {
-            '$ref': '#/components/schemas/BrandThemeAssetRef'
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/BrandThemeAssetRef'
+                },
+                {
+                    type: 'null'
+                }
+            ]
         },
         light: {
-            '$ref': '#/components/schemas/BrandThemeAssetRef'
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/BrandThemeAssetRef'
+                },
+                {
+                    type: 'null'
+                }
+            ]
         }
     },
     type: 'object',

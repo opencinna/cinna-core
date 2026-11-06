@@ -21,7 +21,7 @@ invalid/<rule>/
   expect.json                {"tag": "unsafe" | "incompatible",
                               "errors": [{"path": "...", "code": "..."}]}
   served/served.json         what a server that skipped validation would send
-                             (raw bytes; a missing asset gets an all-zero sha256)
+                             (raw bytes; a referenced file that is missing is served as null, as core serves a stored theme whose asset is gone)
 
 svg/<case>/
   input.svg                  an upload

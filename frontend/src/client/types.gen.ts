@@ -3459,8 +3459,8 @@ export type BrandThemeIssue = {
 };
 
 export type BrandThemeLogoRefs = {
-    dark: BrandThemeAssetRef;
-    light: BrandThemeAssetRef;
+    dark: (BrandThemeAssetRef | null);
+    light: (BrandThemeAssetRef | null);
 };
 
 export type BrandThemePublic = {

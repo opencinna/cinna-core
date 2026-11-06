@@ -16,22 +16,25 @@ const BRAND_THEME_STALE_TIME = 30 * 60 * 1000
 // may delay it this long, never block it.
 const BRAND_THEME_TIMEOUT_MS = 3000
 
+/**
+ * A real answer (a theme, or 204 → null) is cached for the stale time. A
+ * timeout or an error **throws**, so it is never cached as "no theme": the
+ * page shows stock meanwhile and the next mount or focus asks again, instead
+ * of a slow first request leaving the sign-in pages unbranded for 30 minutes.
+ */
 async function fetchBrandTheme(): Promise<BrandTheme | null> {
   const request = BrandThemeService.getBrandTheme()
   let timer: ReturnType<typeof setTimeout> | undefined
-  const timedOut = new Promise<null>((resolve) => {
+  const timedOut = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
       request.cancel()
-      resolve(null)
+      reject(new Error("brand theme request timed out"))
     }, BRAND_THEME_TIMEOUT_MS)
   })
   try {
     // 204 (no theme) resolves with no body → null.
     const payload = await Promise.race([request, timedOut])
     return payload ? parseBrandTheme(payload) : null
-  } catch {
-    // Branding must never break a sign-in page: any failure is stock Cinna.
-    return null
   } finally {
     clearTimeout(timer)
   }
@@ -52,8 +55,9 @@ export function useBrandTheme({ enabled = true }: { enabled?: boolean } = {}) {
     retry: false,
     enabled,
   })
+  // Branding must never break a sign-in page: an error is stock Cinna.
   return {
-    theme: enabled ? (query.data ?? null) : null,
+    theme: enabled && !query.isError ? (query.data ?? null) : null,
     isPending: enabled && query.isPending,
   }
 }

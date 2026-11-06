@@ -112,19 +112,16 @@ export function BrandThemePreview({
           )}
           <div className="relative w-[240px] space-y-2.5 rounded-lg border bg-card p-4 shadow-sm">
             <p className="text-sm font-semibold text-foreground">Sign in</p>
-            <div
-              className="flex h-7 items-center rounded-md border px-2 text-xs"
-              style={{
-                backgroundColor: role("surface.input"),
-                color: role("text.muted"),
-              }}
-            >
+            {/* As the real sign-in pages draw them: a border-only input and
+                hint text in --muted-foreground (text.secondary), never the
+                unvalidated text.muted on surface.raised. */}
+            <div className="flex h-7 items-center rounded-md border border-input bg-transparent px-2 text-xs text-muted-foreground">
               you@example.com
             </div>
             <div className="flex h-7 items-center justify-center rounded-md bg-primary text-xs font-medium text-primary-foreground">
               Sign in
             </div>
-            <p className="text-[11px]" style={{ color: role("text.muted") }}>
+            <p className="text-[11px] text-muted-foreground">
               Forgot your password?
             </p>
           </div>

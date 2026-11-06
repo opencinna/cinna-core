@@ -71,8 +71,6 @@ const ASSET_PATH = /^\/api\/v1\/brand-theme\/assets\/[0-9a-f]{64}$/
  * under a shadcn token, so the auth pages' map stays the only map.
  */
 export const PREVIEW_ROLES = [
-  "surface.input",
-  "text.muted",
   "bubble.user",
   "status.success",
   "status.warning",

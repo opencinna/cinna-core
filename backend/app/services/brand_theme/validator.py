@@ -63,6 +63,8 @@ ERROR_CODES: dict[str, str] = {
     "text_too_long": UNSAFE,
     "invalid_asset_path": UNSAFE,
     "missing_asset": UNSAFE,
+    # Packaging rule, not safety: the served form has no paths at all.
+    "asset_path_nested": INCOMPATIBLE,
     "unsupported_asset_type": UNSAFE,
     "asset_too_large": UNSAFE,
     "asset_corrupt": UNSAFE,
@@ -360,6 +362,16 @@ class _Checker:
                 "invalid_asset_path",
                 f"{value!r} is not a valid asset path; use a relative path under {S.ASSET_DIR!r} "
                 "with no '..' segments.",
+            )
+            return None
+        if len(parts) != 2:
+            # Flat only: a browser folder or file upload keys files by name, so
+            # a nested path would pass a zip upload and fail every other way.
+            self.err(
+                where,
+                "asset_path_nested",
+                f"{value!r} is in a subfolder; put the file directly in {S.ASSET_DIR!r} "
+                f"(e.g. '{S.ASSET_DIR}{parts[-1]}') and update theme.json.",
             )
             return None
         self.referenced.add(value)

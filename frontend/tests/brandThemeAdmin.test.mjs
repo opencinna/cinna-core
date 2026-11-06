@@ -290,7 +290,13 @@ test("upload refused: grouped errors in the dialog, nothing listed", async (t) =
                 message: "Use a taller logo.",
               },
             ],
-            warnings: [],
+            warnings: [
+              {
+                path: "logo.dark",
+                code: "svg_sanitised",
+                message: "assets/logo.svg: removed <script>.",
+              },
+            ],
           },
         }
       },
@@ -305,10 +311,14 @@ test("upload refused: grouped errors in the dialog, nothing listed", async (t) =
   ])
   await dialog.getByRole("button", { name: "Upload" }).click()
 
-  const alert = dialog.getByRole("alert")
+  const alert = dialog.getByRole("alert").first()
   await expect(alert).toContainText(
     "Nothing was saved — fix 3 problems and upload again.",
   )
+  // The refusal's notes stay visible while the admin fixes the package.
+  const notes = dialog.getByRole("alert").nth(1)
+  await expect(notes).toContainText("Also 1 note (not blocking).")
+  await expect(notes).toContainText("removed <script>")
   const headings = await alert.locator("h4").allTextContents()
   assert.deepEqual(headings, ["General · 1", "Dark · 1", "Light · 1"])
   await expect(alert).toContainText("modes.dark.text.muted")
@@ -611,4 +621,30 @@ test("scoped builder: only a plain scope id; a bad preview role drops the previe
   doc.theme.modes.light["chart.8"] = "#ffffff;}body{display:none"
   assert.equal(parseBrandThemePreview(doc), null)
   assert.ok(parseBrandTheme(doc), "the auth pages ignore preview-only roles")
+})
+
+test("upload form: a package folder sends only assets/*, loose files send everything", async () => {
+  const { uploadFormData } = await server.ssrLoadModule(
+    "/src/components/Admin/BrandTheme/UploadBrandThemeDialog.tsx",
+  )
+  const file = (name) => new File(["x"], name)
+  const folder = uploadFormData({
+    kind: "files",
+    files: ["theme.json", "assets/bg-dark.webp", "README.md", "preview.html"].map(file),
+    size: 4,
+    suggestedTitle: "acme",
+  })
+  assert.equal(folder.theme.name, "theme.json")
+  assert.deepEqual(folder.files.map((f) => f.name), ["assets/bg-dark.webp"])
+  const loose = uploadFormData({
+    kind: "files",
+    files: ["theme.json", "logo-dark.svg", "bg.webp"].map(file),
+    size: 3,
+    suggestedTitle: "",
+  })
+  assert.deepEqual(loose.files.map((f) => f.name), ["logo-dark.svg", "bg.webp"])
+  assert.equal(
+    uploadFormData({ kind: "files", files: [file("logo.svg")], size: 1, suggestedTitle: "" }),
+    null,
+  )
 })

@@ -32,8 +32,10 @@ import {
 
 /**
  * A pick → the upload's form fields: a zip is the `package`; loose files are
- * `theme.json` as `theme` plus the rest as `files`. Null when loose files
- * carry no root `theme.json`.
+ * `theme.json` as `theme` plus the rest as `files`. A package folder (its
+ * files arrive under `assets/`) sends only `assets/*`, so working files next
+ * to theme.json (README, preview.html, unused candidates outside assets/) are
+ * not reported back as stray assets. Null when there is no root `theme.json`.
  */
 export function uploadFormData(
   source: UploadSource,
@@ -41,7 +43,14 @@ export function uploadFormData(
   if (source.kind === "archive") return { package: source.file }
   const theme = source.files.find((file) => file.name === "theme.json")
   if (!theme) return null
-  return { theme, files: source.files.filter((file) => file !== theme) }
+  const rest = source.files.filter((file) => file !== theme)
+  const isFolder = rest.some((file) => file.name.startsWith("assets/"))
+  return {
+    theme,
+    files: isFolder
+      ? rest.filter((file) => file.name.startsWith("assets/"))
+      : rest,
+  }
 }
 
 interface UploadBrandThemeDialogProps {
@@ -65,10 +74,14 @@ export function UploadBrandThemeDialog({
   const { showSuccessToast, showErrorToast } = useCustomToast()
   const [source, setSource] = useState<UploadSource | null>(null)
   const [refusal, setRefusal] = useState<BrandThemeIssue[] | null>(null)
+  // Notes that came back with a refusal (e.g. what the sanitiser would
+  // strip): still worth seeing while fixing the package.
+  const [refusalNotes, setRefusalNotes] = useState<BrandThemeIssue[]>([])
 
   const close = () => {
     setSource(null)
     setRefusal(null)
+    setRefusalNotes([])
     onOpenChange(false)
   }
 
@@ -78,6 +91,7 @@ export function UploadBrandThemeDialog({
     onSuccess: async (result) => {
       if (!result.id) {
         setRefusal(result.errors ?? [])
+        setRefusalNotes(result.warnings ?? [])
         return
       }
       // Held pending until the list has the new draft, so the preview that
@@ -133,6 +147,7 @@ export function UploadBrandThemeDialog({
                 setSource(next)
                 // The findings were about the previous pick.
                 setRefusal(null)
+                setRefusalNotes([])
               }}
               disabled={upload.isPending}
             />
@@ -151,6 +166,13 @@ export function UploadBrandThemeDialog({
                 refusal.length,
                 "problem",
               )} and upload again.`}
+            />
+          )}
+          {refusal && refusalNotes.length > 0 && (
+            <BrandThemeIssueList
+              tone="warning"
+              issues={refusalNotes}
+              headline={`Also ${plural(refusalNotes.length, "note")} (not blocking).`}
             />
           )}
 

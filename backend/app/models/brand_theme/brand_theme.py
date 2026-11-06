@@ -152,8 +152,11 @@ class BrandThemeAssetRef(BaseModel):
 
 
 class BrandThemeLogoRefs(BaseModel):
-    dark: BrandThemeAssetRef
-    light: BrandThemeAssetRef
+    # Always both for a theme core validated; null only if a stored asset has
+    # gone missing (served.py serves it as absent), which clients must treat
+    # as an invalid logo block.
+    dark: BrandThemeAssetRef | None
+    light: BrandThemeAssetRef | None
 
 
 class BrandThemeBackgroundRefs(BaseModel):

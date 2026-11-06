@@ -56,9 +56,9 @@ validate_package(theme_json, assets) -> list[ValidationError]
 **Codes and tags.** `ERROR_CODES` maps each code to a tag. `unsafe` means Cinna Desktop's safety checks must also catch it; `incompatible` means only core refuses it.
 
 - `unsafe`: `invalid_json`, `invalid_type`, `schema_mismatch`, `missing_key`, `missing_role`, `invalid_color`, `color_alpha`, `invalid_text`, `text_too_long`, `invalid_asset_path`, `missing_asset`, `unsupported_asset_type`, `asset_too_large`, `asset_corrupt`, `svg_encoding`, `svg_entities`, `svg_parse`, `svg_not_svg`, `svg_missing_viewbox`, `svg_too_complex`.
-- `incompatible`: `color_out_of_gamut`, `asset_animated`, `unknown_key`, `name_too_long`, `low_contrast`, `chart_slots_too_similar`, `bubble_indistinct`, `accent_reads_as_danger`, `logo_too_small`, `logo_aspect`, `background_too_small`, `background_unreadable`, `background_modes_swapped`.
+- `incompatible`: `asset_path_nested`, `color_out_of_gamut`, `asset_animated`, `unknown_key`, `name_too_long`, `low_contrast`, `chart_slots_too_similar`, `bubble_indistinct`, `accent_reads_as_danger`, `logo_too_small`, `logo_aspect`, `background_too_small`, `background_unreadable`, `background_modes_swapped`.
 
-Unknown keys are `incompatible` on purpose: the desktop ignores them for forward compatibility, only core refuses them.
+Unknown keys are `incompatible` on purpose: the desktop ignores them for forward compatibility, only core refuses them. Asset paths must sit directly in `assets/` (`asset_path_nested` otherwise): a browser folder or file upload keys files by name, so a nested path would pass a zip upload and fail the others. That rule is about packaging, not safety (the served form has no paths), hence `incompatible`.
 
 **Rules in `incompatible`.**
 - Contrast, per mode: `text.primary` against `surface.base`, `surface.raised` and `surface.input`, and `text.secondary` against `surface.base` and `surface.raised`, at 4.5; `accent.on` on `accent` and `accent.hover` at 4.5; each `status.<kind>.text` on `surface.base` at 4.5; `text.muted`, `accent`, each `status.<kind>`, the chart categorical slots, `chart.pos` and `chart.neg` against `surface.base` at 3.0; `text.primary` on `bubble.user` at 4.5.
@@ -108,7 +108,7 @@ Public, unauthenticated, rate-limited per caller (`BRAND_THEME_RATE_LIMIT_PER_MI
 | Method and path | Behaviour |
 |-----------------|-----------|
 | `GET /api/v1/brand-theme` | The served document (`BrandThemePublic`), or 204 when none is published. Headers: `ETag: "<revision>"`, `Cache-Control: no-cache`; a matching `If-None-Match` gets 304. |
-| `GET /api/v1/brand-theme/assets/{sha256}` | Stored bytes, 404 unless a 64-hex hash matches. Headers: `Cache-Control: public, max-age=31536000, immutable`, `X-Content-Type-Options: nosniff`, `ETag: "<sha256>"`; SVG also gets `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'`. |
+| `GET /api/v1/brand-theme/assets/{sha256}` | Stored bytes, 404 unless a 64-hex hash matches. Headers: `Cache-Control: public, max-age=31536000, immutable`, `X-Content-Type-Options: nosniff`, `ETag: "<sha256>"`; SVG also gets `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'`. Serves any stored asset, including a draft's: the admin preview loads them as `<img>`, which cannot send a bearer token. A draft asset is reachable only by its sha256, which cannot be guessed but is visible to whoever sees the admin's network traffic. |
 
 Superuser only (`get_current_active_superuser`):
 
@@ -149,7 +149,7 @@ API behaviour (upload, publish, public endpoint, headers) is covered in `backend
 
 ## Web sign-in pages
 
-`useBrandTheme()` queries `GET /api/v1/brand-theme` under the key `["brandTheme"]` (30 min stale time, 3 s timeout); a 204, an error or a timeout all mean stock. `parseBrandTheme` re-checks every color it uses against `^#[0-9a-f]{6}$` and drops the whole theme on any failure; an asset whose path is not `/api/v1/brand-theme/assets/<sha256>` is dropped alone. Asset paths are relative in the payload and are prefixed with the API base, so split-host deployments work.
+`useBrandTheme()` queries `GET /api/v1/brand-theme` under the key `["brandTheme"]` (30 min stale time, 3 s timeout); a 204 is cached as "no theme", while an error or a timeout throws, shows stock meanwhile and is asked again on the next mount or window focus, so a slow first request never leaves the pages unbranded for the stale time. `parseBrandTheme` re-checks every color it uses against `^#[0-9a-f]{6}$` and drops the whole theme on any failure; an asset whose path is not `/api/v1/brand-theme/assets/<sha256>` is dropped alone. Asset paths are relative in the payload and are prefixed with the API base, so split-host deployments work.
 
 `AuthBrandScope` always renders its wrapper element (so the form never remounts when the theme arrives) and, with a theme, sets `data-skin="brand"` on that element, never on `<html>`, plus a `<style>` built only from parsed tokens: light under `[data-skin="brand"]`, dark under `.dark [data-skin="brand"]`. The user's mode class decides which applies.
 
@@ -163,10 +163,10 @@ Skins: under a skin set on `<html>` (hacker-1980), the brand wins inside the sco
 
 `/admin/brand-theme` (superuser) reads `GET /api/v1/admin/brand-theme/drafts`; each draft's `document` is the served shape, so previews need no further request. Mutations invalidate the drafts query and the shared `["brandTheme"]` query.
 
-- **Upload** uses the shared `Common/UploadSourcePicker`: a zip goes as `package`; a folder or loose files go as `theme` (the root `theme.json`) plus `files` (Upload stays disabled without a `theme.json`). A refused upload keeps the dialog open with the issues; an accepted one opens the new draft's preview with the warnings.
+- **Upload** uses the shared `Common/UploadSourcePicker`: a zip goes as `package`; a folder or loose files go as `theme` (the root `theme.json`) plus `files` (Upload stays disabled without a `theme.json`); a package folder sends only its `assets/*`, so working files (README, preview.html) are not reported as stray assets. A refused upload keeps the dialog open with the issues and, below them, any non-blocking notes; an accepted one opens the new draft's preview with the warnings.
 - **Grouped issues** (`brandThemeIssues.ts`): `modes.dark.*`, `logo.dark`, `background.dark` → Dark; the light equivalents → Light; everything else → General; shown in that order with counts, path in monospace and the message. The same list renders a publish refusal (the 409 body's `errors`), after which Publish is disabled.
 - **Publish** happens only from the preview dialog; the row menu's Publish opens it. **Unpublish** and **Delete** confirm in an `AlertDialog`; Delete is disabled on the published row.
-- **Preview** (`BrandThemePreview`): one scoped element per pane with an explicit mode, so previews ignore the page's `.dark` class and never leak into each other. `buildScopedBrandCss` writes the tokens under a unique `data-brand-preview` id (the id is validated) from the same `BRAND_TOKEN_ROLES` map; the extra roles the mock shows (`PREVIEW_ROLES`: bubble.user, status.*, chart.1–8, …) go through the same hex check, and a draft that fails it shows "This draft can't be previewed" rather than a partial palette. The mock is `inert` with `role="img"`.
+- **Preview** (`BrandThemePreview`): one scoped element per pane with an explicit mode, so previews ignore the page's `.dark` class and never leak into each other. `buildScopedBrandCss` writes the tokens under a unique `data-brand-preview` id (the id is validated) from the same `BRAND_TOKEN_ROLES` map; the extra roles the mock shows (`PREVIEW_ROLES`: bubble.user, status.*, chart.1–8, …) go through the same hex check, and a draft that fails it shows "This draft can't be previewed" rather than a partial palette. The mock is `inert` with `role="img"`. Its sign-in card is drawn as the real pages draw it (border-only input, hint text in `--muted-foreground` = text.secondary), so the preview never shows worse contrast than users get.
 
 ## Authoring Skill (`brand-theme`)
 

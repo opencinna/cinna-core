@@ -408,3 +408,34 @@ test("device-login consent, no theme: stock page, no logo", async (t) => {
   await expect(scope(page)).toHaveCount(0)
   await expect(page.getByRole("img")).toHaveCount(0)
 })
+
+test("every role the web reads is a role of the contract (backend schema.ROLES)", async () => {
+  // The served fixture is generated from schema.ROLES, so its keys are the
+  // contract's role names; a misspelt role here would silently make every
+  // theme render stock (or "can't be previewed").
+  const { BRAND_TOKEN_ROLES, PREVIEW_ROLES } = await server.ssrLoadModule(
+    "/src/components/BrandTheme/brandTheme.ts",
+  )
+  for (const mode of ["dark", "light"]) {
+    const contract = new Set(Object.keys(SERVED.theme.modes[mode]))
+    assert.equal(contract.size, 35)
+    for (const role of [...Object.values(BRAND_TOKEN_ROLES), ...PREVIEW_ROLES]) {
+      assert.ok(contract.has(role), `${role} is not a contract role`)
+    }
+  }
+})
+
+test("a timed-out theme request is not cached as 'no theme': the next focus brands the page", async (t) => {
+  const { page, calls, release } = await open(t, "/layout", { hold: true })
+
+  // Past the 3 s timeout: stock, and the failure is not a cached answer.
+  await expect(page.getByRole("button", { name: "Log In" })).toBeVisible()
+  await page.waitForTimeout(3500)
+  await expect(scope(page)).toHaveCount(0)
+
+  release()
+  // React Query listens on window for visibilitychange.
+  await page.evaluate(() => window.dispatchEvent(new Event("visibilitychange")))
+  await expect(scope(page)).toHaveCount(1)
+  assert.ok(calls.filter((c) => c === "/api/v1/brand-theme").length >= 2)
+})

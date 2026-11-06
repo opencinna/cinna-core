@@ -164,8 +164,9 @@ def _raw_meta(data: bytes) -> AssetMeta:
 
 def _served_unchecked(fixture: Path) -> tuple[dict | None, dict[str, bytes]]:
     """What a server that skipped validation would send: the raw theme with
-    each asset path swapped for an asset object over the raw bytes (a path
-    with no file gets an all-zero sha256, which no bytes can match)."""
+    each asset path swapped for an asset object over the raw bytes. A path
+    with no file is served as null, exactly as core serves a stored theme
+    whose asset has gone missing."""
     theme, assets = read_folder(str(fixture))
     try:
         doc = json.loads(theme)
@@ -176,7 +177,8 @@ def _served_unchecked(fixture: Path) -> tuple[dict | None, dict[str, bytes]]:
         for mode in S.MODES:
             path = (doc.get(block) or {}).get(mode)
             if isinstance(path, str):
-                metas[path] = _raw_meta(assets[path]) if path in assets else AssetMeta("0" * 64, "application/octet-stream", 0)
+                if path in assets:
+                    metas[path] = _raw_meta(assets[path])
     return served_document(doc, metas, SERVED_REVISION), {}
 
 

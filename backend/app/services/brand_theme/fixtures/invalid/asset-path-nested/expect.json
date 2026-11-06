@@ -1,0 +1,13 @@
+{
+  "tag": "incompatible",
+  "errors": [
+    {
+      "path": "logo.dark",
+      "code": "asset_path_nested"
+    },
+    {
+      "path": "logo.light",
+      "code": "asset_path_nested"
+    }
+  ]
+}
