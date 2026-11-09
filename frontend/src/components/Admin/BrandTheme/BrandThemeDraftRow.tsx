@@ -44,7 +44,7 @@ interface BrandThemeDraftRowProps {
 }
 
 /**
- * One stored theme, in the Drafts card and in its Show-all Sheet. The row is
+ * One stored theme, in the Brand theme card and in its Show-all Sheet. The row is
  * the Preview control; the `⋯` menu holds Publish (which opens the preview,
  * the publish's confirmation), Unpublish and Delete.
  */
@@ -94,6 +94,12 @@ export function BrandThemeDraftRow({
   }
 
   const uploaded = formatRelativeTimestamp(draft.created_at)
+  // The published row carries the live-making fact; the upload moves to its
+  // info, and falls back to the meta line when the publish time is absent.
+  const publishedAt =
+    published && draft.published_at
+      ? formatRelativeTimestamp(draft.published_at)
+      : null
   const lastPublished =
     !published && draft.revision != null && draft.published_at
       ? formatRelativeTimestamp(draft.published_at)
@@ -133,13 +139,28 @@ export function BrandThemeDraftRow({
         }
         // Several drafts of one theme share a name; the upload time is what
         // tells them apart.
-        meta={uploaded && `Uploaded ${uploaded}`}
+        meta={
+          publishedAt
+            ? `Published ${publishedAt}`
+            : uploaded && `Uploaded ${uploaded}`
+        }
         flags={
           <RowInfo
-            facts={[
-              draft.created_by_email && `Uploaded by ${draft.created_by_email}`,
-              lastPublished && `Last published ${lastPublished}`,
-            ]}
+            facts={
+              published
+                ? [
+                    draft.published_by_email &&
+                      `Published by ${draft.published_by_email}`,
+                    publishedAt && uploaded && `Uploaded ${uploaded}`,
+                    draft.created_by_email &&
+                      `Uploaded by ${draft.created_by_email}`,
+                  ]
+                : [
+                    draft.created_by_email &&
+                      `Uploaded by ${draft.created_by_email}`,
+                    lastPublished && `Last published ${lastPublished}`,
+                  ]
+            }
           />
         }
       >
@@ -161,12 +182,9 @@ export function BrandThemeDraftRow({
         ) : (
           <RowActionsMenu label={`the brand theme ${name}`}>
             {published ? (
-              <DropdownMenuItem
-                onSelect={(e) => {
-                  e.preventDefault()
-                  setConfirm("unpublish")
-                }}
-              >
+              // The menu closes as the confirm opens, as Publish does;
+              // left open, it would reappear behind a cancelled confirm.
+              <DropdownMenuItem onSelect={() => setConfirm("unpublish")}>
                 <EyeOff />
                 Unpublish
               </DropdownMenuItem>
@@ -184,10 +202,7 @@ export function BrandThemeDraftRow({
             <DropdownMenuItem
               variant={published ? undefined : "destructive"}
               disabled={published}
-              onSelect={(e) => {
-                e.preventDefault()
-                setConfirm("delete")
-              }}
+              onSelect={() => setConfirm("delete")}
             >
               <Trash2 />
               {published ? "Unpublish to delete" : "Delete draft"}

@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client"
 import { Toaster } from "sonner"
 
 import { OpenAPI } from "@/client"
-import { BrandThemeAdmin } from "@/components/Admin/BrandTheme/BrandThemeAdmin"
+import { BrandThemeCard } from "@/components/Admin/BrandTheme/BrandThemeCard"
 import { BrandThemePreview } from "@/components/BrandTheme/BrandThemePreview"
 import {
   type BrandMode,
@@ -46,10 +46,11 @@ function Previews() {
 }
 
 const pages: Record<string, () => React.ReactNode> = {
-  // The route's body, without the route's auth guard and page header.
-  "/admin": () => (
-    <div className="p-6">
-      <BrandThemeAdmin />
+  // The Interface tab's card, in the tab's grid, without the route's auth
+  // guard, page header and the sibling cards' own queries.
+  "/admin/server-configuration": () => (
+    <div className="grid grid-cols-1 gap-6 p-6 lg:grid-cols-2 items-start">
+      <BrandThemeCard />
     </div>
   ),
   "/previews": () => <Previews />,

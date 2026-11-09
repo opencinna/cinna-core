@@ -21,7 +21,7 @@ import { getErrorMessage } from "@/utils"
 export const BRAND_THEME_DRAFTS_KEY = ["admin", "brandThemeDrafts"] as const
 
 /**
- * Unpublish is started from the Published card and from the published row,
+ * Unpublish is started from the published row in the card and in its Sheet,
  * each with its own confirm; one key lets both show the same wait.
  */
 const UNPUBLISH_KEY = ["admin", "brandTheme", "unpublish"] as const

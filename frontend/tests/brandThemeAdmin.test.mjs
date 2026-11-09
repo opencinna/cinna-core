@@ -1,6 +1,7 @@
-// Brand themes C3: the superuser admin page (`/admin/brand-theme`).
+// Brand themes C3: the Brand theme card on Admin → Server Configuration →
+// Interface (`/admin/server-configuration#interface`).
 //
-// Runs the production page body (`BrandThemeAdmin`) and the preview mock in
+// Runs the production card (`BrandThemeCard`) and the preview mock in
 // Chromium through a Vite harness. Drafts carry the backend's shared
 // `valid/full` served fixture as their `document`; every API call is answered
 // here from an in-memory list, at the harness's split-host base.
@@ -24,6 +25,7 @@ const SERVED = JSON.parse(
 )
 const API = "http://api.test"
 const DRAFTS = "/api/v1/admin/brand-theme/drafts"
+const ADMIN = "/admin/server-configuration"
 
 const ASSETS = new Map(
   Object.entries({
@@ -121,7 +123,7 @@ async function openAdmin(
   t,
   { drafts = [], maxDrafts = 20, mode = "light", handlers = {} } = {},
 ) {
-  const { page, calls } = await openPage(t, "/admin", { mode })
+  const { page, calls } = await openPage(t, ADMIN, { mode })
   const state = { drafts: [...drafts] }
   await page.route(`${API}/**`, async (route) => {
     const request = route.request()
@@ -173,7 +175,7 @@ async function openAdmin(
     }
     return serveAsset(route, url)
   })
-  await page.goto(`${baseUrl}/admin`)
+  await page.goto(`${baseUrl}${ADMIN}#interface`)
   return { page, calls, state }
 }
 
@@ -302,7 +304,7 @@ test("upload refused: grouped errors in the dialog, nothing listed", async (t) =
       },
     },
   })
-  await expect(page.getByText("No drafts yet.")).toBeVisible()
+  await expect(page.getByText(/^No themes yet\./)).toBeVisible()
   await page.getByRole("button", { name: "Upload" }).click()
   const dialog = page.getByRole("dialog", { name: "Upload theme package" })
   await pickFiles(page, [
@@ -331,7 +333,7 @@ test("upload refused: grouped errors in the dialog, nothing listed", async (t) =
   // The dialog and the pick stay; nothing was listed.
   await expect(dialog).toBeVisible()
   await expect(dialog.getByText(/2 files/)).toBeVisible()
-  await expect(page.getByText("No drafts yet.")).toBeVisible()
+  await expect(page.getByText(/^No themes yet\./)).toBeVisible()
 })
 
 test("upload: loose files without theme.json keep Upload disabled", async (t) => {
@@ -388,13 +390,17 @@ test("upload accepted: the draft is listed and its preview shows the notes", asy
   await preview.getByRole("button", { name: "Close" }).first().click()
   await expect(row(page)).toBeVisible()
   await expect(page.locator("body")).not.toHaveCSS("pointer-events", "none")
-  await expect(page.getByText("1 of 20 kept, newest first")).toBeVisible()
+  await expect(
+    page.getByText(
+      "The look of the sign-in pages and Cinna Desktop · 1 of 20 kept",
+    ),
+  ).toBeVisible()
 })
 
 test("publish happens from the preview; the menu's Publish only opens it", async (t) => {
   const { page, calls } = await openAdmin(t, { drafts: [draft("d1")] })
   await expect(
-    page.getByText("No theme is published, so this server shows stock Cinna."),
+    page.getByText("Nothing is published, so this server shows stock Cinna."),
   ).toBeVisible()
 
   await menu(page).click()
@@ -408,10 +414,12 @@ test("publish happens from the preview; the menu's Publish only opens it", async
   await expect(preview).toHaveCount(0)
   assert.ok(calls.includes(`POST ${DRAFTS}/d1/publish`))
 
-  // The Published card reads the same list: revision and publisher.
-  await expect(page.getByText("rev 7").first()).toBeVisible()
-  await expect(page.getByText("admin@example.com")).toBeVisible()
-  await expect(page.getByRole("button", { name: "Unpublish" })).toBeVisible()
+  // The row now carries the live-making fact, and the notice is gone.
+  await expect(row(page)).toContainText("rev 7")
+  await expect(row(page)).toContainText(/Published .+ago/)
+  await expect(
+    page.getByText("Nothing is published, so this server shows stock Cinna."),
+  ).toHaveCount(0)
   // Nothing is left open or inert under the closed dialog.
   await expect(page.getByRole("menu")).toHaveCount(0)
   await expect(page.locator("body")).not.toHaveCSS("pointer-events", "none")
@@ -447,7 +455,7 @@ test("publish refused (409): the preview shows the grouped errors", async (t) =>
   await expect(preview.getByRole("button", { name: "Publish" })).toBeDisabled()
   await expect(preview).toBeVisible()
   await expect(
-    page.getByText("No theme is published, so this server shows stock Cinna."),
+    page.getByText("Nothing is published, so this server shows stock Cinna."),
   ).toBeVisible()
 })
 
@@ -455,20 +463,27 @@ test("unpublish asks first, then the server shows stock Cinna", async (t) => {
   const { page, calls } = await openAdmin(t, {
     drafts: [published("p1"), draft("d2", { name: "Beta" })],
   })
-  await page.getByRole("button", { name: "Unpublish", exact: true }).click()
+  const unpublishFromMenu = async () => {
+    await menu(page, "Acme").click()
+    await page.getByRole("menuitem", { name: "Unpublish", exact: true }).click()
+  }
+  await unpublishFromMenu()
   const confirm = page.getByRole("alertdialog", { name: "Unpublish Acme?" })
   await expect(confirm).toContainText("Everyone returns to stock Cinna")
   await confirm.getByRole("button", { name: "Cancel" }).click()
   await expect(confirm).toHaveCount(0)
   assert.ok(!calls.some((c) => c.endsWith("/unpublish")))
+  // The menu closed as the confirm opened: nothing reappears after Cancel.
+  await expect(page.getByRole("menu")).toHaveCount(0)
+  await expect(page.locator("body")).not.toHaveCSS("pointer-events", "none")
 
-  await page.getByRole("button", { name: "Unpublish", exact: true }).click()
+  await unpublishFromMenu()
   await page.getByRole("button", { name: "Unpublish theme" }).click()
   await expect(
     page.getByText("Theme unpublished — this server shows stock Cinna"),
   ).toBeVisible()
   await expect(
-    page.getByText("No theme is published, so this server shows stock Cinna."),
+    page.getByText("Nothing is published, so this server shows stock Cinna."),
   ).toBeVisible()
   assert.ok(calls.includes("POST /api/v1/admin/brand-theme/unpublish"))
 })
@@ -489,6 +504,67 @@ test("unpublish from the published row's menu: the row owns the confirm", async 
   await expect(
     page.getByRole("menuitem", { name: "Delete draft" }),
   ).not.toHaveAttribute("aria-disabled", "true")
+})
+
+test("one Brand theme card; the published row carries the publish facts and opens its preview", async (t) => {
+  const { page } = await openAdmin(t, {
+    drafts: [draft("d2", { name: "Beta" }), published("p1")],
+  })
+  await expect(page.getByText("Brand theme", { exact: true })).toHaveCount(1)
+  await expect(page.getByText("Published theme")).toHaveCount(0)
+  await expect(page.getByText("Drafts", { exact: true })).toHaveCount(0)
+
+  // Pinned first although the list returns it second.
+  const rows = page.getByRole("button", { name: /^Preview the brand theme / })
+  await expect(rows.first()).toHaveAccessibleName(
+    "Preview the brand theme Acme",
+  )
+  const live = row(page, "Acme")
+  await expect(live).toContainText("rev 3")
+  await expect(live).toContainText(/Published .+ago/)
+  await expect(live).toContainText("Published by admin@example.com")
+  await expect(live).toContainText("Uploaded by ada@example.com")
+  await expect(row(page, "Beta")).toContainText(/Uploaded .+ago/)
+  await expect(
+    page.getByText("Nothing is published, so this server shows stock Cinna."),
+  ).toHaveCount(0)
+
+  await live.click()
+  const preview = page.getByRole("dialog", { name: "Acme" })
+  await expect(preview).toBeVisible()
+  await expect(previewScope(preview, "Dark")).toBeVisible()
+})
+
+test("an old published theme behind more than five newer drafts still renders first", async (t) => {
+  const newer = Array.from({ length: 6 }, (_, i) =>
+    draft(`d${i}`, {
+      name: `Draft ${i}`,
+      created_at: `2026-11-06T1${i}:00:00`,
+    }),
+  )
+  const { page } = await openAdmin(t, {
+    drafts: [
+      ...newer,
+      published("p1", { name: "Live", created_at: "2026-10-01T10:00:00" }),
+    ],
+  })
+  const rows = page.getByRole("button", { name: /^Preview the brand theme / })
+  await expect(rows).toHaveCount(5)
+  await expect(rows.first()).toHaveAccessibleName(
+    "Preview the brand theme Live",
+  )
+  await expect(rows.nth(1)).toHaveAccessibleName(
+    "Preview the brand theme Draft 0",
+  )
+  await page.getByRole("button", { name: "Show all (7)" }).click()
+  const sheet = page.getByRole("dialog", { name: "Brand themes" })
+  const sheetRows = sheet.getByRole("button", {
+    name: /^Preview the brand theme /,
+  })
+  await expect(sheetRows).toHaveCount(7)
+  await expect(sheetRows.first()).toHaveAccessibleName(
+    "Preview the brand theme Live",
+  )
 })
 
 test("delete: disabled with its reason on the published row, confirmed on a draft", async (t) => {

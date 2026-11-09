@@ -100,7 +100,7 @@ purpose. Run them from the folder that holds your package.
 ## Handing it to the admin
 
 A server superuser uploads the zip as a draft, previews it and publishes it
-(the admin brand theme page, or `POST /api/v1/admin/brand-theme/drafts` with
+(Admin → Server Configuration → Interface → Brand theme, or `POST /api/v1/admin/brand-theme/drafts` with
 the zip as `package`). Every Cinna Desktop on that server then takes the theme,
 and so do the server's sign-in pages. A change is a new upload, not an edit.
 

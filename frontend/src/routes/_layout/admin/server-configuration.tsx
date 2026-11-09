@@ -1,11 +1,11 @@
 import { createFileRoute, redirect } from "@tanstack/react-router"
 import { useEffect } from "react"
-
-import { AddonsPolicyCard } from "@/components/Admin/AddonsPolicyCard"
 import { CompanyAiCredentialsCard } from "@/components/Admin/AccessPolicy/CompanyAiCredentialsCard"
 import { NewUserDefaultsCard } from "@/components/Admin/AccessPolicy/NewUserDefaultsCard"
 import { RegistrationCard } from "@/components/Admin/AccessPolicy/RegistrationCard"
 import { SignInMethodsCard } from "@/components/Admin/AccessPolicy/SignInMethodsCard"
+import { AddonsPolicyCard } from "@/components/Admin/AddonsPolicyCard"
+import { BrandThemeCard } from "@/components/Admin/BrandTheme/BrandThemeCard"
 import { DisclaimerCard } from "@/components/Admin/DisclaimerCard"
 import { LandingPageCard } from "@/components/Admin/LandingPageCard"
 import { LocalAgentKitCard } from "@/components/Admin/LocalAgentKitCard"
@@ -69,8 +69,11 @@ function AdminServerConfiguration() {
       value: "interface",
       title: "Interface",
       content: (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        // Row 1 is what every user meets on the way in (the login disclaimer,
+        // the sign-in look); the developer starter kit drops to row 2.
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
           <DisclaimerCard />
+          <BrandThemeCard />
           <LocalAgentKitCard />
         </div>
       ),

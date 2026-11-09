@@ -27,8 +27,8 @@ Business rules: [Brand Themes](brand_themes.md).
 | Web: skin hand-back inside the scope | `frontend/src/styles/brand-scope.css` |
 | Web: hosts | `frontend/src/components/Common/AuthLayout.tsx`; `frontend/src/components/Auth/ConsentShell.tsx`, used by `NativeAuthConsentPage.tsx` (`branded` prop, set by the desktop and mobile consent routes) and `DeviceLoginConsentPage.tsx` (always branded) |
 | Web tests | `frontend/tests/brandTheme.test.mjs` (`npm run test:brand-theme:ui`) |
-| Admin page route | `frontend/src/routes/_layout/admin/brand-theme.tsx` (menu entry in `Sidebar/AdminMenu.tsx`) |
-| Admin page components | `frontend/src/components/Admin/BrandTheme/` (page body, published card, drafts card/row/sheet, upload dialog, preview dialog, grouped issue list, unpublish dialog, queries) |
+| Admin placement | `BrandThemeCard` rendered in the Interface tab of `frontend/src/routes/_layout/admin/server-configuration.tsx` (`/admin/server-configuration#interface`); the former `/admin/brand-theme` route and sidebar entry are removed |
+| Admin components | `frontend/src/components/Admin/BrandTheme/` (`BrandThemeCard`, row/sheet, upload dialog, preview dialog, grouped issue list, unpublish dialog, queries) |
 | Admin preview mock | `frontend/src/components/BrandTheme/BrandThemePreview.tsx` |
 | Admin tests | `frontend/tests/brandThemeAdmin.test.mjs` (`npm run test:brand-theme:admin:ui`) |
 
@@ -159,9 +159,9 @@ Placement: in `AuthLayout` the decorative panel (≥ 1024 px only) shows the bac
 
 Skins: under a skin set on `<html>` (hacker-1980), the brand wins inside the scope. Tier A tokens come from the map; `brand-scope.css` resets `--radius` and the skin's decorative tokens and hands the skin's card, title, button, input and scrollbar rules back to the stock styles with `revert-layer`, keeping the stock focus ring. Portalled menus, toasts and tooltips render outside the scope and keep the stock or skin look.
 
-## Admin Page
+## Admin Card
 
-`/admin/brand-theme` (superuser) reads `GET /api/v1/admin/brand-theme/drafts`; each draft's `document` is the served shape, so previews need no further request. Mutations invalidate the drafts query and the shared `["brandTheme"]` query.
+The `BrandThemeCard` (Server Configuration → Interface, superuser) reads `GET /api/v1/admin/brand-theme/drafts`; each draft's `document` is the served shape, so previews need no further request. Mutations invalidate the drafts query and the shared `["brandTheme"]` query.
 
 - **Upload** uses the shared `Common/UploadSourcePicker`: a zip goes as `package`; a folder or loose files go as `theme` (the root `theme.json`) plus `files` (Upload stays disabled without a `theme.json`); a package folder sends only its `assets/*`, so working files (README, preview.html) are not reported as stray assets. A refused upload keeps the dialog open with the issues and, below them, any non-blocking notes; an accepted one opens the new draft's preview with the warnings.
 - **Grouped issues** (`brandThemeIssues.ts`): `modes.dark.*`, `logo.dark`, `background.dark` → Dark; the light equivalents → Light; everything else → General; shown in that order with counts, path in monospace and the message. The same list renders a publish refusal (the 409 body's `errors`), after which Publish is disabled.

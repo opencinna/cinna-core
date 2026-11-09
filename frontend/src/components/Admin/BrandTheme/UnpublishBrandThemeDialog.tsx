@@ -19,7 +19,7 @@ interface UnpublishBrandThemeDialogProps {
 
 /**
  * S6 — confirm taking the server's theme down. Owned by whoever opened it
- * (the Published card, the published row), never by a menu item, which would
+ * (the published row, in the card or its Sheet), never by a menu item, which would
  * unmount and take the pending state with it.
  */
 export function UnpublishBrandThemeDialog({

@@ -69,7 +69,6 @@ import { Route as LayoutAdminMcpDirectoryRouteImport } from './routes/_layout/ad
 import { Route as LayoutAdminMarketplacesRouteImport } from './routes/_layout/admin/marketplaces'
 import { Route as LayoutAdminLlmProvidersRouteImport } from './routes/_layout/admin/llm-providers'
 import { Route as LayoutAdminCatalogRouteImport } from './routes/_layout/admin/catalog'
-import { Route as LayoutAdminBrandThemeRouteImport } from './routes/_layout/admin/brand-theme'
 import { Route as LayoutAdminAiCredentialsRouteImport } from './routes/_layout/admin/ai-credentials'
 import { Route as LayoutAdminAgentEnvsRouteImport } from './routes/_layout/admin/agent-envs'
 import { Route as LayoutCatalogSkillsIndexRouteImport } from './routes/_layout/catalog/skills/index'
@@ -394,11 +393,6 @@ const LayoutAdminCatalogRoute = LayoutAdminCatalogRouteImport.update({
   path: '/admin/catalog',
   getParentRoute: () => LayoutRoute,
 } as any)
-const LayoutAdminBrandThemeRoute = LayoutAdminBrandThemeRouteImport.update({
-  id: '/admin/brand-theme',
-  path: '/admin/brand-theme',
-  getParentRoute: () => LayoutRoute,
-} as any)
 const LayoutAdminAiCredentialsRoute =
   LayoutAdminAiCredentialsRouteImport.update({
     id: '/admin/ai-credentials',
@@ -517,7 +511,6 @@ export interface FileRoutesByFullPath {
   '/login/': typeof LoginIndexRoute
   '/admin/agent-envs': typeof LayoutAdminAgentEnvsRoute
   '/admin/ai-credentials': typeof LayoutAdminAiCredentialsRoute
-  '/admin/brand-theme': typeof LayoutAdminBrandThemeRoute
   '/admin/catalog': typeof LayoutAdminCatalogRoute
   '/admin/llm-providers': typeof LayoutAdminLlmProvidersRoute
   '/admin/marketplaces': typeof LayoutAdminMarketplacesRoute
@@ -589,7 +582,6 @@ export interface FileRoutesByTo {
   '/login': typeof LoginIndexRoute
   '/admin/agent-envs': typeof LayoutAdminAgentEnvsRoute
   '/admin/ai-credentials': typeof LayoutAdminAiCredentialsRoute
-  '/admin/brand-theme': typeof LayoutAdminBrandThemeRoute
   '/admin/catalog': typeof LayoutAdminCatalogRoute
   '/admin/llm-providers': typeof LayoutAdminLlmProvidersRoute
   '/admin/marketplaces': typeof LayoutAdminMarketplacesRoute
@@ -667,7 +659,6 @@ export interface FileRoutesById {
   '/login/': typeof LoginIndexRoute
   '/_layout/admin/agent-envs': typeof LayoutAdminAgentEnvsRoute
   '/_layout/admin/ai-credentials': typeof LayoutAdminAiCredentialsRoute
-  '/_layout/admin/brand-theme': typeof LayoutAdminBrandThemeRoute
   '/_layout/admin/catalog': typeof LayoutAdminCatalogRoute
   '/_layout/admin/llm-providers': typeof LayoutAdminLlmProvidersRoute
   '/_layout/admin/marketplaces': typeof LayoutAdminMarketplacesRoute
@@ -745,7 +736,6 @@ export interface FileRouteTypes {
     | '/login/'
     | '/admin/agent-envs'
     | '/admin/ai-credentials'
-    | '/admin/brand-theme'
     | '/admin/catalog'
     | '/admin/llm-providers'
     | '/admin/marketplaces'
@@ -817,7 +807,6 @@ export interface FileRouteTypes {
     | '/login'
     | '/admin/agent-envs'
     | '/admin/ai-credentials'
-    | '/admin/brand-theme'
     | '/admin/catalog'
     | '/admin/llm-providers'
     | '/admin/marketplaces'
@@ -894,7 +883,6 @@ export interface FileRouteTypes {
     | '/login/'
     | '/_layout/admin/agent-envs'
     | '/_layout/admin/ai-credentials'
-    | '/_layout/admin/brand-theme'
     | '/_layout/admin/catalog'
     | '/_layout/admin/llm-providers'
     | '/_layout/admin/marketplaces'
@@ -1383,13 +1371,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutAdminCatalogRouteImport
       parentRoute: typeof LayoutRoute
     }
-    '/_layout/admin/brand-theme': {
-      id: '/_layout/admin/brand-theme'
-      path: '/admin/brand-theme'
-      fullPath: '/admin/brand-theme'
-      preLoaderRoute: typeof LayoutAdminBrandThemeRouteImport
-      parentRoute: typeof LayoutRoute
-    }
     '/_layout/admin/ai-credentials': {
       id: '/_layout/admin/ai-credentials'
       path: '/admin/ai-credentials'
@@ -1575,7 +1556,6 @@ interface LayoutRouteChildren {
   LayoutIndexRoute: typeof LayoutIndexRoute
   LayoutAdminAgentEnvsRoute: typeof LayoutAdminAgentEnvsRoute
   LayoutAdminAiCredentialsRoute: typeof LayoutAdminAiCredentialsRoute
-  LayoutAdminBrandThemeRoute: typeof LayoutAdminBrandThemeRoute
   LayoutAdminCatalogRoute: typeof LayoutAdminCatalogRoute
   LayoutAdminLlmProvidersRoute: typeof LayoutAdminLlmProvidersRoute
   LayoutAdminMarketplacesRoute: typeof LayoutAdminMarketplacesRoute
@@ -1617,7 +1597,6 @@ const LayoutRouteChildren: LayoutRouteChildren = {
   LayoutIndexRoute: LayoutIndexRoute,
   LayoutAdminAgentEnvsRoute: LayoutAdminAgentEnvsRoute,
   LayoutAdminAiCredentialsRoute: LayoutAdminAiCredentialsRoute,
-  LayoutAdminBrandThemeRoute: LayoutAdminBrandThemeRoute,
   LayoutAdminCatalogRoute: LayoutAdminCatalogRoute,
   LayoutAdminLlmProvidersRoute: LayoutAdminLlmProvidersRoute,
   LayoutAdminMarketplacesRoute: LayoutAdminMarketplacesRoute,
