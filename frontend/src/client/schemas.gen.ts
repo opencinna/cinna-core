@@ -34912,6 +34912,34 @@ export const ServerConfigSchema = {
             title: 'Addons Stdio Mcp',
             default: true
         },
+        voice_transcription_enabled: {
+            type: 'boolean',
+            title: 'Voice Transcription Enabled',
+            default: false
+        },
+        voice_transcription_provider_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Voice Transcription Provider Id'
+        },
+        voice_transcription_monthly_minutes_per_user: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Voice Transcription Monthly Minutes Per User'
+        },
         updated_at: {
             type: 'string',
             format: 'date-time',
@@ -35106,6 +35134,42 @@ export const ServerConfigUpdateSchema = {
                 }
             ],
             title: 'Addons Stdio Mcp'
+        },
+        voice_transcription_enabled: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Voice Transcription Enabled'
+        },
+        voice_transcription_provider_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Voice Transcription Provider Id'
+        },
+        voice_transcription_monthly_minutes_per_user: {
+            anyOf: [
+                {
+                    type: 'integer',
+                    maximum: 44640,
+                    minimum: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Voice Transcription Monthly Minutes Per User'
         }
     },
     type: 'object',
@@ -42640,6 +42704,175 @@ export const ValidationErrorSchema = {
     type: 'object',
     required: ['loc', 'msg', 'type'],
     title: 'ValidationError'
+} as const;
+
+export const VoiceTranscriptionProviderOptionSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        type: {
+            type: 'string',
+            title: 'Type'
+        }
+    },
+    type: 'object',
+    required: ['id', 'name', 'type'],
+    title: 'VoiceTranscriptionProviderOption',
+    description: 'A speech-capable AI provider an admin may pick.'
+} as const;
+
+export const VoiceTranscriptionTestRequestSchema = {
+    properties: {
+        provider_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Provider Id'
+        }
+    },
+    type: 'object',
+    title: 'VoiceTranscriptionTestRequest',
+    description: 'Admin "Test": probe this provider, or the configured one when omitted.'
+} as const;
+
+export const VoiceTranscriptionTestResultSchema = {
+    properties: {
+        ok: {
+            type: 'boolean',
+            title: 'Ok'
+        },
+        error: {
+            anyOf: [
+                {
+                    type: 'string',
+                    enum: ['invalid_key', 'unreachable', 'quota', 'disabled']
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Error'
+        }
+    },
+    type: 'object',
+    required: ['ok'],
+    title: 'VoiceTranscriptionTestResult'
+} as const;
+
+export const VoiceTranscriptionUsagePublicSchema = {
+    properties: {
+        enabled: {
+            type: 'boolean',
+            title: 'Enabled'
+        },
+        used_seconds: {
+            type: 'number',
+            title: 'Used Seconds'
+        },
+        cap_seconds: {
+            anyOf: [
+                {
+                    type: 'number'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Cap Seconds'
+        },
+        period_end: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Period End'
+        }
+    },
+    type: 'object',
+    required: ['enabled', 'used_seconds', 'cap_seconds', 'period_end'],
+    title: 'VoiceTranscriptionUsagePublic',
+    description: "The caller's own usage for the current month."
+} as const;
+
+export const VoiceTranscriptionUsageReportSchema = {
+    properties: {
+        period_start: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Period Start'
+        },
+        period_end: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Period End'
+        },
+        rows: {
+            items: {
+                '$ref': '#/components/schemas/VoiceTranscriptionUsageRow'
+            },
+            type: 'array',
+            title: 'Rows'
+        },
+        total_seconds: {
+            type: 'number',
+            title: 'Total Seconds'
+        },
+        total_sessions: {
+            type: 'integer',
+            title: 'Total Sessions'
+        }
+    },
+    type: 'object',
+    required: ['period_start', 'period_end', 'rows', 'total_seconds', 'total_sessions'],
+    title: 'VoiceTranscriptionUsageReport',
+    description: 'Admin per-user usage for one month.'
+} as const;
+
+export const VoiceTranscriptionUsageRowSchema = {
+    properties: {
+        user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'User Id'
+        },
+        email: {
+            type: 'string',
+            title: 'Email'
+        },
+        full_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Full Name'
+        },
+        seconds: {
+            type: 'number',
+            title: 'Seconds'
+        },
+        sessions: {
+            type: 'integer',
+            title: 'Sessions'
+        }
+    },
+    type: 'object',
+    required: ['user_id', 'email', 'seconds', 'sessions'],
+    title: 'VoiceTranscriptionUsageRow'
 } as const;
 
 export const WebappDataApiRequestSchema = {

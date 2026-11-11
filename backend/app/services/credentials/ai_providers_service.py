@@ -83,6 +83,7 @@ from app.models.credentials.provider_admin_credential import (
     AIProviderVerifyResult,
     ProviderAdminCredentialConfig,
 )
+from app.models.server_config.server_config import ServerConfig
 from app.models.users.user import User
 from app.services.ai_providers import registry
 from app.services.ai_providers.base import KeyProvisioner, ProviderAdminError
@@ -122,10 +123,17 @@ class AIProviderInUseError(Exception):
 
     def __init__(self, impact: AIProviderDeleteImpact) -> None:
         self.impact = impact
-        super().__init__(
-            f"{impact.member_count} member(s) hold a credential from "
-            f"'{impact.provider_name}'."
-        )
+        reasons = []
+        if impact.member_count:
+            reasons.append(
+                f"{impact.member_count} member(s) hold a credential from "
+                f"'{impact.provider_name}'."
+            )
+        if impact.voice_transcription_in_use:
+            reasons.append(
+                f"Voice transcription uses '{impact.provider_name}'."
+            )
+        super().__init__(" ".join(reasons))
 
 
 @dataclass(frozen=True)
@@ -361,6 +369,34 @@ class AIProvidersService:
         if record is None or record.kind != AIProviderKind.FIXED_KEY.value:
             return None
         return record.encrypted_secret
+
+    def fixed_key_api_key(
+        self, session: Session, provider_id: uuid.UUID | None
+    ) -> str | None:
+        """The plaintext API key of a ``fixed_key`` provider, for a server-side
+        call made on the instance's behalf (the voice transcription relay).
+
+        ``None`` for a ``minted`` provider (its secret is an administration
+        key, never a model key), a missing row, or an envelope that does not
+        decrypt. The caller holds it only for the provider call it makes.
+        """
+        record = self.load(session, provider_id)
+        if record is None or record.kind != AIProviderKind.FIXED_KEY.value:
+            return None
+        try:
+            return self._decrypt_fixed_key(record).api_key or None
+        except Exception:  # noqa: BLE001 — never surface why, never log the envelope
+            logger.warning("Fixed-key provider %s did not decrypt", provider_id)
+            return None
+
+    def list_records(self, session: Session) -> list[AIProvider]:
+        """Every provider row, oldest first. For filters other modules apply
+        (e.g. the speech-capable options); never projected to a client as is."""
+        return list(
+            session.exec(
+                select(AIProvider).order_by(col(AIProvider.created_at).asc())
+            ).all()
+        )
 
     # ------------------------------------------------------------------ #
     # Validation
@@ -1093,12 +1129,15 @@ class AIProvidersService:
         self, session: Session, provider: AIProvider
     ) -> AIProviderDeleteImpact:
         """What deleting this provider costs, as the 409 body would state it."""
+        voice_in_use = self._voice_transcription_uses(session, provider)
         parent = self.owned_credential(session, provider)
         if parent is None:
-            # A lone provider row. Nothing holds a key from it, so the impact is
-            # genuinely empty and the delete needs no confirmation.
+            # A lone provider row. Nothing holds a key from it, so the impact
+            # is empty unless voice transcription points at it.
             return AIProviderDeleteImpact(
-                provider_id=provider.id, provider_name=provider.name
+                provider_id=provider.id,
+                provider_name=provider.name,
+                voice_transcription_in_use=voice_in_use,
             )
         memberships = session.exec(
             select(ManagedAICredentialMembership).where(
@@ -1131,6 +1170,19 @@ class AIProvidersService:
             member_count=len(members),
             minted_key_count=sum(1 for m in members if m.holds_provider_key),
             members=members,
+            voice_transcription_in_use=voice_in_use,
+        )
+
+    @staticmethod
+    def _voice_transcription_uses(session: Session, provider: AIProvider) -> bool:
+        """Is server-wide voice transcription configured with this provider?"""
+        return (
+            session.exec(
+                select(ServerConfig.id).where(
+                    ServerConfig.voice_transcription_provider_id == provider.id
+                )
+            ).first()
+            is not None
         )
 
     async def delete(
@@ -1145,8 +1197,12 @@ class AIProvidersService:
 
         Unforced and the owned credential has **any** membership row → raises
         :class:`AIProviderInUseError` carrying the impact, which the route turns
-        into a 409. A provider whose credential has no members deletes without a
-        confirm — there is nobody to warn.
+        into a 409. The same refusal applies while server-wide voice
+        transcription is configured with this provider (even with no members);
+        forced, ``ON DELETE SET NULL`` leaves the feature on but unavailable and
+        a ``voice_transcription.updated`` event goes out. A provider whose
+        credential has no members, and that voice transcription does not use,
+        deletes without a confirm — there is nobody to warn.
 
         Forced, the order is fixed and is the point (§5.4 of the
         ai-credential-providers plan):
@@ -1194,7 +1250,7 @@ class AIProvidersService:
         """
         provider = self._get_or_404(session, provider_id)
         impact = self.delete_impact(session, provider)
-        if impact.member_count and not force:
+        if (impact.member_count or impact.voice_transcription_in_use) and not force:
             raise AIProviderInUseError(impact)
 
         parent = self.owned_credential(session, provider)
@@ -1251,6 +1307,14 @@ class AIProvidersService:
 
         session.delete(provider)
         session.commit()
+        if impact.voice_transcription_in_use:
+            # ``ON DELETE SET NULL`` has just cleared the voice provider, so the
+            # relay is unavailable until an admin picks another. Never raises.
+            from app.services.voice_transcription.events import (
+                VoiceTranscriptionEvents,
+            )
+
+            await VoiceTranscriptionEvents.updated(available=False)
         return impact
 
     async def _revoke_member_keys(

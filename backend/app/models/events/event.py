@@ -173,6 +173,13 @@ class EventType:
     # Desktop polls ``GET /brand-theme`` in v1 and does not listen yet.
     BRAND_THEME_UPDATED = "brand_theme.updated"
 
+    # Voice transcription — ``voice_transcription.updated`` meta
+    # ``{available}``, broadcast after the voice settings change or the
+    # provider behind them is deleted. Broadcast is safe: discovery already
+    # tells anyone whether the relay is offered. Desktops re-read discovery on
+    # their own schedule; the event only saves them a poll.
+    VOICE_TRANSCRIPTION_UPDATED = "voice_transcription.updated"
+
     # Generic notification
     NOTIFICATION = "notification"
 

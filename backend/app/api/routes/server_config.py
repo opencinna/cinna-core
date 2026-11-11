@@ -19,7 +19,7 @@ is *content*, and every login page load reads the policy.
 import logging
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 
 from app.api.deps import CurrentUser, SessionDep, get_current_active_superuser
 from app.core.config import settings
@@ -32,11 +32,19 @@ from app.models.server_config.server_config import (
     ServerConfigUpdate,
 )
 from app.services.common.rate_limiter import RateLimiter, anonymous_caller_key
-from app.services.server_config.server_config_service import ServerConfigService
+from app.services.server_config.server_config_service import (
+    VOICE_TRANSCRIPTION_FIELDS,
+    ServerConfigService,
+)
 from app.services.users.access_policy_service import (
     AccessPolicyService,
     AccessPolicyValidationError,
 )
+from app.services.voice_transcription.config_service import (
+    VoiceTranscriptionConfigService,
+    VoiceTranscriptionValidationError,
+)
+from app.services.voice_transcription.events import VoiceTranscriptionEvents
 
 logger = logging.getLogger(__name__)
 
@@ -132,15 +140,25 @@ def update_server_config(
     session: SessionDep,
     current_user: SuperUser,
     data: ServerConfigUpdate,
+    background_tasks: BackgroundTasks,
 ) -> Any:
     """Update the server configuration (superuser only).
 
-    Access-policy changes are validated first; a rejection returns 400 with
-    the machine-readable reason code as ``detail`` so the admin card can show
-    its own wording next to the offending control.
+    Access-policy and voice transcription changes are validated first; a
+    rejection returns 400 with the machine-readable reason code as ``detail``
+    so the admin card can show its own wording next to the offending control.
+    A change to the voice transcription settings broadcasts
+    ``voice_transcription.updated`` once the response is sent.
     """
+    before = ServerConfigService.get_or_create(session)
+    voice_before = tuple(getattr(before, key) for key in VOICE_TRANSCRIPTION_FIELDS)
     try:
-        return ServerConfigService.update(session, data, current_user)
+        config = ServerConfigService.update(session, data, current_user)
+    except VoiceTranscriptionValidationError as exc:
+        logger.info(
+            "Rejected server-config update (%s) for %s", exc.reason, current_user.id
+        )
+        raise HTTPException(status_code=400, detail=exc.reason)
     except AccessPolicyValidationError as exc:
         # ``reason`` is the stable code the card branches on; ``message`` is
         # the human explanation, logged rather than returned so the wording
@@ -152,3 +170,8 @@ def update_server_config(
             exc.message,
         )
         raise HTTPException(status_code=400, detail=exc.reason)
+    voice_after = tuple(getattr(config, key) for key in VOICE_TRANSCRIPTION_FIELDS)
+    if voice_after != voice_before:
+        available = VoiceTranscriptionConfigService.resolve(session) is not None
+        background_tasks.add_task(VoiceTranscriptionEvents.updated, available)
+    return config

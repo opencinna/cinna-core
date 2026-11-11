@@ -232,6 +232,21 @@ class ServerConfig(SQLModel, table=True):
         default=True, nullable=False, sa_column_kwargs={"server_default": "true"}
     )
 
+    # ── Voice transcription relay ──────────────────────────────────────
+    #
+    # Off by default. The provider must be a speech-capable fixed-key AI
+    # provider (checked by the voice transcription config service). SET NULL
+    # on provider delete, never RESTRICT: the service layer asks for
+    # confirmation before deleting the voice provider, the DB never blocks it.
+    voice_transcription_enabled: bool = Field(
+        default=False, nullable=False, sa_column_kwargs={"server_default": "false"}
+    )
+    voice_transcription_provider_id: uuid.UUID | None = Field(
+        default=None, foreign_key="ai_provider.id", ondelete="SET NULL"
+    )
+    # Per-user monthly cap in minutes; ``None`` means no cap.
+    voice_transcription_monthly_minutes_per_user: int | None = Field(default=None)
+
     # Audit
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_by_id: uuid.UUID | None = Field(
@@ -276,6 +291,14 @@ class ServerConfigUpdate(SQLModel):
     addons_custom_mcp: bool | None = None
     addons_plugin_hooks: bool | None = None
     addons_stdio_mcp: bool | None = None
+    # Voice transcription relay. The provider id and the cap are nullable on
+    # the row, so an explicit ``null`` here means "clear" — the service reads
+    # ``model_fields_set`` to tell that apart from "not being changed".
+    voice_transcription_enabled: bool | None = None
+    voice_transcription_provider_id: uuid.UUID | None = None
+    voice_transcription_monthly_minutes_per_user: int | None = Field(
+        default=None, ge=1, le=44640
+    )
 
     @field_validator("landing_markdown")
     @classmethod

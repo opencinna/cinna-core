@@ -211,6 +211,19 @@ class Settings(BaseSettings):
     ENV_CONSOLE_LOGS_TAIL_DEFAULT: int = 200
     ENV_CONSOLE_LOGS_TAIL_MAX: int = 5000
 
+    # Voice transcription relay (WS /api/v1/speech/stream). Floats so tests
+    # can run the timers at sub-second values.
+    VOICE_TRANSCRIPTION_MAX_SESSION_SECONDS: float = 1800  # audio per session
+    VOICE_TRANSCRIPTION_IDLE_TIMEOUT_SECONDS: float = 60  # no audio -> stop
+    VOICE_TRANSCRIPTION_MAX_SESSIONS_PER_USER: int = 1
+    VOICE_TRANSCRIPTION_OPEN_RATE_LIMIT_PER_MIN: int = 10
+    VOICE_TRANSCRIPTION_REVOCATION_CHECK_SECONDS: float = 300
+    VOICE_TRANSCRIPTION_START_FRAME_TIMEOUT_SECONDS: float = 10
+    # Backstop only: the adapter enforces its own connect/setup timeout.
+    VOICE_TRANSCRIPTION_READY_TIMEOUT_SECONDS: float = 30
+    # Admin "Test" probes per admin per minute.
+    VOICE_TRANSCRIPTION_TEST_RATE_LIMIT_PER_MIN: int = 10
+
     BACKEND_CORS_ORIGINS: Annotated[
         list[AnyUrl] | str, BeforeValidator(parse_cors)
     ] = []

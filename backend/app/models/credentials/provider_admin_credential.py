@@ -558,3 +558,7 @@ class AIProviderDeleteImpact(SQLModel):
     #: provider*. Zero for a ``fixed_key`` provider.
     minted_key_count: int = 0
     members: list[AIProviderDeleteMember] = Field(default_factory=list)
+    #: True while server-wide voice transcription is configured to use this
+    #: provider. Alone it is enough to refuse an unforced delete; a forced one
+    #: leaves the feature switched on with no provider, i.e. unavailable.
+    voice_transcription_in_use: bool = False

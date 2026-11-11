@@ -705,6 +705,15 @@ from .brand_theme.brand_theme import (
     BrandThemePublishErrors,
     BrandThemeUploadResult,
 )
+from .voice_transcription.usage import (
+    VoiceTranscriptionProviderOption,
+    VoiceTranscriptionTestRequest,
+    VoiceTranscriptionTestResult,
+    VoiceTranscriptionUsage,
+    VoiceTranscriptionUsagePublic,
+    VoiceTranscriptionUsageReport,
+    VoiceTranscriptionUsageRow,
+)
 from .server_config.server_config import (
     REGISTRATION_MODE_INVITE_ONLY,
     REGISTRATION_MODE_OPEN,
@@ -1787,6 +1796,14 @@ __all__ = [
     "ServerConfig",
     "ServerConfigUpdate",
     "DisclaimerPublic",
+    # Voice transcription
+    "VoiceTranscriptionProviderOption",
+    "VoiceTranscriptionTestRequest",
+    "VoiceTranscriptionTestResult",
+    "VoiceTranscriptionUsage",
+    "VoiceTranscriptionUsagePublic",
+    "VoiceTranscriptionUsageReport",
+    "VoiceTranscriptionUsageRow",
     # Server Channels
     "ServerChannel",
     "ServerChannelBase",

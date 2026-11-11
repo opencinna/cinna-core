@@ -145,7 +145,7 @@ Everything outside these paths belongs to the SPA. Task-trigger webhooks (`/api/
 
 | Path | Feature | Why at the origin root |
 |------|---------|------------------------|
-| `/api/` | all REST API traffic, incl. the CLI and env-console WebSockets/SSE | — |
+| `/api/` | all REST API traffic, incl. the CLI, env-console and voice transcription WebSockets/SSE | — |
 | `/mcp/` | MCP Streamable HTTP and MCP OAuth: [MCP Integration](../application/mcp_integration/agent_mcp_architecture.md), [App MCP Server](../application/app_mcp_server/app_mcp_server_tech.md) | URLs held by external MCP clients |
 | `/ws/` | Socket.IO realtime events: [Realtime Events](../application/realtime_events/event_bus_system.md) | Socket.IO mount |
 | `/acp/` | ACP connectors (WebSocket, `ACP_SERVER_BASE_URL`) | URLs held by ACP clients |
@@ -165,6 +165,10 @@ Everything outside these paths belongs to the SPA. Task-trigger webhooks (`/api/
 ### Agent Environment Console (`/api/v1/env-console/`)
 
 `WS /api/v1/env-console/{id}/terminal` and `WS .../{id}/logs/stream` are WebSocket-only routes. Behind a block without upgrade headers the handshake arrives as a plain `GET` and Starlette returns 404. Browsers cannot set `Authorization` on a WebSocket handshake, so the JWT travels in `?token=`. The proxy must not strip the query string. The routes sit under their own `/env-console` prefix so that a per-path setup can unbuffer them without unbuffering the REST environment routes. See [Agent Environment Console](../agents/agent_environments/agent_env_console.md).
+
+### Voice transcription (`/api/v1/speech/stream`)
+
+`WS /api/v1/speech/stream` is the voice transcription relay used by Cinna Desktop (and later the mobile app). It is WebSocket-only, so behind a block without upgrade headers the handshake reaches the backend as a plain `GET` and fails. The unified backend block above already upgrades it and its 3600 s timeouts cover the 30-minute session cap; nothing to add. Per-path setups need an exact-match block before `/api/` (`location = /api/v1/speech/stream`, upgrade headers, `proxy_buffering off`, 3600 s timeouts), as the local `frontend/nginx.conf` has. Auth is an `Authorization: Bearer` header at the upgrade, never a query parameter, so the URL holds no secret.
 
 ### Artifact content (`/a/`)
 
@@ -227,6 +231,7 @@ The router is mounted a second time under `/api/agent-start`, and every link ins
 - [Realtime Events](../application/realtime_events/event_bus_system.md): `/ws/`
 - [Cinna CLI Integration](../application/cinna_cli_integration/cinna_cli_integration.md): `/api/v1/cli/` (WebSocket sync tunnel, SSE exec stream)
 - [Agent Environment Console](../agents/agent_environments/agent_env_console.md): `/api/v1/env-console/` (WebSocket terminal and logs follow)
+- [Voice Transcription Relay](../application/voice_transcription/voice_transcription.md): `/api/v1/speech/stream` (WebSocket)
 - [Agent Webhooks](../agents/agent_webhooks/agent_webhooks.md): `/agent-hooks/` (public, no JWT)
 - [Task Triggers](../application/input_tasks/task_triggers.md): `/api/v1/hooks/` (public, no JWT; under `/api/`)
 - [Local Agent Kit](../application/local_agent_kit/local_agent_kit.md): `/agent-start`, with the `/api/agent-start` alias as the fallback

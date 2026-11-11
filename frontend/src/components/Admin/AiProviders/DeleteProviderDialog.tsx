@@ -4,14 +4,15 @@ import { useEffect, useRef, useState } from "react"
 import { AdminAiProvidersService, type AIProviderPublic } from "@/client"
 import type { ApiError } from "@/client/core/ApiError"
 import {
+  type ProviderDeleteImpact,
   parseMembersNotRemoved,
   parseProviderDeleteImpact,
-  type ProviderDeleteImpact,
 } from "@/components/Admin/AiProviders/aiProviderErrors"
 import {
   AI_PROVIDERS_QUERY_KEY,
   MANAGED_CREDENTIALS_QUERY_PREFIX,
 } from "@/components/Admin/LlmProviders/providerTypes"
+import { VOICE_PROVIDERS_QUERY_KEY } from "@/components/Admin/VoiceTranscription/voiceTranscription"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -74,6 +75,10 @@ export function DeleteProviderDialog({
     void queryClient.invalidateQueries({
       queryKey: MANAGED_CREDENTIALS_QUERY_PREFIX,
     })
+    // A forced delete of the voice provider nulls the server's setting and
+    // shrinks the speech-capable list the Features tab reads.
+    void queryClient.invalidateQueries({ queryKey: ["serverConfig"] })
+    void queryClient.invalidateQueries({ queryKey: VOICE_PROVIDERS_QUERY_KEY })
   }
 
   const deleteMutation = useMutation({
@@ -168,41 +173,51 @@ export function DeleteProviderDialog({
                 </div>
               ) : impact ? (
                 <>
-                  {/* Counted from the list that is actually rendered, so a
+                  {impact.members.length > 0 && (
+                    <>
+                      {/* Counted from the list that is actually rendered, so a
                       member the parser dropped as malformed cannot make the
                       sentence promise more names than appear beneath it. */}
-                  <p>
-                    {impact.members.length}{" "}
-                    {impact.members.length === 1
-                      ? "person loses"
-                      : "people lose"}{" "}
-                    the key this provider gave them:
-                  </p>
-                  <ul className="max-h-[40vh] space-y-1 overflow-y-auto text-sm">
-                    {impact.members.map((member) => (
-                      <li
-                        key={member.user_id}
-                        className="rounded-md border bg-muted/30 px-3 py-1.5 text-foreground"
-                      >
-                        {/* `email` is "" when the user row is missing, and the
+                      <p>
+                        {impact.members.length}{" "}
+                        {impact.members.length === 1
+                          ? "person loses"
+                          : "people lose"}{" "}
+                        the key this provider gave them:
+                      </p>
+                      <ul className="max-h-[40vh] space-y-1 overflow-y-auto text-sm">
+                        {impact.members.map((member) => (
+                          <li
+                            key={member.user_id}
+                            className="rounded-md border bg-muted/30 px-3 py-1.5 text-foreground"
+                          >
+                            {/* `email` is "" when the user row is missing, and the
                             parser accepts "" as a string — so the id is the
                             last resort rather than an empty bullet. */}
-                        {member.full_name || member.email || member.user_id}
-                      </li>
-                    ))}
-                  </ul>
-                  {mintedKeyCount > 0 ? (
+                            {member.full_name || member.email || member.user_id}
+                          </li>
+                        ))}
+                      </ul>
+                      {mintedKeyCount > 0 ? (
+                        <p>
+                          {mintedKeyCount} of those keys{" "}
+                          {mintedKeyCount === 1 ? "was" : "were"} created at{" "}
+                          {typeLabel} and will be <strong>revoked there</strong>
+                          . They stop working immediately.
+                        </p>
+                      ) : (
+                        <p>
+                          Their copies of the key are deleted here. The key
+                          itself stays valid at {typeLabel} — remove it in your{" "}
+                          {typeLabel} console if you no longer want it live.
+                        </p>
+                      )}
+                    </>
+                  )}
+                  {impact.voice_transcription_in_use && (
                     <p>
-                      {mintedKeyCount} of those keys{" "}
-                      {mintedKeyCount === 1 ? "was" : "were"} created at{" "}
-                      {typeLabel} and will be <strong>revoked there</strong>.
-                      They stop working immediately.
-                    </p>
-                  ) : (
-                    <p>
-                      Their copies of the key are deleted here. The key itself
-                      stays valid at {typeLabel} — remove it in your {typeLabel}{" "}
-                      console if you no longer want it live.
+                      Voice transcription uses this provider; deleting it turns
+                      voice transcription off.
                     </p>
                   )}
                   {retryNotice && (

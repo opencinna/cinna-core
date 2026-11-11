@@ -8359,6 +8359,9 @@ export type ServerConfig = {
     addons_custom_mcp?: boolean;
     addons_plugin_hooks?: boolean;
     addons_stdio_mcp?: boolean;
+    voice_transcription_enabled?: boolean;
+    voice_transcription_provider_id?: (string | null);
+    voice_transcription_monthly_minutes_per_user?: (number | null);
     updated_at?: string;
     updated_by_id?: (string | null);
 };
@@ -8383,6 +8386,9 @@ export type ServerConfigUpdate = {
     addons_custom_mcp?: (boolean | null);
     addons_plugin_hooks?: (boolean | null);
     addons_stdio_mcp?: (boolean | null);
+    voice_transcription_enabled?: (boolean | null);
+    voice_transcription_provider_id?: (string | null);
+    voice_transcription_monthly_minutes_per_user?: (number | null);
 };
 
 export type SessionCommandPublic = {
@@ -10041,6 +10047,56 @@ export type ValidationError = {
     loc: Array<(string | number)>;
     msg: string;
     type: string;
+};
+
+/**
+ * A speech-capable AI provider an admin may pick.
+ */
+export type VoiceTranscriptionProviderOption = {
+    id: string;
+    name: string;
+    type: string;
+};
+
+/**
+ * Admin "Test": probe this provider, or the configured one when omitted.
+ */
+export type VoiceTranscriptionTestRequest = {
+    provider_id?: (string | null);
+};
+
+export type VoiceTranscriptionTestResult = {
+    ok: boolean;
+    error?: ('invalid_key' | 'unreachable' | 'quota' | 'disabled' | null);
+};
+
+/**
+ * The caller's own usage for the current month.
+ */
+export type VoiceTranscriptionUsagePublic = {
+    enabled: boolean;
+    used_seconds: number;
+    cap_seconds: (number | null);
+    period_end: string;
+};
+
+/**
+ * Admin per-user usage for one month.
+ */
+export type VoiceTranscriptionUsageReport = {
+    period_start: string;
+    period_end: string;
+    rows: Array<VoiceTranscriptionUsageRow>;
+    total_seconds: number;
+    total_sessions: number;
+};
+
+export type VoiceTranscriptionUsageRow = {
+    user_id: string;
+    email: string;
+    full_name?: (string | null);
+    seconds: number;
+    sessions: number;
 };
 
 export type WebappDataApiRequest = {
@@ -14973,6 +15029,18 @@ export type UtilsRefinePromptData = {
 };
 
 export type UtilsRefinePromptResponse = (RefinePromptResponse);
+
+export type VoiceTranscriptionGetMySpeechUsageResponse = (VoiceTranscriptionUsagePublic);
+
+export type VoiceTranscriptionListVoiceTranscriptionProvidersResponse = (Array<VoiceTranscriptionProviderOption>);
+
+export type VoiceTranscriptionGetVoiceTranscriptionUsageReportResponse = (VoiceTranscriptionUsageReport);
+
+export type VoiceTranscriptionTestVoiceTranscriptionProviderData = {
+    requestBody: VoiceTranscriptionTestRequest;
+};
+
+export type VoiceTranscriptionTestVoiceTranscriptionProviderResponse = (VoiceTranscriptionTestResult);
 
 export type WebappGetWebappStatusData = {
     agentId: string;

@@ -86,6 +86,7 @@ from app.api.routes import (
     user_groups,
     user_workspaces,
     utils,
+    voice_transcription,
     webhooks,
     webapp,
     webapp_chat,
@@ -138,6 +139,10 @@ api_router.include_router(oauth_credentials.router, prefix="/credentials", tags=
 api_router.include_router(ssh_keys.router)
 api_router.include_router(environments.router)
 api_router.include_router(environments.console_ws_router)
+# Voice transcription relay: WS /speech/stream + GET /speech/usage, and the
+# superuser /admin/voice-transcription/* helpers.
+api_router.include_router(voice_transcription.router)
+api_router.include_router(voice_transcription.admin_router)
 api_router.include_router(sessions.router)
 # Improvement requests span /sessions/*, /agents/*, and /improvement-requests/*,
 # so the router carries no prefix. Registered after sessions/agents; neither of

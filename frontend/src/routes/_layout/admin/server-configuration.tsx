@@ -13,6 +13,8 @@ import { MailServersCard } from "@/components/Admin/MailServersCard"
 import { AutoInstallAgentsCard } from "@/components/Admin/ServerChannels/AutoInstallAgentsCard"
 import { ServerChannelsCard } from "@/components/Admin/ServerChannels/ServerChannelsCard"
 import { ServerDebugToolsCard } from "@/components/Admin/ServerChannels/ServerDebugToolsCard"
+import { VoiceTranscriptionCard } from "@/components/Admin/VoiceTranscription/VoiceTranscriptionCard"
+import { VoiceUsageCard } from "@/components/Admin/VoiceTranscription/VoiceUsageCard"
 import { HashTabs, type TabConfig } from "@/components/Common/HashTabs"
 import useAuth, { isLoggedIn } from "@/hooks/useAuth"
 import { usePageHeader } from "@/routes/_layout"
@@ -119,6 +121,19 @@ function AdminServerConfiguration() {
       content: (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <MailServersCard />
+        </div>
+      ),
+    },
+    {
+      // Server features that are off by default. Row-major per feature: its
+      // configuration card on the left, its usage/report card on the right; a
+      // later feature without a report takes the next free cell.
+      value: "features",
+      title: "Features",
+      content: (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+          <VoiceTranscriptionCard />
+          <VoiceUsageCard />
         </div>
       ),
     },

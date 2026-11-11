@@ -822,8 +822,14 @@ _DISALLOWED_CONSOLE_TOKEN_TYPES = {"guest_share", "webapp_share", "agent_env"}
 _DISALLOWED_CONSOLE_ROLES = {"chat-guest", "webapp-viewer"}
 
 
-def _resolve_platform_user_from_token(db: Session, raw_token: str) -> User:
-    """Decode a platform access JWT and return the active ``User``.
+def _resolve_platform_token(
+    db: Session,
+    raw_token: str,
+    *,
+    disallowed_types: frozenset[str] | set[str] = frozenset(_DISALLOWED_CONSOLE_TOKEN_TYPES),
+    check_account_valid: bool = False,
+) -> tuple[User, dict[str, Any]]:
+    """Decode a platform access JWT and return ``(user, payload)``.
 
     Mirrors the validation in ``get_current_user`` (including expiry and
     desktop-token revocation) but raises plain ``ValueError`` so WS callers can
@@ -833,6 +839,9 @@ def _resolve_platform_user_from_token(db: Session, raw_token: str) -> User:
     Defense-in-depth: explicitly rejects scoped guest-share / webapp-viewer
     tokens by ``token_type``/``role`` rather than relying solely on a ``sub``
     mismatch (those tokens carry a share id in ``sub``, not a user id).
+    ``check_account_valid`` adds the ``AccessPolicyService`` gate
+    ``get_current_user`` applies (the console path predates it and keeps its
+    ``is_active`` check unchanged).
     """
     try:
         payload = jwt.decode(
@@ -843,15 +852,17 @@ def _resolve_platform_user_from_token(db: Session, raw_token: str) -> User:
         raise ValueError("Could not validate credentials") from e
 
     # Scope assertion — a full platform access token carries neither of these.
-    if payload.get("token_type") in _DISALLOWED_CONSOLE_TOKEN_TYPES:
-        raise ValueError("Token type not allowed for environment console")
+    if payload.get("token_type") in disallowed_types:
+        raise ValueError("Token type not allowed for this endpoint")
     if payload.get("role") in _DISALLOWED_CONSOLE_ROLES:
-        raise ValueError("Token role not allowed for environment console")
+        raise ValueError("Token role not allowed for this endpoint")
 
     user = db.get(User, token_data.sub)
     if not user:
         raise ValueError("User not found")
     if not user.is_active:
+        raise ValueError("Inactive user")
+    if check_account_valid and not AccessPolicyService.is_account_valid(user):
         raise ValueError("Inactive user")
 
     # Honour desktop-token revocation the same way get_current_user does.
@@ -868,7 +879,12 @@ def _resolve_platform_user_from_token(db: Session, raw_token: str) -> User:
         except DesktopAuthError as e:
             raise ValueError(e.message) from e
 
-    return user
+    return user, payload
+
+
+def _resolve_platform_user_from_token(db: Session, raw_token: str) -> User:
+    """``_resolve_platform_token`` for the environment consoles (user only)."""
+    return _resolve_platform_token(db, raw_token)[0]
 
 
 # ── Desktop agent git smart-HTTP auth ─────────────────────────────────
@@ -1033,6 +1049,89 @@ def get_env_console_context_ws(require_terminal: bool):
         )
 
     return _dep
+
+
+# ── Voice transcription relay (WS /speech/stream) ─────────────────────
+
+# Scoped tokens that never open a speech session (plan D2): agent-environment,
+# A2A agent access, guest-share and webapp-viewer tokens.
+_DISALLOWED_SPEECH_TOKEN_TYPES = frozenset(
+    {"guest_share", "webapp_share", "agent_env", "agent"}
+)
+
+
+class SpeechPrincipal(SQLModel):
+    """Who opened a speech session. Holds no token and no DB object."""
+
+    user_id: uuid.UUID
+    # ``desktop`` / ``mobile`` / ``None`` (web session token).
+    client_kind: str | None = None
+    external_client_id: str | None = None
+
+
+def _extract_bearer_header(websocket: WebSocket) -> str:
+    """The token from ``Authorization: Bearer <t>``. Header only: the speech
+    route never reads ``?token=``, so no secret ever sits in its URL."""
+    auth_header = websocket.headers.get("authorization") or ""
+    scheme, _, value = auth_header.partition(" ")
+    if scheme.lower() != "bearer" or not value.strip():
+        raise ValueError("Missing authentication token")
+    return value.strip()
+
+
+async def get_speech_principal_ws(websocket: WebSocket) -> SpeechPrincipal:
+    """Authenticate a speech WebSocket at the upgrade.
+
+    Opens its own short DB session instead of ``SessionDep`` so nothing holds a
+    pool connection for the socket's lifetime. Any failure raises
+    ``WebSocketException(1008)`` before ``accept`` (Starlette closes cleanly).
+    """
+    from starlette.exceptions import WebSocketException
+
+    from app.core import db as core_db
+
+    try:
+        raw_token = _extract_bearer_header(websocket)
+        with core_db.create_session() as db:
+            user, payload = _resolve_platform_token(
+                db,
+                raw_token,
+                disallowed_types=_DISALLOWED_SPEECH_TOKEN_TYPES,
+                check_account_valid=True,
+            )
+            user_id = user.id
+    except ValueError as e:
+        raise WebSocketException(code=1008, reason=str(e)[:123])
+    return SpeechPrincipal(
+        user_id=user_id,
+        client_kind=payload.get("client_kind") or None,
+        external_client_id=payload.get("external_client_id") or None,
+    )
+
+
+def recheck_speech_principal(principal: SpeechPrincipal) -> bool:
+    """Is the session's principal still allowed? (periodic mid-session check)
+
+    The access token itself may have expired by now (15-min TTL, 30-min
+    sessions); what is re-checked is the account and, for desktop tokens, the
+    device's revocation.
+    """
+    from app.core import db as core_db
+    from app.services.desktop_auth.desktop_auth_service import (
+        DesktopAuthError,
+        DesktopAuthService,
+    )
+
+    with core_db.create_session() as db:
+        user = db.get(User, principal.user_id)
+        if user is None or not user.is_active or not AccessPolicyService.is_account_valid(user):
+            return False
+        if principal.client_kind == "desktop":
+            try:
+                DesktopAuthService.verify_active_or_raise(db, principal.external_client_id)
+            except DesktopAuthError:
+                return False
+    return True
 
 
 # ── External client attribution ────────────────────────────────────────

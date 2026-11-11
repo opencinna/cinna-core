@@ -69,6 +69,25 @@ from fastapi import APIRouter as _APIRouter
 from app.api.deps import SessionDep
 from app.services.brand_theme.brand_theme_service import BrandThemeService
 from app.services.brand_theme.schema import SCHEMA_MAJOR as BRAND_THEME_SCHEMA_MAJOR
+from sqlmodel import Session as _DbSession
+
+from app.services.voice_transcription.config_service import VoiceTranscriptionConfigService
+
+
+def _voice_transcription_discovery(session: _DbSession) -> dict | None:
+    """The ``voice_transcription`` discovery block, or ``None``.
+
+    Present only while the relay is on with a usable provider; absent means a
+    client hides the "Cinna server" option. Never worth failing discovery
+    for, so a lookup error is logged, rolled back and treated as absent (the
+    same wrapping as the brand theme block).
+    """
+    try:
+        return VoiceTranscriptionConfigService.discovery_block(session)
+    except Exception:
+        logger.exception("Voice transcription lookup failed; omitting it from discovery")
+        session.rollback()
+        return None
 
 _desktop_wellknown_router = _APIRouter(tags=["desktop-auth"])
 
@@ -137,6 +156,10 @@ def cinna_desktop_discovery(session: SessionDep) -> dict:
             "url": f"{settings.backend_base_url}{settings.API_V1_STR}/brand-theme",
         }
 
+    voice_transcription = _voice_transcription_discovery(session)
+    if voice_transcription is not None:
+        payload["voice_transcription"] = voice_transcription
+
     return payload
 
 
@@ -144,7 +167,7 @@ _app_wellknown_router = _APIRouter(tags=["app-auth"])
 
 
 @_app_wellknown_router.get("/.well-known/cinna-app")
-def cinna_app_discovery() -> dict:
+def cinna_app_discovery(session: SessionDep) -> dict:
     """Return instance metadata for Cinna Mobile app discovery.
 
     Mirrors /.well-known/cinna-desktop but points at the parallel /app-auth
@@ -156,7 +179,7 @@ def cinna_app_discovery() -> dict:
     # directly (token, userinfo) or sends a browser to (authorize).
     # On a split-host deployment the SPA origin has no /api/v1.
     base = f"{settings.backend_base_url}{settings.API_V1_STR}/app-auth"
-    return {
+    payload = {
         "instance_name": settings.PROJECT_NAME,
         "authorization_endpoint": f"{base}/authorize",
         "token_endpoint": f"{base}/token",
@@ -164,6 +187,10 @@ def cinna_app_discovery() -> dict:
         "version": "1.0",
         "app_auth_enabled": settings.APP_AUTH_ENABLED,
     }
+    voice_transcription = _voice_transcription_discovery(session)
+    if voice_transcription is not None:
+        payload["voice_transcription"] = voice_transcription
+    return payload
 
 
 # Startup and shutdown imports

@@ -121,10 +121,16 @@ export function pendingConfigField(mutation: {
  * `onError` is overridable for the one control that has somewhere better than
  * a toast to put its failure — the patterns dialog, whose rejected text is
  * still on screen.
+ *
+ * `successMessage` and `errorMessage` default to the Access tab's words; a card
+ * on another tab that writes the same row (Features → Voice transcription)
+ * passes its own, so the toast names what the admin actually changed.
  */
 export function useServerConfigUpdate(handlers?: {
   onSaved?: () => void
   onError?: (message: string) => void
+  successMessage?: string
+  errorMessage?: (error: unknown) => string
 }) {
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
@@ -136,11 +142,11 @@ export function useServerConfigUpdate(handlers?: {
       queryClient.setQueryData(["serverConfig"], data)
       queryClient.invalidateQueries({ queryKey: ["serverConfig"] })
       queryClient.invalidateQueries({ queryKey: ["accessPolicy"] })
-      showSuccessToast("Access policy updated")
+      showSuccessToast(handlers?.successMessage ?? "Access policy updated")
       handlers?.onSaved?.()
     },
     onError: (error) => {
-      const message = reasonMessage(error)
+      const message = (handlers?.errorMessage ?? reasonMessage)(error)
       if (handlers?.onError) {
         handlers.onError(message)
         return

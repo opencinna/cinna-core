@@ -31,6 +31,11 @@ export interface ProviderDeleteImpact {
   /** How many of those keys are destroyed at the vendor. 0 for a fixed key. */
   minted_key_count: number
   members: ProviderDeleteMember[]
+  /**
+   * Server-wide voice transcription is configured to use this provider.
+   * Enough on its own to refuse an unforced delete, with zero members.
+   */
+  voice_transcription_in_use: boolean
 }
 
 function asRecord(error: unknown): Record<string, unknown> | null {
@@ -62,14 +67,16 @@ export function parseProviderDeleteImpact(
   for (const entry of body.members) {
     if (!entry || typeof entry !== "object") continue
     const member = entry as Record<string, unknown>
-    if (typeof member.user_id !== "string" || typeof member.email !== "string") {
+    if (
+      typeof member.user_id !== "string" ||
+      typeof member.email !== "string"
+    ) {
       continue
     }
     members.push({
       user_id: member.user_id,
       email: member.email,
-      full_name:
-        typeof member.full_name === "string" ? member.full_name : null,
+      full_name: typeof member.full_name === "string" ? member.full_name : null,
       holds_provider_key: member.holds_provider_key === true,
     })
   }
@@ -79,6 +86,7 @@ export function parseProviderDeleteImpact(
     member_count: body.member_count,
     minted_key_count: body.minted_key_count,
     members,
+    voice_transcription_in_use: body.voice_transcription_in_use === true,
   }
 }
 

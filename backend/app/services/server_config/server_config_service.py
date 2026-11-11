@@ -16,6 +16,20 @@ from app.services.users.access_policy_service import AccessPolicyService
 
 logger = logging.getLogger(__name__)
 
+#: Voice transcription columns; a change to any of them emits
+#: ``voice_transcription.updated``.
+VOICE_TRANSCRIPTION_FIELDS = (
+    "voice_transcription_enabled",
+    "voice_transcription_provider_id",
+    "voice_transcription_monthly_minutes_per_user",
+)
+
+#: The nullable voice columns: an explicit ``null`` in the update clears them.
+_NULLABLE_VOICE_FIELDS = (
+    "voice_transcription_provider_id",
+    "voice_transcription_monthly_minutes_per_user",
+)
+
 #: ``ServerConfig`` columns projected into the addons directory ``policy``;
 #: changing one bumps the directory version.
 ADDONS_POLICY_FIELDS = (
@@ -102,13 +116,22 @@ class ServerConfigService:
         Raises:
             AccessPolicyValidationError: if the merged result would be
                 malformed or would lock every administrator out.
+            VoiceTranscriptionValidationError: if the voice transcription
+                provider is unknown or not speech-capable, or the relay would
+                be switched on with no provider.
         """
+        # Local import: the voice config service reads this service's row.
+        from app.services.voice_transcription.config_service import (
+            VoiceTranscriptionConfigService,
+        )
+
         config = ServerConfigService.get_or_create(session)
 
         # Validate BEFORE anything is copied onto the row: lockout prevention
         # is a server-side rule, not a UI courtesy, and a half-applied update
         # is exactly the state an admin cannot recover from.
         AccessPolicyService.validate_update(session, config, data, acting_user)
+        VoiceTranscriptionConfigService.validate_update(session, config, data)
 
         # ``None`` means "not being changed", never "set this column to NULL":
         # every column behind this payload is NOT NULL, so a client sending an
@@ -118,6 +141,11 @@ class ServerConfigService:
             for k, v in data.model_dump(exclude_unset=True).items()
             if v is not None
         }
+        # Except the nullable voice columns, where an explicit ``null`` is
+        # "clear" (no provider / no monthly cap).
+        for key in _NULLABLE_VOICE_FIELDS:
+            if key in data.model_fields_set:
+                update_dict[key] = getattr(data, key)
 
         # Store the pattern list in canonical form. Validation deliberately
         # tolerates blank entries (a trailing comma is not an error worth
