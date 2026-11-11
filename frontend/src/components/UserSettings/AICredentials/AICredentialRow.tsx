@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   EllipsisVertical,
   Key,
+  Loader2,
   Pencil,
   ShieldCheck,
   Star,
@@ -12,7 +13,7 @@ import { useState } from "react"
 
 import type { AICredentialPublic } from "@/client"
 import { AiCredentialsService } from "@/client"
-import { RowFlag } from "@/components/Common/ListRow"
+import { ListRow, RowFlag } from "@/components/Common/ListRow"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -28,7 +29,6 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import useCustomToast from "@/hooks/useCustomToast"
-import { cn } from "@/lib/utils"
 import { pluralize } from "@/utils/pluralize"
 import { AffectedEnvironmentsDialog } from "../AffectedEnvironmentsDialog"
 import { DeleteAICredentialDialog } from "../DeleteAICredentialDialog"
@@ -45,7 +45,7 @@ interface AICredentialRowProps {
  *
  * Rendered by both the card and the "Show all" Sheet so the two hosts cannot
  * drift. The row is a View surface: the star, the "Managed" badge and the
- * expiry badge are passive, and every mutation — Set as default, Edit, Delete
+ * expiry dot are passive, and every mutation — Set as default, Edit, Delete
  * — lives in the `⋯` menu. That is the fix for anti-pattern A5, which named
  * this file for its star + pencil + trash on every row.
  *
@@ -102,76 +102,78 @@ export function AICredentialRow({ credential }: AICredentialRowProps) {
   const hasMenu = canEdit || canSetDefault
 
   return (
-    <div
-      className={cn(
-        "flex items-center justify-between px-3 py-2 border rounded-lg",
-        isExpired && "opacity-60",
-      )}
-    >
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <div className="w-6 h-6 rounded-md shrink-0 flex items-center justify-center bg-muted">
+    <>
+      <ListRow
+        muted={isExpired}
+        // Expiry is a state, so it is the leading dot rather than a second
+        // badge beside "Managed" (R16). A far-off date stays a meta fact.
+        status={
+          expiry?.badge
+            ? { tone: isExpired ? "error" : "warning", label: expiry.tooltip }
+            : undefined
+        }
+        icon={
+          <div className="flex h-6 w-6 items-center justify-center rounded-md bg-muted">
             <Key className="h-3.5 w-3.5 text-muted-foreground" />
           </div>
-          <span className="text-sm font-medium truncate min-w-0">
-            {credential.name}
-          </span>
-          {credential.is_default && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Star className="h-3.5 w-3.5 shrink-0 text-amber-500 fill-amber-500" />
-              </TooltipTrigger>
-              <TooltipContent side="top" className="text-xs">
-                {/* One default per *type*, so several rows wear a star at once
-                    and an unqualified "Default credential" reads as a
-                    contradiction. */}
-                Default {getTypeDisplayName(credential.type)} credential
-              </TooltipContent>
-            </Tooltip>
-          )}
-          {credential.is_admin_managed && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Badge variant="secondary" className="shrink-0">
-                  <ShieldCheck className="h-3 w-3" />
-                  Managed
-                </Badge>
-              </TooltipTrigger>
-              <TooltipContent side="top" className="max-w-64 text-xs">
-                Managed by your administrator — you can use it and set it as
-                default, but it can&apos;t be edited or deleted here.
-              </TooltipContent>
-            </Tooltip>
-          )}
-          {expiry?.badge && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Badge variant={expiry.badge.variant} className="shrink-0">
-                  {expiry.badge.label}
-                </Badge>
-              </TooltipTrigger>
-              <TooltipContent side="top" className="text-xs">
-                {expiry.tooltip}
-              </TooltipContent>
-            </Tooltip>
-          )}
-        </div>
-        <p className="text-xs text-muted-foreground truncate mt-0.5">
-          {getTypeDisplayName(credential.type)}
-          {secondFact ? ` · ${secondFact}` : ""}
-        </p>
-      </div>
-
-      <div className="flex items-center gap-0.5 shrink-0">
-        {groupShareCount > 0 && (
-          <span className="mr-1">
+        }
+        title={credential.name}
+        badges={
+          <>
+            {credential.is_default && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Star className="h-3.5 w-3.5 shrink-0 text-amber-500 fill-amber-500" />
+                </TooltipTrigger>
+                <TooltipContent side="top" className="text-xs">
+                  {/* One default per *type*, so several rows wear a star at
+                      once and an unqualified "Default credential" reads as a
+                      contradiction. */}
+                  Default {getTypeDisplayName(credential.type)} credential
+                </TooltipContent>
+              </Tooltip>
+            )}
+            {credential.is_admin_managed && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Badge variant="secondary" className="shrink-0">
+                    <ShieldCheck className="h-3 w-3" />
+                    Managed
+                  </Badge>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-64 text-xs">
+                  Managed by your administrator — you can use it and set it as
+                  default, but it can&apos;t be edited or deleted here.
+                </TooltipContent>
+              </Tooltip>
+            )}
+          </>
+        }
+        meta={`${getTypeDisplayName(credential.type)}${secondFact ? ` · ${secondFact}` : ""}`}
+        flags={
+          groupShareCount > 0 && (
             <RowFlag
               icon={Users}
               label={`Shared with ${pluralize(groupShareCount, "group", "groups")}`}
             />
-          </span>
-        )}
-        {hasMenu ? (
+          )
+        }
+      >
+        {setDefaultMutation.isPending ? (
+          // The mutation is this row's own `useMutation`, so the spinner can
+          // only land on the row being set.
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <output className="flex h-7 w-7 items-center justify-center">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                <span className="sr-only">Setting default…</span>
+              </output>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="text-xs">
+              Setting default…
+            </TooltipContent>
+          </Tooltip>
+        ) : hasMenu ? (
           <DropdownMenu>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -180,9 +182,6 @@ export function AICredentialRow({ credential }: AICredentialRowProps) {
                     variant="ghost"
                     size="icon"
                     className="h-7 w-7"
-                    // Pending is scoped to this row: one credential's
-                    // set-default never disables another's menu.
-                    disabled={setDefaultMutation.isPending}
                     aria-label={`Actions for ${credential.name}`}
                   >
                     <EllipsisVertical className="h-3.5 w-3.5" />
@@ -243,7 +242,7 @@ export function AICredentialRow({ credential }: AICredentialRowProps) {
           // row's, so the list does not go ragged.
           <span className="inline-block h-7 w-7" aria-hidden />
         )}
-      </div>
+      </ListRow>
 
       {/* Mounted only while open: a resident instance would re-seed its form
           from a background refetch and lose the user's in-progress edit. */}
@@ -278,6 +277,6 @@ export function AICredentialRow({ credential }: AICredentialRowProps) {
           credentialName={credential.name}
         />
       )}
-    </div>
+    </>
   )
 }

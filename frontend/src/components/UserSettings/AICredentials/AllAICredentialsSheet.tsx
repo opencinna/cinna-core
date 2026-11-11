@@ -1,4 +1,5 @@
 import type { AICredentialPublic, UserKeyProvisioningPublic } from "@/client"
+import { ListRowGroup } from "@/components/Common/ListRow"
 import {
   Sheet,
   SheetContent,
@@ -57,9 +58,14 @@ export function AllAICredentialsSheet({
           ) : (
             <>
               <KeyProvisioningRows rows={provisionings} />
-              {credentials.map((credential) => (
-                <AICredentialRow key={credential.id} credential={credential} />
-              ))}
+              <ListRowGroup>
+                {credentials.map((credential) => (
+                  <AICredentialRow
+                    key={credential.id}
+                    credential={credential}
+                  />
+                ))}
+              </ListRowGroup>
             </>
           )}
         </div>

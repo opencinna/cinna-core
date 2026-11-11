@@ -43,7 +43,7 @@
 ### Frontend
 
 **Components:**
-- `frontend/src/components/UserSettings/AICredentials/AICredentialsCard.tsx` (+ `AICredentialRow.tsx`) - Main credentials list with expiry badges, set-default, delete actions; houses `SDKModeEditDialog`
+- `frontend/src/components/UserSettings/AICredentials/AICredentialsCard.tsx` (+ `AICredentialRow.tsx`) - Main credentials list with expiry status dots, set-default, delete actions; houses `SDKModeEditDialog`
 - `frontend/src/components/UserSettings/AICredentials/AddAICredentialWizard.tsx` / `EditAICredentialDialog.tsx` - Add wizard and edit dialog with type selector, auto-fill expiry
 - `frontend/src/components/UserSettings/AnthropicCredentialsModal.tsx` - Setup guide modal for Anthropic API keys (plus why OAuth tokens are not recommended)
 - `frontend/src/components/UserSettings/AffectedEnvironmentsDialog.tsx` - Post-update rebuild dialog
@@ -274,7 +274,7 @@ Configured via `MODEL_DISCOVERY_ENABLED` (default `True`) and
 
 ### `AICredentials.tsx` - Main Settings UI
 
-- Credentials list card with compact rows: name, default star icon, expiry badge, type label, set-default/edit/delete buttons
+- Credentials list card with compact rows: name, default star icon, expiry status dot, type label, set-default/edit/delete buttons
 - Set default via star icon; triggers `AffectedEnvironmentsDialog` after success
 - Add button opens `AICredentialDialog`
 - **Admin-managed rows** (`cred.is_admin_managed`) render a blue **"Managed" badge** (`ShieldCheck` icon) and suppress the Edit/Delete buttons; the set-default star is the trailing action (the default-status amber star moves to the right of the type label for these rows). Backend enforces the read-only guard regardless — the UI gating is defense-in-depth. See [Admin-Provisioned AI Credentials](admin_ai_credential_provisioning.md)

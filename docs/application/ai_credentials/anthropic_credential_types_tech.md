@@ -32,8 +32,8 @@
 - `frontend/src/components/UserSettings/AICredentials/AddAICredentialWizard.tsx` / `frontend/src/components/UserSettings/AICredentials/EditAICredentialDialog.tsx` - expiry date handling (`toDateInput`, `expiry_notification_date`) on create and edit
 - `frontend/src/components/UserSettings/AICredentials/AddAICredentialWizard.tsx` - Anthropic guidance shown while adding an Anthropic credential (recommends an API key; notes OAuth tokens are also accepted)
 - `frontend/src/components/UserSettings/AICredentials/EditAICredentialDialog.tsx` - Expiry date input field
-- `frontend/src/components/UserSettings/AICredentials/AICredentialRow.tsx` - `describeExpiry()` drives the expiry badge (variant + fact text)
-- `frontend/src/components/UserSettings/AICredentials/AICredentialRow.tsx` - Expiry badge rendering in credential rows
+- `frontend/src/components/UserSettings/AICredentials/AICredentialRow.tsx` - `describeExpiry()` drives the expiry status dot (error/warning) and fact text
+- `frontend/src/components/UserSettings/AICredentials/AICredentialRow.tsx` - Expiry status dot in credential rows (`ListRow` `status`; a spinner replaces the `⋯` while Set as default runs)
 - `frontend/src/components/Common/RelativeTime.tsx` - Extended with `asBadge`, `icon`, `showTooltip`, `colorCode` parameters
 
 ## Detection Logic
@@ -90,13 +90,13 @@ The warning is informational — it never disables Save. The backend does not re
 
 ## Expiry Display
 
-`credentialTypes.ts` - `describeExpiry(expiryDate)` returns `{ badge, fact, tooltip }`, rendered by `AICredentialRow.tsx`:
+`credentialTypes.ts` - `describeExpiry(expiryDate)` returns `{ badge, fact, tooltip }` (the dot's tooltip is `tooltip`), rendered by `AICredentialRow.tsx`:
 
 | Status | Days Until Expiry | Rendering |
 |--------|------------------|-----------|
-| Expired | < 0 | `destructive` badge "Expired" |
-| Expiring soon | 0-60 | `secondary` badge "Expires today" / "Expires in N days" |
-| Not expiring soon | > 60 | No badge; row fact "Expires <date>" |
+| Expired | < 0 | `error` status dot, tooltip "Expired" |
+| Expiring soon | 0-60 | `warning` status dot, "Expires today" / "Expires in N days" |
+| Not expiring soon | > 60 | No dot; meta line "Expires <date>" |
 
 The tooltip always carries the exact date (and days remaining). `isExpiryUrgent()` (expired or ≤ 30 days) ranks urgent credentials right after the default one on the card.
 

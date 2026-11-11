@@ -1,5 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { MessageCircle, Pencil, Sparkles, Wrench } from "lucide-react"
+import {
+  MessageCircle,
+  Pencil,
+  SlidersHorizontal,
+  Sparkles,
+  Wrench,
+} from "lucide-react"
 import { useState } from "react"
 
 import type { AICredentialPublic, UserPublicWithAICredentials } from "@/client"
@@ -288,7 +294,10 @@ export function SdkPreferencesCard({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Default SDK Preferences</CardTitle>
+        <CardTitle className="flex items-center gap-2 min-w-0">
+          <SlidersHorizontal className="h-5 w-5 shrink-0" />
+          Default SDK Preferences
+        </CardTitle>
         <CardDescription>
           Default AI engine, credential, and model for new environments.
         </CardDescription>
