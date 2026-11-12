@@ -13,6 +13,7 @@ from app.api.routes import (
     brand_theme,
     agent_api,
     agent_api_public,
+    agent_api_request_tools,
     agent_dashboards,
     agent_dashboard_tools,
     dashboard_chat,
@@ -159,6 +160,8 @@ api_router.include_router(dashboard_tiles.router)
 api_router.include_router(agent_dashboards.router)
 # The agent's tile tools (``/agent/dashboards/*``, agent-env token).
 api_router.include_router(agent_dashboard_tools.router)
+# The producer's capability-request tools (``/agent/api-requests/*``, agent-env token).
+api_router.include_router(agent_api_request_tools.router)
 api_router.include_router(user_workspaces.router)
 api_router.include_router(notification_settings.router)
 api_router.include_router(activities.router)

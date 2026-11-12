@@ -1,22 +1,37 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { AlertTriangle, Download, Info, Trash2 } from "lucide-react"
-import { useRef, useState } from "react"
+import { useNavigate } from "@tanstack/react-router"
+import {
+  AlertTriangle,
+  Download,
+  FileCode,
+  Hammer,
+  Info,
+  Layers,
+  Trash2,
+} from "lucide-react"
+import { type ReactNode, useRef, useState } from "react"
 
 import {
   type ImprovementRequestDetailPublic,
   ImprovementRequestsService,
   type ImprovementRequestUpdate,
+  SessionsService,
 } from "@/client"
+import { QueryErrorAlert } from "@/components/Common/QueryErrorAlert"
+import {
+  SEGMENTED_DIALOG_PANEL_CLASS,
+  SEGMENTED_LIST_CLASS,
+  SEGMENTED_TRIGGER_CLASS,
+} from "@/components/Common/SegmentedTabs"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   AlertDialog,
-  AlertDialogAction,
   AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import {
@@ -26,7 +41,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { LoadingButton } from "@/components/ui/loading-button"
@@ -38,88 +52,32 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import useCustomToast from "@/hooks/useCustomToast"
 import { downloadAuthenticatedFile, getErrorMessage } from "@/utils"
 import {
   getImprovementStatusLabel,
+  hasEndpointDetails,
   IMPROVEMENT_STATUSES,
   improvementShortId,
+  isApiCapabilityRequest,
+  readApiRequest,
 } from "@/utils/improvementRequests"
+import { ImprovementRequestApiEndpoint } from "./ImprovementRequestApiEndpoint"
+import { ImprovementRequestFacts } from "./ImprovementRequestFacts"
+import { ImprovementRequestSessionContext } from "./ImprovementRequestSessionContext"
 
 const MAX_RESOLUTION_NOTE_CHARS = 2000
 
-/**
- * Human copy for `context.memory.unavailable_reason`
- * (`session_snapshot_service.MEMORY_REASON_*`). "Not captured" alone would be
- * read as "this install has no memory", which is a different conclusion from
- * "the container was off" — and only one of them means the recipient can stop
- * wondering about it.
- */
-const MEMORY_REASON_COPY: Record<string, string> = {
-  declined_by_requester: "not shared — the requester opted out",
-  no_environment: "not captured — the install had no environment",
-  env_not_running: "not captured — the environment was stopped",
-  read_failed: "not captured — the container could not be read",
-  empty: "none — this install had no memory notes",
-}
-
-type ContextBlock = Record<string, unknown>
-
-/** One block of the frozen `context` JSON, or an empty object when absent. */
-const block = (context: ContextBlock | undefined, name: string): ContextBlock =>
-  (context?.[name] as ContextBlock | undefined) ?? {}
-
-/** Render any frozen-context scalar as display text. */
-const asText = (value: unknown): string | null => {
-  if (value === null || value === undefined || value === "") return null
-  if (typeof value === "boolean") return value ? "Yes" : "No"
-  if (typeof value === "number") return String(value)
-  if (typeof value === "string") return value
-  return null
-}
-
-/**
- * Label one bundle revision.
- *
- * A revision with no `version` is *unversioned* (every git-origin revision is,
- * today), which is a fact about it rather than missing data — printing a bare
- * dash there reads as "we don't know". The origin is appended when it is not a
- * publish, because that is what explains an install sitting above the latest
- * published revision.
- */
-const revisionLabel = (
-  version: unknown,
-  revisionNumber: unknown,
-  origin?: unknown,
-): string | null => {
-  const versionText = asText(version)
-  const numberText = asText(revisionNumber)
-  if (!versionText && !numberText) return null
-  const label = versionText
-    ? numberText
-      ? `${versionText} (revision ${numberText})`
-      : versionText
-    : `revision ${numberText} (unversioned)`
-  const originText = asText(origin)
-  return originText && originText !== "publish"
-    ? `${label} · from ${originText}`
-    : label
-}
-
-const formatDateTime = (value: string) =>
-  new Date(value).toLocaleString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  })
-
-interface DetailRow {
-  label: string
-  value: string | null
-}
+/** The building agent's first message for an API capability request (D11). */
+const buildingSessionMessage = (requestId: string) =>
+  `Handle API capability request ${requestId}: read it with api_requests_get, extend the API following the REST API building guide, then close it with api_requests_update_status.`
 
 interface ImprovementRequestDetailModalProps {
   agentId: string
@@ -129,11 +87,17 @@ interface ImprovementRequestDetailModalProps {
 }
 
 /**
- * Read + triage surface for one improvement request: the requester's comment,
- * the frozen runtime context, the status workflow, and the archive download.
+ * Read + triage surface for one improvement request.
  *
- * The transcript itself is never rendered here — it only ever leaves through
- * the archive, whose cross-user downloads are audited server-side.
+ * Two kinds. A **session** request carries the requester's comment and the
+ * runtime context frozen at submission (the Context tab); its transcript only
+ * ever leaves through the archive, whose cross-user downloads are audited
+ * server-side. An **API capability request** carries what a caller of the
+ * agent's REST API asked for; its proposed endpoint and examples sit on the
+ * Endpoint tab, and "Start building session" hands it to the building agent.
+ *
+ * Facts and the document are split by tabs (§2 Facts and a document); the
+ * triage draft lives here, so it survives a tab switch.
  */
 export function ImprovementRequestDetailModal({
   agentId,
@@ -141,6 +105,7 @@ export function ImprovementRequestDetailModal({
   onClose,
 }: ImprovementRequestDetailModalProps) {
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
   const { showSuccessToast, showErrorToast } = useCustomToast()
   // Status and note are edited together and committed by one Save, so they
   // share one draft. It is tagged with the request it belongs to, so opening a
@@ -152,12 +117,14 @@ export function ImprovementRequestDetailModal({
     note: string
   }>({ requestId: null, status: "", note: "" })
   const [isDownloading, setIsDownloading] = useState(false)
+  const [deleteOpen, setDeleteOpen] = useState(false)
 
   const {
     data: fetched,
     isLoading,
     isError,
     error,
+    refetch,
   } = useQuery({
     queryKey: ["improvementRequest", requestId],
     queryFn: () =>
@@ -173,6 +140,14 @@ export function ImprovementRequestDetailModal({
   const lastRequestRef = useRef<ImprovementRequestDetailPublic | null>(null)
   if (fetched) lastRequestRef.current = fetched
   const request = fetched ?? (requestId ? null : lastRequestRef.current)
+
+  // Closing drops the triage draft: the modal stays mounted in the card, so
+  // a kept draft would reappear on the next open as "Unsaved changes" over
+  // whatever the server holds by then.
+  const close = () => {
+    setDraft({ requestId: null, status: "", note: "" })
+    onClose()
+  }
 
   const invalidateLists = () => {
     queryClient.invalidateQueries({
@@ -194,7 +169,7 @@ export function ImprovementRequestDetailModal({
     // open with the draft intact so the edit is not lost.
     onSuccess: () => {
       showSuccessToast("Improvement request updated")
-      onClose()
+      close()
     },
     onError: (error) =>
       showErrorToast(getErrorMessage(error, "Could not update the request.")),
@@ -208,10 +183,57 @@ export function ImprovementRequestDetailModal({
       }),
     onSuccess: () => {
       showSuccessToast("Improvement request deleted")
-      onClose()
+      setDeleteOpen(false)
+      // Gone: drop it rather than re-read it into a 404.
+      queryClient.removeQueries({ queryKey: ["improvementRequest", requestId] })
+      close()
     },
     onError: (error) =>
       showErrorToast(getErrorMessage(error, "Could not delete the request.")),
+    onSettled: () =>
+      queryClient.invalidateQueries({
+        queryKey: ["improvementRequests", agentId],
+      }),
+  })
+
+  const buildMutation = useMutation({
+    mutationFn: async (target: ImprovementRequestDetailPublic) => {
+      const session = await SessionsService.createSession({
+        requestBody: { agent_id: target.target_agent_id, mode: "building" },
+      })
+      if (target.status === "new") {
+        // The session exists either way, so a failed status write is told,
+        // not fatal.
+        try {
+          await ImprovementRequestsService.updateImprovementRequest({
+            requestId: target.id,
+            requestBody: { status: "in_progress" },
+          })
+        } catch (error) {
+          showErrorToast(
+            getErrorMessage(error, "Could not mark the request in progress."),
+          )
+        }
+      }
+      return { sessionId: session.id, requestId: target.id }
+    },
+    onSuccess: ({ sessionId, requestId: id }) => {
+      close()
+      navigate({
+        to: "/session/$sessionId",
+        params: { sessionId },
+        search: {
+          initialMessage: buildingSessionMessage(id),
+          fileIds: undefined,
+          fileObjects: undefined,
+          pageContext: undefined,
+        },
+      })
+    },
+    onError: (error) =>
+      showErrorToast(
+        getErrorMessage(error, "Could not start a building session."),
+      ),
     onSettled: invalidateLists,
   })
 
@@ -229,6 +251,12 @@ export function ImprovementRequestDetailModal({
       setIsDownloading(false)
     }
   }
+
+  const isBusy =
+    updateMutation.isPending ||
+    deleteMutation.isPending ||
+    buildMutation.isPending ||
+    isDownloading
 
   const savedStatus = request?.status ?? ""
   const savedNote = request?.resolution_note ?? ""
@@ -249,98 +277,182 @@ export function ImprovementRequestDetailModal({
     })
   }
 
-  const context = request?.context as ContextBlock | undefined
-  const agentBlock = block(context, "agent")
-  const envBlock = block(context, "environment")
-  const sdkBlock = block(context, "sdk")
-  const plugins = Array.isArray(context?.plugins) ? context.plugins : []
-  const promptsBlock = block(context, "prompts")
-  const memoryBlock = block(context, "memory")
+  const isApi = request ? isApiCapabilityRequest(request) : false
+  const payload = request && isApi ? readApiRequest(request.context) : null
+  const apiTitle = payload
+    ? request?.title || payload.title || "Untitled API request"
+    : ""
+  const consumerAgent = payload
+    ? request?.source_agent_name || payload.consumerAgentName
+    : ""
 
-  // `context.prompts.diverged` is deliberately tri-state: `null` means there
-  // was no installed revision to diff against, which is not the same answer as
-  // "no". Rendering it as "no" would tell a publisher their text is intact
-  // when nothing was ever compared. It covers the published prompt documents
-  // only — the router trigger is routing metadata the platform writes by itself
-  // and the install's owner may set, so counting it would flag nearly every
-  // consumer install for an edit no person made.
-  const divergedFields = Array.isArray(promptsBlock.diverged_fields)
-    ? (promptsBlock.diverged_fields as string[])
-    : []
-  const promptsDiverged =
-    typeof promptsBlock.diverged === "boolean"
-      ? promptsBlock.diverged
-        ? `yes — ${divergedFields.length > 0 ? divergedFields.join(", ") : "the install's prompts"} differ from the published revision`
-        : "no — matches the published revision"
-      : "no baseline to compare against"
+  const renderBody = (req: ImprovementRequestDetailPublic): ReactNode => {
+    const details = (
+      <>
+        {req.snapshot_truncated && (
+          <Alert className="border-warning text-warning">
+            <AlertTriangle />
+            <AlertDescription>
+              This snapshot was truncated to fit the size limit — the oldest
+              messages were dropped.
+            </AlertDescription>
+          </Alert>
+        )}
 
-  // Revision numbers are shared between published and git-origin revisions and
-  // only a publish moves the bundle's "latest published" pointer, so an install
-  // can legitimately sit above it. Both sides are labelled rather than printed
-  // as bare version strings — a git revision carries no version at all, and an
-  // em-dash there reads as missing data instead of "unversioned".
-  const installedLabel = revisionLabel(
-    agentBlock.installed_version,
-    agentBlock.installed_revision_number,
-    agentBlock.installed_revision_origin,
-  )
-  const publishedLabel = revisionLabel(
-    agentBlock.latest_published_version ?? agentBlock.latest_version,
-    agentBlock.latest_published_revision_number ??
-      agentBlock.latest_revision_number,
-  )
+        <ImprovementRequestFacts request={req} payload={payload} />
 
-  const memorySummary = memoryBlock.available
-    ? `${memoryBlock.file_count ?? 0} file(s) captured`
-    : (MEMORY_REASON_COPY[String(memoryBlock.unavailable_reason ?? "")] ??
-      "not captured")
+        {/* Reference material and the triage decision on one line. */}
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={isBusy}
+            onClick={handleDownload}
+          >
+            <Download className="h-4 w-4" />
+            {isDownloading
+              ? "Preparing…"
+              : isApi
+                ? "Download request archive"
+                : "Download session archive"}
+          </Button>
+          {isApi && (
+            <StartBuildingButton
+              isDirty={isDirty}
+              loading={buildMutation.isPending}
+              disabled={isBusy}
+              onClick={() => buildMutation.mutate(req)}
+            />
+          )}
+          <div className="flex items-center gap-2 sm:ml-auto">
+            <Label
+              htmlFor="improvement-status"
+              className="text-muted-foreground"
+            >
+              Status
+            </Label>
+            {/* A draft, not an immediate PATCH: a mis-click would otherwise
+                decline a request and stamp `status_changed_at` with no
+                confirmation and no undo. */}
+            <Select
+              value={status}
+              onValueChange={(value) => editDraft({ status: value })}
+              disabled={isBusy}
+            >
+              <SelectTrigger
+                id="improvement-status"
+                size="sm"
+                className="w-[9.5rem]"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {IMPROVEMENT_STATUSES.map((value) => (
+                  <SelectItem key={value} value={value}>
+                    {getImprovementStatusLabel(value)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
 
-  const detailRows: DetailRow[] = [
-    // `context.agent` is the *source* install — the consumer's copy — so a
-    // publisher must not read this as their own agent's name.
-    { label: "Agent (as installed)", value: asText(agentBlock.name) },
-    { label: "Bundle", value: asText(agentBlock.bundle_id) },
-    { label: "Installed", value: installedLabel },
-    { label: "Latest published", value: publishedLabel },
-    { label: "Update pending", value: asText(agentBlock.update_pending) },
-    { label: "Session mode", value: asText(sdkBlock.session_mode) },
-    { label: "SDK engine", value: asText(sdkBlock.effective_engine) },
-    { label: "Effective model", value: asText(sdkBlock.effective_model) },
-    { label: "Environment", value: asText(envBlock.env_name) },
-    { label: "Environment version", value: asText(envBlock.env_version) },
-    { label: "Environment status", value: asText(envBlock.status_at_capture) },
-    { label: "Image stale", value: asText(envBlock.image_stale) },
-    { label: "Critical state", value: asText(envBlock.critical_state) },
-    { label: "Plugins", value: String(plugins.length) },
-    // The two blocks that answer "what was the system prompt". Only shown for
-    // requests captured after prompt/memory capture existed — an older row has
-    // no `prompts` block, and an empty row would read as "no prompts".
-    ...(Object.keys(promptsBlock).length > 0
-      ? [
-          { label: "Prompts edited on the install", value: promptsDiverged },
-          { label: "Personal memory", value: memorySummary },
-        ]
-      : []),
-  ].filter((row) => row.value !== null)
+        <div>
+          <div className="flex items-baseline justify-between">
+            <Label htmlFor="improvement-resolution-note">Resolution note</Label>
+            <span className="text-xs text-muted-foreground">
+              {resolutionNote.length}/{MAX_RESOLUTION_NOTE_CHARS}
+            </span>
+          </div>
+          <Textarea
+            id="improvement-resolution-note"
+            className="mt-1.5"
+            rows={3}
+            maxLength={MAX_RESOLUTION_NOTE_CHARS}
+            value={resolutionNote}
+            disabled={isBusy}
+            onChange={(e) => editDraft({ note: e.target.value })}
+          />
+          {/* No requester-facing view ships in this version, so the caption
+              says where the note actually goes. */}
+          <p className="mt-1.5 text-xs text-muted-foreground">
+            Stored with the request. The person who submitted it can read it
+            through the API and the CLI.
+          </p>
+        </div>
+      </>
+    )
+
+    const second = payload
+      ? hasEndpointDetails(payload)
+        ? {
+            value: "endpoint",
+            label: "Endpoint",
+            icon: FileCode,
+            body: <ImprovementRequestApiEndpoint payload={payload} />,
+          }
+        : null
+      : {
+          value: "context",
+          label: "Context",
+          icon: Layers,
+          body: <ImprovementRequestSessionContext request={req} />,
+        }
+
+    if (!second) {
+      return <div className={SEGMENTED_DIALOG_PANEL_CLASS}>{details}</div>
+    }
+    const SecondIcon = second.icon
+    return (
+      <Tabs defaultValue="details" className="min-w-0 gap-4">
+        <TabsList className={SEGMENTED_LIST_CLASS}>
+          <TabsTrigger value="details" className={SEGMENTED_TRIGGER_CLASS}>
+            <Info className="h-3.5 w-3.5" />
+            Details
+          </TabsTrigger>
+          <TabsTrigger value={second.value} className={SEGMENTED_TRIGGER_CLASS}>
+            <SecondIcon className="h-3.5 w-3.5" />
+            {second.label}
+          </TabsTrigger>
+        </TabsList>
+        <TabsContent value="details" className={SEGMENTED_DIALOG_PANEL_CLASS}>
+          {details}
+        </TabsContent>
+        <TabsContent
+          value={second.value}
+          className={SEGMENTED_DIALOG_PANEL_CLASS}
+        >
+          {second.body}
+        </TabsContent>
+      </Tabs>
+    )
+  }
 
   return (
     <Dialog
       open={Boolean(requestId)}
       onOpenChange={(open) => {
-        if (!open) onClose()
+        // Escape and outside-click must not close a dialog mid-request.
+        if (!open && !isBusy) close()
       }}
     >
-      <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto overflow-x-hidden [&>*]:min-w-0">
         {isError ? (
           <>
             <DialogHeader>
               <DialogTitle>Improvement request</DialogTitle>
-              <DialogDescription className="text-destructive">
-                {getErrorMessage(error, "Couldn't load this request.")}
+              <DialogDescription className="sr-only">
+                This request could not be loaded.
               </DialogDescription>
             </DialogHeader>
+            <QueryErrorAlert
+              error={error}
+              fallback="Couldn't load this request"
+              onRetry={() => refetch()}
+            />
             <DialogFooter>
-              <Button variant="outline" onClick={onClose}>
+              <Button variant="outline" onClick={close}>
                 Close
               </Button>
             </DialogFooter>
@@ -359,238 +471,39 @@ export function ImprovementRequestDetailModal({
         ) : (
           <>
             <DialogHeader>
-              <DialogTitle>Improvement request</DialogTitle>
-              {/* Visually hidden: the dialog needs a description for
-                  assistive tech, but the sighted reader gets the facts from
-                  the summary block right below the title. */}
-              <DialogDescription className="sr-only">
-                Who shared this session, what they wrote, and how it is being
-                handled.
-              </DialogDescription>
+              {isApi ? (
+                <>
+                  <DialogTitle className="break-words">{apiTitle}</DialogTitle>
+                  <DialogDescription className="break-words">
+                    Capability request from{" "}
+                    {request.requester_display || "an unknown caller"}
+                    {consumerAgent ? ` through ${consumerAgent}` : ""}.
+                  </DialogDescription>
+                </>
+              ) : (
+                <>
+                  <DialogTitle>Improvement request</DialogTitle>
+                  {/* Visually hidden: the sighted reader gets the facts from
+                      the summary block right below the title. */}
+                  <DialogDescription className="sr-only">
+                    Who shared this session, what they wrote, and how it is
+                    being handled.
+                  </DialogDescription>
+                </>
+              )}
             </DialogHeader>
 
-            <div className="space-y-4 py-2">
-              {request.snapshot_truncated && (
-                <div
-                  role="note"
-                  className="flex items-start gap-2 rounded-md border-l-4 border-amber-500 bg-amber-50/70 dark:bg-amber-950/30 px-3 py-2 text-sm text-amber-900 dark:text-amber-200"
-                >
-                  <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
-                  <span>
-                    This snapshot was truncated to fit the size limit — the
-                    oldest messages were dropped.
-                  </span>
-                </div>
-              )}
-
-              {/* Who sent it, when, how much of it — and their comment, which
-                  only means anything alongside those three. One block, so the
-                  form below is just the decision. */}
-              <div className="rounded-md border bg-muted/20">
-                <dl className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-3 px-3 py-2.5 text-sm">
-                  <div className="col-span-2 min-w-0">
-                    <dt className="text-xs uppercase tracking-wide text-muted-foreground">
-                      From
-                    </dt>
-                    <dd className="mt-0.5 truncate font-medium">
-                      {request.requester_display || "Unknown"}
-                    </dd>
-                    {request.requester_email && (
-                      <dd
-                        className="truncate text-xs text-muted-foreground"
-                        title={request.requester_email}
-                      >
-                        {request.requester_email}
-                      </dd>
-                    )}
-                  </div>
-                  <div className="min-w-0">
-                    <dt className="text-xs uppercase tracking-wide text-muted-foreground">
-                      Submitted
-                    </dt>
-                    <dd className="mt-0.5 font-medium">
-                      {formatDateTime(request.created_at)}
-                    </dd>
-                  </div>
-                  <div className="min-w-0">
-                    <dt className="text-xs uppercase tracking-wide text-muted-foreground">
-                      Messages
-                    </dt>
-                    <dd className="mt-0.5 font-medium">
-                      {request.snapshot_message_count}
-                    </dd>
-                  </div>
-                </dl>
-                {/* Requester's comment. Deliberately plain text, never
-                    markdown: it is cross-user content rendered in the owner's
-                    UI. */}
-                <div className="border-t px-3 py-2.5">
-                  <p className="text-xs uppercase tracking-wide text-muted-foreground">
-                    Comment
-                  </p>
-                  <div className="mt-1 text-sm whitespace-pre-wrap break-words">
-                    {request.comment || (
-                      <span className="text-muted-foreground">
-                        No comment was left.
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* Reference material and the triage decision on one line: two
-                  buttons that open or fetch, and the status the owner sets. */}
-              <div className="flex flex-wrap items-center gap-2">
-                {/* A nested dialog rather than a popover: the list is long
-                    enough that an anchored panel runs off the bottom of the
-                    viewport on short screens. */}
-                <Dialog>
-                  <DialogTrigger asChild>
-                    <Button type="button" variant="outline" size="sm">
-                      <Info className="h-4 w-4" />
-                      Context details
-                    </Button>
-                  </DialogTrigger>
-                  <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto">
-                    <DialogHeader>
-                      <DialogTitle>Context at capture</DialogTitle>
-                      <DialogDescription>
-                        Frozen when the request was submitted — not a live read
-                        of the install.
-                      </DialogDescription>
-                    </DialogHeader>
-                    {detailRows.length === 0 ? (
-                      <p className="text-sm text-muted-foreground">
-                        No runtime context was captured with this request.
-                      </p>
-                    ) : (
-                      <dl className="divide-y rounded-md border text-sm">
-                        {detailRows.map((row) => (
-                          <div
-                            key={row.label}
-                            className="flex items-start justify-between gap-3 px-3 py-2"
-                          >
-                            <dt className="text-muted-foreground shrink-0">
-                              {row.label}
-                            </dt>
-                            <dd
-                              className="font-medium text-right break-words"
-                              title={row.value ?? ""}
-                            >
-                              {row.value}
-                            </dd>
-                          </div>
-                        ))}
-                      </dl>
-                    )}
-                  </DialogContent>
-                </Dialog>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={isDownloading}
-                  onClick={handleDownload}
-                >
-                  <Download className="h-4 w-4" />
-                  {isDownloading ? "Preparing…" : "Download session archive"}
-                </Button>
-                <div className="flex items-center gap-2 sm:ml-auto">
-                  <Label
-                    htmlFor="improvement-status"
-                    className="text-muted-foreground"
-                  >
-                    Status
-                  </Label>
-                  {/* A draft, not an immediate PATCH: a mis-click would
-                      otherwise decline a request and stamp
-                      `status_changed_at` with no confirmation and no undo.
-                      Saving both fields at once also makes "change the status
-                      and explain why" a single round-trip. */}
-                  <Select
-                    value={status}
-                    onValueChange={(value) => editDraft({ status: value })}
-                    disabled={updateMutation.isPending}
-                  >
-                    <SelectTrigger
-                      id="improvement-status"
-                      size="sm"
-                      className="w-[9.5rem]"
-                    >
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {IMPROVEMENT_STATUSES.map((status) => (
-                        <SelectItem key={status} value={status}>
-                          {getImprovementStatusLabel(status)}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              <div>
-                <div className="flex items-baseline justify-between">
-                  <Label htmlFor="improvement-resolution-note">
-                    Resolution note
-                  </Label>
-                  <span className="text-xs text-muted-foreground">
-                    {resolutionNote.length}/{MAX_RESOLUTION_NOTE_CHARS}
-                  </span>
-                </div>
-                <Textarea
-                  id="improvement-resolution-note"
-                  className="mt-1.5"
-                  rows={3}
-                  maxLength={MAX_RESOLUTION_NOTE_CHARS}
-                  value={resolutionNote}
-                  onChange={(e) => editDraft({ note: e.target.value })}
-                />
-                {/* No requester-facing view ships in this version, so the
-                    caption says where the note actually goes rather than
-                    promising the requester will be shown it. */}
-                <p className="mt-1.5 text-xs text-muted-foreground">
-                  Stored with the request. The person who submitted it can read
-                  it through the API and the CLI.
-                </p>
-              </div>
-            </div>
+            {renderBody(request)}
 
             <DialogFooter className="sm:justify-between">
-              <AlertDialog>
-                <AlertDialogTrigger asChild>
-                  <Button
-                    variant="destructive"
-                    disabled={deleteMutation.isPending}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                    Delete
-                  </Button>
-                </AlertDialogTrigger>
-                <AlertDialogContent>
-                  <AlertDialogHeader>
-                    <AlertDialogTitle>
-                      Delete this improvement request?
-                    </AlertDialogTitle>
-                    <AlertDialogDescription>
-                      The shared conversation snapshot and its archive are
-                      removed permanently. The person who submitted it is not
-                      notified, and they cannot send the same session again
-                      without starting a new request.
-                    </AlertDialogDescription>
-                  </AlertDialogHeader>
-                  <AlertDialogFooter>
-                    <AlertDialogCancel>Cancel</AlertDialogCancel>
-                    <AlertDialogAction
-                      onClick={() => deleteMutation.mutate()}
-                      className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                    >
-                      Delete
-                    </AlertDialogAction>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
+              <Button
+                variant="destructive"
+                disabled={isBusy}
+                onClick={() => setDeleteOpen(true)}
+              >
+                <Trash2 className="h-4 w-4" />
+                Delete
+              </Button>
               <div className="flex items-center gap-3">
                 {isDirty && (
                   <span className="text-xs text-muted-foreground">
@@ -600,7 +513,7 @@ export function ImprovementRequestDetailModal({
                 <LoadingButton
                   type="button"
                   loading={updateMutation.isPending}
-                  disabled={!isDirty}
+                  disabled={!isDirty || isBusy}
                   // The note is sent verbatim, never as null: the backend
                   // treats a null note as "leave unchanged", so clearing the
                   // field has to travel as an empty string (stored as NULL).
@@ -615,10 +528,87 @@ export function ImprovementRequestDetailModal({
                 </LoadingButton>
               </div>
             </DialogFooter>
+
+            <AlertDialog
+              open={deleteOpen}
+              onOpenChange={(next) => {
+                if (!deleteMutation.isPending) setDeleteOpen(next)
+              }}
+            >
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle className="break-words">
+                    {isApi
+                      ? `Delete the request "${apiTitle}"?`
+                      : "Delete this improvement request?"}
+                  </AlertDialogTitle>
+                  <AlertDialogDescription>
+                    {isApi
+                      ? "The request and its archive are removed permanently. The caller is not notified."
+                      : "The shared conversation snapshot and its archive are removed permanently. The person who submitted it is not notified, and they cannot send the same session again without starting a new request."}
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel disabled={deleteMutation.isPending}>
+                    Cancel
+                  </AlertDialogCancel>
+                  <LoadingButton
+                    variant="destructive"
+                    loading={deleteMutation.isPending}
+                    onClick={() => deleteMutation.mutate()}
+                  >
+                    Delete
+                  </LoadingButton>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </>
         )}
       </DialogContent>
     </Dialog>
+  )
+}
+
+/**
+ * "Start building session" — disabled while the triage draft is unsaved,
+ * because the action navigates away and would drop it. A disabled button
+ * fires no pointer events, so the tooltip sits on a wrapping `span`.
+ */
+function StartBuildingButton({
+  isDirty,
+  loading,
+  disabled,
+  onClick,
+}: {
+  isDirty: boolean
+  loading: boolean
+  disabled: boolean
+  onClick: () => void
+}) {
+  const button = (
+    <LoadingButton
+      type="button"
+      variant="outline"
+      size="sm"
+      loading={loading}
+      disabled={disabled || isDirty}
+      onClick={onClick}
+    >
+      {!loading && <Hammer className="h-4 w-4" />}
+      {loading ? "Starting…" : "Start building session"}
+    </LoadingButton>
+  )
+  if (!isDirty) return button
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        {/* biome-ignore lint/a11y/noNoninteractiveTabindex: the wrapper carries the disabled button's tooltip for keyboard users too. */}
+        <span tabIndex={0}>{button}</span>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="text-xs">
+        Save or discard your changes first
+      </TooltipContent>
+    </Tooltip>
   )
 }
 

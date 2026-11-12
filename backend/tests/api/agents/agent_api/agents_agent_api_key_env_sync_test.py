@@ -265,3 +265,74 @@ def test_owner_identity_token_only_present_when_a_connection_is_synced(
     assert r.status_code == 200, r.text
     creds = _capture(lambda: _touch(client, su, r.json()["credential_id"]))
     assert len([c for c in creds if c["type"] == "owner_identity_token"]) == 1
+
+
+# ── Capability-request discoverability (P4) ───────────────────────────────────
+
+
+def _capture_full(trigger: Callable[[], None]) -> dict:
+    """Like ``_capture`` but returns the whole payload (json + README)."""
+    persistent = EnvironmentTestAdapter()
+    lm = EnvironmentService._lifecycle_manager
+    original = lm.get_adapter
+    lm.get_adapter = lambda env: persistent
+    try:
+        trigger()
+        drain_tasks()
+    finally:
+        lm.get_adapter = original
+    assert persistent.credentials_set
+    return persistent.credentials_set
+
+
+def test_active_key_and_connection_carry_improvement_requests_url_and_readme_paragraph(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    su = superuser_token_headers
+    producer, b, b_headers, b_agent, key, token = _setup_recipient_with_key(
+        client, su, "Cap URL Producer"
+    )
+    internal = urlsplit(settings.AGENT_ENV_BACKEND_URL).netloc
+    expected_path = f"/agent-api/{producer['id']}/_cinna/improvement-requests"
+
+    full = _capture_full(
+        lambda: link_credential_to_agent(client, b_headers, b_agent["id"], key["credential_id"])
+    )
+    (entry,) = _agent_api_entries(full["credentials_json"])
+    url = entry["credential_data"]["improvement_requests_url"]
+    assert urlsplit(url).netloc == internal
+    assert url.endswith(expected_path)
+    assert url == entry["credential_data"]["base_url"].rstrip("/") + "/_cinna/improvement-requests"
+    readme = full["credentials_readme"]
+    assert "Capability requests" in readme
+    assert "file_capability_request" in readme
+    assert token not in readme
+
+    consumer = create_agent_via_api(client, su, name="Cap URL Consumer")
+    drain_tasks()
+    r = client.post(
+        f"{API}/agents/{producer['id']}/agent-api/connect", headers=su,
+        json={"consumer_agent_id": consumer["id"], "credential_label": "conn"},
+    )
+    assert r.status_code == 200, r.text
+    creds = _capture(lambda: _touch(client, su, r.json()["credential_id"]))
+    (conn,) = _agent_api_entries(creds)
+    conn_url = conn["credential_data"]["improvement_requests_url"]
+    assert urlsplit(conn_url).netloc == internal
+    assert conn_url.endswith(expected_path)
+
+
+def test_unavailable_key_has_no_improvement_requests_url(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    su = superuser_token_headers
+    producer, b, b_headers, b_agent, key, token = _setup_recipient_with_key(
+        client, su, "Cap URL Paused Producer"
+    )
+    link_credential_to_agent(client, b_headers, b_agent["id"], key["credential_id"])
+    drain_tasks()
+    creds = _capture(lambda: update_agent(
+        client, su, producer["id"], agent_api_external_access_enabled=False))
+    (entry,) = _agent_api_entries(creds)
+    assert entry["unavailable_reason"] == "key_paused"
+    assert "improvement_requests_url" not in entry["credential_data"]

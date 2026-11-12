@@ -1119,6 +1119,24 @@ export type AgentApiAccessList = {
 };
 
 /**
+ * The consumer's view of a request they filed (no owner-side data).
+ */
+export type AgentApiCapabilityRequestPublic = {
+    id: string;
+    title?: (string | null);
+    status: string;
+    resolution_note?: (string | null);
+    created_at: string;
+    status_changed_at?: (string | null);
+    spec_version_seen?: (string | null);
+};
+
+export type AgentApiCapabilityRequestsPublic = {
+    data: Array<AgentApiCapabilityRequestPublic>;
+    count: number;
+};
+
+/**
  * A consumer agent that has the agent_api credential linked to it.
  */
 export type AgentApiConnectedAgent = {
@@ -1303,6 +1321,63 @@ export type AgentApiProducerConnection = {
 export type AgentApiProducerConnections = {
     data: Array<AgentApiProducerConnection>;
     count: number;
+};
+
+export type AgentApiRequestToolDetail = {
+    id: string;
+    title?: (string | null);
+    status: string;
+    requester_display?: (string | null);
+    consumer_agent_name?: (string | null);
+    created_at: string;
+    spec_version_seen?: (string | null);
+    need?: (string | null);
+    proposed_endpoint?: ({
+    [key: string]: unknown;
+} | null);
+    example_request?: (string | null);
+    example_response?: (string | null);
+    resolution_note?: (string | null);
+    status_changed_at?: (string | null);
+};
+
+export type AgentApiRequestToolError = {
+    error: AgentApiRequestToolErrorDetail;
+};
+
+export type AgentApiRequestToolErrorDetail = {
+    code: string;
+    message: string;
+};
+
+export type AgentApiRequestToolGetRequest = {
+    request_id: string;
+};
+
+export type AgentApiRequestToolListRequest = {
+    status?: (string | null);
+    limit?: number;
+};
+
+export type AgentApiRequestToolListResult = {
+    requests: Array<AgentApiRequestToolRow>;
+    count: number;
+};
+
+export type AgentApiRequestToolRow = {
+    id: string;
+    title?: (string | null);
+    status: string;
+    requester_display?: (string | null);
+    consumer_agent_name?: (string | null);
+    created_at: string;
+    spec_version_seen?: (string | null);
+};
+
+export type AgentApiRequestToolUpdateStatusRequest = {
+    request_id: string;
+    status: string;
+    resolution_note?: (string | null);
 };
 
 /**
@@ -3529,10 +3604,15 @@ export type BundleAccessGrantsPublic = {
  * differs from the latest published revision's snapshot. An install that
  * has never been published (no latest revision) reports ``stale=False``
  * with an empty ``drift`` list — there is nothing to be stale against.
+ *
+ * ``live`` is filled for every publisher install, published or not: the
+ * provisioning value of each linked credential, computed by the same
+ * resolver and policy publish uses.
  */
 export type BundleCredentialDrift = {
     stale: boolean;
     drift?: Array<CredentialSpecDrift>;
+    live?: Array<CredentialProvisioningOption>;
 };
 
 /**
@@ -4392,6 +4472,8 @@ export type CredentialBundleUsage = {
     display_name: string;
     publisher_install_id?: (string | null);
     provided_by: string;
+    publisher_user_id?: (string | null);
+    publisher_display?: (string | null);
 };
 
 export type CredentialBundleUsages = {
@@ -4406,6 +4488,7 @@ export type CredentialCreate = {
     allow_local_use?: boolean;
     allow_sharing?: boolean;
     allow_template_sharing?: boolean;
+    allow_bundle_reuse?: boolean;
     service_uri?: (string | null);
     mcp_mode_conversation?: boolean;
     mcp_mode_building?: boolean;
@@ -4497,6 +4580,26 @@ export type CredentialGroupSharesPublic = {
     count: number;
 };
 
+/**
+ * One linked credential's server-computed provisioning value.
+ *
+ * ``resolved_provided_by`` is what publish would write for it now (an
+ * explicit override is reported as-is, even one publish would reject).
+ * ``can_provide_as`` lists the non-``user`` modes the publisher may choose;
+ * ``blocked_reason`` is the ``credential_reuse_policy`` reason the
+ * publisher may not provide it (``None`` when it may, or when the
+ * publisher owns it).
+ */
+export type CredentialProvisioningOption = {
+    credential_id: string;
+    name: string;
+    resolved_provided_by: 'user' | 'publisher' | 'template';
+    can_provide_as?: Array<('publisher' | 'template')>;
+    blocked_reason?: (string | null);
+};
+
+export type resolved_provided_by = 'user' | 'publisher' | 'template';
+
 export type CredentialPublic = {
     name: string;
     type: CredentialType;
@@ -4504,6 +4607,7 @@ export type CredentialPublic = {
     allow_local_use?: boolean;
     allow_sharing?: boolean;
     allow_template_sharing?: boolean;
+    allow_bundle_reuse?: boolean;
     service_uri?: (string | null);
     mcp_mode_conversation?: boolean;
     mcp_mode_building?: boolean;
@@ -4573,6 +4677,7 @@ export type CredentialSharePublic = {
     agent_usages?: Array<CredentialShareAgentUsage>;
     direct_agent_use_count?: number;
     local_skill_usages?: Array<CredentialShareLocalSkillUsage>;
+    reshared_via?: (ReshareVia | null);
 };
 
 /**
@@ -4594,6 +4699,8 @@ export type CredentialSkillUsage = {
     package_id: string;
     display_name: string;
     revision_numbers?: Array<(number)>;
+    publisher_user_id?: (string | null);
+    publisher_display?: (string | null);
 };
 
 /**
@@ -4634,6 +4741,7 @@ export type CredentialUpdate = {
     allow_local_use?: (boolean | null);
     allow_sharing?: (boolean | null);
     allow_template_sharing?: (boolean | null);
+    allow_bundle_reuse?: (boolean | null);
     template_private_fields?: (Array<(string)> | null);
     service_uri?: (string | null);
     mcp_mode_conversation?: (boolean | null);
@@ -4647,6 +4755,7 @@ export type CredentialWithData = {
     allow_local_use?: boolean;
     allow_sharing?: boolean;
     allow_template_sharing?: boolean;
+    allow_bundle_reuse?: boolean;
     service_uri?: (string | null);
     mcp_mode_conversation?: boolean;
     mcp_mode_building?: boolean;
@@ -5728,6 +5837,8 @@ export type ImprovementRequestCreate = {
  */
 export type ImprovementRequestDetailPublic = {
     id: string;
+    kind?: string;
+    title?: (string | null);
     session_id?: (string | null);
     target_agent_id: string;
     target_agent_name?: (string | null);
@@ -5762,6 +5873,8 @@ export type ImprovementRequestDetailPublic = {
  */
 export type ImprovementRequestPublic = {
     id: string;
+    kind?: string;
+    title?: (string | null);
     session_id?: (string | null);
     target_agent_id: string;
     target_agent_name?: (string | null);
@@ -7898,6 +8011,23 @@ export type ResendInvitationResponse = {
 };
 
 /**
+ * How a recipient got a credential through a re-sharer's package (D7).
+ *
+ * Computed on read for share rows whose ``shared_by`` is not the owner: the
+ * bundle or skill package published by ``user_id`` that the recipient
+ * installed and that links the credential. ``package_name`` is ``None``
+ * when the package can no longer be found.
+ */
+export type ReshareVia = {
+    user_id: string;
+    display: string;
+    package_kind: 'bundle' | 'skill';
+    package_name?: (string | null);
+};
+
+export type package_kind = 'bundle' | 'skill';
+
+/**
  * Request to respond to a sub-task from source agent.
  */
 export type RespondToTaskRequest = {
@@ -8615,6 +8745,7 @@ export type SharedCredentialPublic = {
     agent_usage_count?: number;
     used_in_bundle?: boolean;
     via_groups?: Array<UserGroupRef>;
+    allow_bundle_reuse_effective?: boolean;
 };
 
 /**
@@ -10804,6 +10935,61 @@ export type AgentApiPublicConsumerSpecData = {
 
 export type AgentApiPublicConsumerSpecResponse = (unknown);
 
+export type AgentApiPublicConsumerCreateCapabilityRequestData = {
+    agentId: string;
+    requestBody: {
+        title: string;
+        need: string;
+        proposed_endpoint?: ({
+    method?: (string | null);
+    path?: (string | null);
+    params?: (Array<{
+    name: string;
+    in?: (string | null);
+    type?: (string | null);
+    description?: (string | null);
+}> | null);
+    response_fields?: (Array<{
+    name: string;
+    type?: (string | null);
+    description?: (string | null);
+}> | null);
+} | null);
+        example_request?: (string | null);
+        example_response?: (string | null);
+        spec_version_seen?: (string | null);
+    };
+};
+
+export type AgentApiPublicConsumerCreateCapabilityRequestResponse = (AgentApiCapabilityRequestPublic);
+
+export type AgentApiPublicConsumerListCapabilityRequestsData = {
+    agentId: string;
+};
+
+export type AgentApiPublicConsumerListCapabilityRequestsResponse = (AgentApiCapabilityRequestsPublic);
+
+export type AgentApiRequestsAgentApiRequestsListData = {
+    requestBody: AgentApiRequestToolListRequest;
+    xAgentEnvId?: (string | null);
+};
+
+export type AgentApiRequestsAgentApiRequestsListResponse = ((AgentApiRequestToolListResult | AgentApiRequestToolError));
+
+export type AgentApiRequestsAgentApiRequestsGetData = {
+    requestBody: AgentApiRequestToolGetRequest;
+    xAgentEnvId?: (string | null);
+};
+
+export type AgentApiRequestsAgentApiRequestsGetResponse = ((AgentApiRequestToolDetail | AgentApiRequestToolError));
+
+export type AgentApiRequestsAgentApiRequestsUpdateStatusData = {
+    requestBody: AgentApiRequestToolUpdateStatusRequest;
+    xAgentEnvId?: (string | null);
+};
+
+export type AgentApiRequestsAgentApiRequestsUpdateStatusResponse = ((AgentApiRequestToolDetail | AgentApiRequestToolError));
+
 export type AgentArtifactsAgentPublishArtifactData = {
     requestBody: AgentArtifactPublishRequest;
     xAgentEnvId?: (string | null);
@@ -12529,6 +12715,12 @@ export type CredentialsGetCredentialSharesData = {
 };
 
 export type CredentialsGetCredentialSharesResponse = (CredentialSharesPublic);
+
+export type CredentialsGetCredentialResharesData = {
+    credentialId: string;
+};
+
+export type CredentialsGetCredentialResharesResponse = (CredentialSharesPublic);
 
 export type CredentialsRevokeCredentialShareData = {
     credentialId: string;

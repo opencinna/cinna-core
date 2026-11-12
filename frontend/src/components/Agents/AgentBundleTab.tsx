@@ -30,7 +30,10 @@ import { type AgentPublic, BundlesService, InstallsService } from "@/client"
 import { AllRevisionsSheet } from "@/components/Agents/AllRevisionsSheet"
 import { BundlePermissionsCard } from "@/components/Agents/BundlePermissionsCard"
 import { BundleRevisionRow } from "@/components/Agents/BundleRevisionRow"
-import { CredentialProvisioningSection } from "@/components/Agents/CredentialProvisioningSection"
+import {
+  CredentialProvisioningSection,
+  canPublishFrom,
+} from "@/components/Agents/CredentialProvisioningSection"
 import { PreviewList } from "@/components/Common/PreviewList"
 import { providedByLabel } from "@/components/Credentials/providedByLabel"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -512,9 +515,11 @@ export function AgentBundleTab({ agent }: AgentBundleTabProps) {
         </Card>
       </div>
 
-      {/* Phase 5 — publisher-only credential provisioning controls, with the
-          unified permissions card sitting right next to it in the same row. */}
-      {agent.is_publisher_install && (
+      {/* Credential provisioning, editable from before the first publish so
+          the choices land in it (``canPublishFrom`` mirrors the backend's
+          ``PublishService.can_publish_from``; never a foreign install). The
+          permissions card next to it needs a bundle, so it is published-only. */}
+      {canPublishFrom(agent) && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <CredentialProvisioningSection agent={agent} bundle={bundle} />
           {isPublished && agent.bundle_uuid && (

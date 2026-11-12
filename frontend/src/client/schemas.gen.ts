@@ -5981,6 +5981,93 @@ export const AgentApiAccessListSchema = {
 plus the user groups holding scopes (sorted by name).`
 } as const;
 
+export const AgentApiCapabilityRequestPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        title: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Title'
+        },
+        status: {
+            type: 'string',
+            title: 'Status'
+        },
+        resolution_note: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Resolution Note'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        status_changed_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Status Changed At'
+        },
+        spec_version_seen: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Spec Version Seen'
+        }
+    },
+    type: 'object',
+    required: ['id', 'status', 'created_at'],
+    title: 'AgentApiCapabilityRequestPublic',
+    description: "The consumer's view of a request they filed (no owner-side data)."
+} as const;
+
+export const AgentApiCapabilityRequestsPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/AgentApiCapabilityRequestPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'AgentApiCapabilityRequestsPublic'
+} as const;
+
 export const AgentApiConnectedAgentSchema = {
     properties: {
         id: {
@@ -6836,6 +6923,321 @@ export const AgentApiProducerConnectionsSchema = {
     type: 'object',
     required: ['data', 'count'],
     title: 'AgentApiProducerConnections'
+} as const;
+
+export const AgentApiRequestToolDetailSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        title: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Title'
+        },
+        status: {
+            type: 'string',
+            title: 'Status'
+        },
+        requester_display: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Requester Display'
+        },
+        consumer_agent_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Consumer Agent Name'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        spec_version_seen: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Spec Version Seen'
+        },
+        need: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Need'
+        },
+        proposed_endpoint: {
+            anyOf: [
+                {
+                    additionalProperties: true,
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Proposed Endpoint'
+        },
+        example_request: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Example Request'
+        },
+        example_response: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Example Response'
+        },
+        resolution_note: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Resolution Note'
+        },
+        status_changed_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Status Changed At'
+        }
+    },
+    type: 'object',
+    required: ['id', 'status', 'created_at'],
+    title: 'AgentApiRequestToolDetail'
+} as const;
+
+export const AgentApiRequestToolErrorSchema = {
+    properties: {
+        error: {
+            '$ref': '#/components/schemas/AgentApiRequestToolErrorDetail'
+        }
+    },
+    type: 'object',
+    required: ['error'],
+    title: 'AgentApiRequestToolError'
+} as const;
+
+export const AgentApiRequestToolErrorDetailSchema = {
+    properties: {
+        code: {
+            type: 'string',
+            title: 'Code'
+        },
+        message: {
+            type: 'string',
+            title: 'Message'
+        }
+    },
+    type: 'object',
+    required: ['code', 'message'],
+    title: 'AgentApiRequestToolErrorDetail'
+} as const;
+
+export const AgentApiRequestToolGetRequestSchema = {
+    properties: {
+        request_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Request Id'
+        }
+    },
+    type: 'object',
+    required: ['request_id'],
+    title: 'AgentApiRequestToolGetRequest'
+} as const;
+
+export const AgentApiRequestToolListRequestSchema = {
+    properties: {
+        status: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 16
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Status'
+        },
+        limit: {
+            type: 'integer',
+            maximum: 50,
+            minimum: 1,
+            title: 'Limit',
+            default: 20
+        }
+    },
+    type: 'object',
+    title: 'AgentApiRequestToolListRequest'
+} as const;
+
+export const AgentApiRequestToolListResultSchema = {
+    properties: {
+        requests: {
+            items: {
+                '$ref': '#/components/schemas/AgentApiRequestToolRow'
+            },
+            type: 'array',
+            title: 'Requests'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['requests', 'count'],
+    title: 'AgentApiRequestToolListResult'
+} as const;
+
+export const AgentApiRequestToolRowSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        title: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Title'
+        },
+        status: {
+            type: 'string',
+            title: 'Status'
+        },
+        requester_display: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Requester Display'
+        },
+        consumer_agent_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Consumer Agent Name'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        spec_version_seen: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Spec Version Seen'
+        }
+    },
+    type: 'object',
+    required: ['id', 'status', 'created_at'],
+    title: 'AgentApiRequestToolRow'
+} as const;
+
+export const AgentApiRequestToolUpdateStatusRequestSchema = {
+    properties: {
+        request_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Request Id'
+        },
+        status: {
+            type: 'string',
+            maxLength: 16,
+            title: 'Status'
+        },
+        resolution_note: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 2000
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Resolution Note'
+        }
+    },
+    type: 'object',
+    required: ['request_id', 'status'],
+    title: 'AgentApiRequestToolUpdateStatusRequest'
 } as const;
 
 export const AgentApiScopeSchema = {
@@ -15578,6 +15980,14 @@ export const BundleCredentialDriftSchema = {
             type: 'array',
             title: 'Drift',
             default: []
+        },
+        live: {
+            items: {
+                '$ref': '#/components/schemas/CredentialProvisioningOption'
+            },
+            type: 'array',
+            title: 'Live',
+            default: []
         }
     },
     type: 'object',
@@ -15588,7 +15998,11 @@ export const BundleCredentialDriftSchema = {
 \`\`stale\`\` is \`\`True\`\` when any linked credential's live \`\`provided_by\`\`
 differs from the latest published revision's snapshot. An install that
 has never been published (no latest revision) reports \`\`stale=False\`\`
-with an empty \`\`drift\`\` list — there is nothing to be stale against.`
+with an empty \`\`drift\`\` list — there is nothing to be stale against.
+
+\`\`live\`\` is filled for every publisher install, published or not: the
+provisioning value of each linked credential, computed by the same
+resolver and policy publish uses.`
 } as const;
 
 export const BundleGroupGrantCreateSchema = {
@@ -18891,6 +19305,29 @@ export const CredentialBundleUsageSchema = {
         provided_by: {
             type: 'string',
             title: 'Provided By'
+        },
+        publisher_user_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Publisher User Id'
+        },
+        publisher_display: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Publisher Display'
         }
     },
     type: 'object',
@@ -18964,6 +19401,11 @@ export const CredentialCreateSchema = {
         allow_template_sharing: {
             type: 'boolean',
             title: 'Allow Template Sharing',
+            default: false
+        },
+        allow_bundle_reuse: {
+            type: 'boolean',
+            title: 'Allow Bundle Reuse',
             default: false
         },
         service_uri: {
@@ -19249,6 +19691,56 @@ export const CredentialGroupSharesPublicSchema = {
     title: 'CredentialGroupSharesPublic'
 } as const;
 
+export const CredentialProvisioningOptionSchema = {
+    properties: {
+        credential_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Credential Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        resolved_provided_by: {
+            type: 'string',
+            enum: ['user', 'publisher', 'template'],
+            title: 'Resolved Provided By'
+        },
+        can_provide_as: {
+            items: {
+                type: 'string',
+                enum: ['publisher', 'template']
+            },
+            type: 'array',
+            title: 'Can Provide As',
+            default: []
+        },
+        blocked_reason: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Blocked Reason'
+        }
+    },
+    type: 'object',
+    required: ['credential_id', 'name', 'resolved_provided_by'],
+    title: 'CredentialProvisioningOption',
+    description: `One linked credential's server-computed provisioning value.
+
+\`\`resolved_provided_by\`\` is what publish would write for it now (an
+explicit override is reported as-is, even one publish would reject).
+\`\`can_provide_as\`\` lists the non-\`\`user\`\` modes the publisher may choose;
+\`\`blocked_reason\`\` is the \`\`credential_reuse_policy\`\` reason the
+publisher may not provide it (\`\`None\`\` when it may, or when the
+publisher owns it).`
+} as const;
+
 export const CredentialPublicSchema = {
     properties: {
         name: {
@@ -19284,6 +19776,11 @@ export const CredentialPublicSchema = {
         allow_template_sharing: {
             type: 'boolean',
             title: 'Allow Template Sharing',
+            default: false
+        },
+        allow_bundle_reuse: {
+            type: 'boolean',
+            title: 'Allow Bundle Reuse',
             default: false
         },
         service_uri: {
@@ -19602,6 +20099,16 @@ export const CredentialSharePublicSchema = {
             type: 'array',
             title: 'Local Skill Usages',
             default: []
+        },
+        reshared_via: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/ReshareVia'
+                },
+                {
+                    type: 'null'
+                }
+            ]
         }
     },
     type: 'object',
@@ -19652,6 +20159,29 @@ export const CredentialSkillUsageSchema = {
             type: 'array',
             title: 'Revision Numbers',
             default: []
+        },
+        publisher_user_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Publisher User Id'
+        },
+        publisher_display: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Publisher Display'
         }
     },
     type: 'object',
@@ -19778,6 +20308,17 @@ export const CredentialUpdateSchema = {
             ],
             title: 'Allow Template Sharing'
         },
+        allow_bundle_reuse: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Allow Bundle Reuse'
+        },
         template_private_fields: {
             anyOf: [
                 {
@@ -19865,6 +20406,11 @@ export const CredentialWithDataSchema = {
         allow_template_sharing: {
             type: 'boolean',
             title: 'Allow Template Sharing',
+            default: false
+        },
+        allow_bundle_reuse: {
+            type: 'boolean',
+            title: 'Allow Bundle Reuse',
             default: false
         },
         service_uri: {
@@ -24095,6 +24641,22 @@ export const ImprovementRequestDetailPublicSchema = {
             format: 'uuid',
             title: 'Id'
         },
+        kind: {
+            type: 'string',
+            title: 'Kind',
+            default: 'session'
+        },
+        title: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Title'
+        },
         session_id: {
             anyOf: [
                 {
@@ -24290,6 +24852,22 @@ export const ImprovementRequestPublicSchema = {
             type: 'string',
             format: 'uuid',
             title: 'Id'
+        },
+        kind: {
+            type: 'string',
+            title: 'Kind',
+            default: 'session'
+        },
+        title: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Title'
         },
         session_id: {
             anyOf: [
@@ -32498,6 +33076,45 @@ a resend that only reported \`\`email_sent=False\`\` would leave the admin
 holding a rotated — therefore newly useless — old link.`
 } as const;
 
+export const ReshareViaSchema = {
+    properties: {
+        user_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'User Id'
+        },
+        display: {
+            type: 'string',
+            title: 'Display'
+        },
+        package_kind: {
+            type: 'string',
+            enum: ['bundle', 'skill'],
+            title: 'Package Kind'
+        },
+        package_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Package Name'
+        }
+    },
+    type: 'object',
+    required: ['user_id', 'display', 'package_kind'],
+    title: 'ReshareVia',
+    description: `How a recipient got a credential through a re-sharer's package (D7).
+
+Computed on read for share rows whose \`\`shared_by\`\` is not the owner: the
+bundle or skill package published by \`\`user_id\`\` that the recipient
+installed and that links the credential. \`\`package_name\`\` is \`\`None\`\`
+when the package can no longer be found.`
+} as const;
+
 export const RespondToTaskRequestSchema = {
     properties: {
         task_id: {
@@ -36388,6 +37005,11 @@ export const SharedCredentialPublicSchema = {
             type: 'array',
             title: 'Via Groups',
             default: []
+        },
+        allow_bundle_reuse_effective: {
+            type: 'boolean',
+            title: 'Allow Bundle Reuse Effective',
+            default: false
         }
     },
     type: 'object',

@@ -881,3 +881,68 @@ def test_pbt_credential_bundle_usages_populated_tier_not_raised(
     assert r.status_code == 200, (
         f"Unforced DELETE of PBT credential must succeed; got {r.status_code}: {r.text}"
     )
+
+
+# ── Scenario L: a recipient's bundle re-uses the owner's connection ───────────
+
+
+def test_recipient_bundle_appears_in_owner_impact_and_drives_tier2_when_reuse_on(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """L. T's bundle linking S's shared connection shows in S's impact.
+
+    1. S shares an agent_api connection with T; T publishes a bundle linking it.
+       Re-use is off: the usage reports provided_by == "user", names T as
+       publisher, hides T's install id, and does not raise the tier.
+    2. S enables re-use and T republishes with an explicit publisher override;
+       U installs. The usage reports "publisher" and the tier is 2.
+    """
+    from tests.utils.agent_api_keys import setup_producer
+
+    su = superuser_token_headers
+    s, sh = _make_user_and_headers(client, su)
+    t, th = _make_user_and_headers(client, su)
+    u, uh = _make_user_and_headers(client, su)
+    producer = setup_producer(client, sh, name="ImpL-Producer")
+    r = client.post(f"{API}/agents/{producer['id']}/agent-api/connect", headers=sh, json={})
+    assert r.status_code == 200, r.text
+    cid = r.json()["credential_id"]
+    cred = client.put(
+        f"{API}/credentials/{cid}", headers=sh, json={"allow_sharing": True}
+    ).json()
+    _share_credential(client, sh, cid, t["email"])
+
+    agent = create_agent_via_api(client, th, name="ImpL-T-Agent")
+    drain_tasks()
+    _publish(client, th, agent["id"])
+    _link_credential(client, th, agent["id"], cid)
+    fresh = _publish(client, th, agent["id"])
+    _make_public(client, th, fresh["bundle_uuid"])
+
+    # ── Phase 1: re-use off ──────────────────────────────────────────
+    impact = _get_deletion_impact(client, sh, cid)
+    usages = [x for x in impact["bundle_usages"] if x["bundle_id"] == fresh["bundle_id"]]
+    assert len(usages) == 1, impact
+    assert usages[0]["provided_by"] == "user"
+    assert usages[0]["publisher_user_id"] == t["id"]
+    assert usages[0]["publisher_display"] in (t["email"], t.get("full_name"))
+    assert usages[0]["publisher_install_id"] is None
+    assert impact["bundle_pbp_usages"] == []
+
+    # ── Phase 2: re-use on, explicit publisher, a live install ───────
+    r = client.put(f"{API}/credentials/{cid}", headers=sh, json={"allow_bundle_reuse": True})
+    assert r.status_code == 200, r.text
+    r = client.patch(
+        f"{API}/agents/{agent['id']}/publish-settings",
+        headers=th,
+        json={"credential_overrides": {cred["name"]: {"provided_by": "publisher"}}},
+    )
+    assert r.status_code == 200, r.text
+    fresh = _publish(client, th, agent["id"])
+    _install(client, uh, fresh["bundle_id"])
+    impact = _get_deletion_impact(client, sh, cid)
+    usage = next(x for x in impact["bundle_usages"] if x["bundle_id"] == fresh["bundle_id"])
+    assert usage["provided_by"] == "publisher"
+    assert impact["tier"] == 2, impact
+    assert impact["active_install_count"] >= 1

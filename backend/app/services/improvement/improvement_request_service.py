@@ -12,6 +12,8 @@ Responsibilities:
 * :meth:`build_context_preview` — the consent modal's pre-flight, running the
   *same* gate and the *same* resolution so the copy can never disagree with what
   submitting will do
+* :meth:`create_from_agent_api` — a capability request filed by an identified
+  caller of an agent's REST API (``kind = agent_api``, no snapshot)
 * list / get / update / delete surfaces, with 404-not-403 semantics for
   inaccessible ids
 """
@@ -23,13 +25,21 @@ from datetime import datetime, timedelta, UTC
 from sqlalchemy import case, func
 from sqlmodel import Session as DBSession, select
 
+from app.models.agent_api.agent_api_token import AgentApiToken
 from app.models.agents.agent import Agent
 from app.models.bundles.agent_bundle import AgentBundle
 from app.models.events.event import EventType
 from app.models.improvement.agent_improvement_request import (
+    AgentApiCapabilityRequestCreate,
+    AgentApiCapabilityRequestPublic,
+    AgentApiRequestToolDetail,
+    AgentApiRequestToolRow,
     AgentImprovementRequest,
     FALLBACK_PUBLISHER_UNAVAILABLE,
-    IMPROVEMENT_SOURCES,
+    IMPROVEMENT_KIND_AGENT_API,
+    IMPROVEMENT_KIND_SESSION,
+    IMPROVEMENT_SOURCE_AGENT_API,
+    IMPROVEMENT_SOURCE_COMMAND,
     IMPROVEMENT_SOURCE_WEB_UI,
     IMPROVEMENT_STATUSES,
     IMPROVEMENT_STATUS_NEW,
@@ -56,6 +66,18 @@ MAX_REQUESTS_PER_SESSION = 5
 MAX_REQUESTS_PER_USER_PER_DAY = 20
 RATE_LIMIT_WINDOW = timedelta(hours=24)
 
+# The surfaces a *session* request may come from.
+SESSION_SOURCES: frozenset[str] = frozenset(
+    {IMPROVEMENT_SOURCE_WEB_UI, IMPROVEMENT_SOURCE_COMMAND}
+)
+
+# Agent-API capability requests (plan D9): DB-counted over the same rolling
+# window, so the limit holds across workers and is deterministic in tests.
+MAX_AGENT_API_REQUESTS_PER_PRODUCER = 10
+MAX_AGENT_API_REQUESTS_PER_CALLER = 30
+# The consumer's "my requests on this API" list is a short status board.
+MAX_AGENT_API_REQUESTER_LIST = 50
+
 # Denial reasons — stable machine-readable codes the modal and the command
 # handler both key off.
 REASON_NOT_OWNER = "not_owner"
@@ -78,10 +100,18 @@ class ImprovementRequestDenied(Exception):
     ``CommandResult(content=message, is_error=True)``.
     """
 
-    def __init__(self, reason: str, message: str, status_code: int = 400) -> None:
+    def __init__(
+        self,
+        reason: str,
+        message: str,
+        status_code: int = 400,
+        retry_after: int | None = None,
+    ) -> None:
         self.reason = reason
         self.message = message
         self.status_code = status_code
+        # Seconds until a rate-limited caller may retry (``Retry-After``).
+        self.retry_after = retry_after
         super().__init__(message)
 
 
@@ -236,6 +266,8 @@ class ImprovementRequestService:
                 .select_from(AgentImprovementRequest)
                 .where(
                     AgentImprovementRequest.requester_user_id == requester.id,
+                    # Capability requests have their own quota (D9).
+                    AgentImprovementRequest.kind == IMPROVEMENT_KIND_SESSION,
                     AgentImprovementRequest.created_at >= since,
                 )
             ).one()
@@ -281,8 +313,13 @@ class ImprovementRequestService:
             raise denial
         assert source_agent is not None  # guaranteed by the gate
 
-        if source not in IMPROVEMENT_SOURCES:
-            source = IMPROVEMENT_SOURCE_WEB_UI
+        # Only the session surfaces may file a session request; ``agent_api``
+        # belongs to ``create_from_agent_api``.
+        if source not in SESSION_SOURCES:
+            raise ImprovementRequestDenied(
+                REASON_NOT_ELIGIBLE,
+                f"Unsupported submission source: {source}.",
+            )
 
         resolution = ImprovementRequestService.resolve_target(db, source_agent)
 
@@ -320,6 +357,7 @@ class ImprovementRequestService:
             owner_user_id=resolution.owner_user_id,
             comment=_clean_text(comment, MAX_COMMENT_CHARS),
             status=IMPROVEMENT_STATUS_NEW,
+            kind=IMPROVEMENT_KIND_SESSION,
             source=source,
             snapshot=snapshot,
             context=context,
@@ -334,6 +372,294 @@ class ImprovementRequestService:
             EventType.IMPROVEMENT_REQUEST_CREATED, request
         )
         return request
+
+    # ── Agent-API capability requests (plan §4.3) ─────────────────────
+
+    @staticmethod
+    def _check_agent_api_rate_limits(
+        db: DBSession, requester_id: uuid.UUID, target_id: uuid.UUID
+    ) -> None:
+        """Enforce D9: per caller per producer, and per caller overall.
+
+        A soft limit by design: count-then-insert is not atomic, so concurrent
+        requests from one caller can overshoot by the number in flight. That
+        is accepted — the limit bounds inbox noise, it is not a security
+        boundary — and avoids a lock on the hot path.
+
+        Raises:
+            ImprovementRequestDenied: 429 with ``retry_after`` = seconds until
+                the oldest request in the window ages out.
+        """
+        since = datetime.now(UTC) - RATE_LIMIT_WINDOW
+        base = [
+            AgentImprovementRequest.requester_user_id == requester_id,
+            AgentImprovementRequest.kind == IMPROVEMENT_KIND_AGENT_API,
+            AgentImprovementRequest.created_at >= since,
+        ]
+        checks = (
+            (
+                [*base, AgentImprovementRequest.target_agent_id == target_id],
+                MAX_AGENT_API_REQUESTS_PER_PRODUCER,
+                f"You have filed {MAX_AGENT_API_REQUESTS_PER_PRODUCER} capability "
+                "requests to this API in the last 24 hours, which is the limit.",
+            ),
+            (
+                base,
+                MAX_AGENT_API_REQUESTS_PER_CALLER,
+                f"You have filed {MAX_AGENT_API_REQUESTS_PER_CALLER} capability "
+                "requests in the last 24 hours, which is the limit.",
+            ),
+        )
+        for conditions, limit, message in checks:
+            count, oldest = db.exec(
+                select(
+                    func.count(), func.min(AgentImprovementRequest.created_at)
+                ).where(*conditions)
+            ).one()
+            if (count or 0) < limit:
+                continue
+            retry_after = 1
+            if oldest is not None:
+                if oldest.tzinfo is None:
+                    oldest = oldest.replace(tzinfo=UTC)
+                remaining = oldest + RATE_LIMIT_WINDOW - datetime.now(UTC)
+                retry_after = max(1, int(remaining.total_seconds()) + 1)
+            raise ImprovementRequestDenied(
+                REASON_RATE_LIMITED,
+                f"{message} Try again later.",
+                status_code=429,
+                retry_after=retry_after,
+            )
+
+    @staticmethod
+    async def create_from_agent_api(
+        db: DBSession,
+        *,
+        producer: Agent,
+        token: AgentApiToken,
+        caller: User,
+        consumer_agent_id: uuid.UUID | None,
+        body: AgentApiCapabilityRequestCreate,
+        raw_secrets: set[str],
+    ) -> AgentImprovementRequest:
+        """File a capability request against ``producer`` on behalf of ``caller``.
+
+        The caller is already authenticated (valid token for ``producer``) and
+        identified by the route. The consumer agent is attribution only (D12):
+        it is recorded only when it exists and ``caller`` owns it.
+
+        Never touches the producer's environment.
+
+        Raises:
+            ImprovementRequestDenied: 429 when a D9 rate limit is hit.
+        """
+        ImprovementRequestService._check_agent_api_rate_limits(
+            db, caller.id, producer.id
+        )
+
+        consumer_agent: Agent | None = None
+        if consumer_agent_id is not None:
+            candidate = db.get(Agent, consumer_agent_id)
+            if candidate is not None and candidate.owner_id == caller.id:
+                consumer_agent = candidate
+
+        context: dict = {
+            "api_request": body.model_dump(mode="json", by_alias=True),
+            "consumer": {
+                "agent_id": str(consumer_agent.id) if consumer_agent else None,
+                "agent_name": consumer_agent.name if consumer_agent else None,
+                "token_kind": token.kind,
+                "token_label": token.label,
+            },
+            "producer": {
+                "agent_id": str(producer.id),
+                "agent_name": producer.name,
+                "api_version_seen": body.spec_version_seen,
+            },
+        }
+
+        # The whole payload is caller-authored, so every string is scrubbed —
+        # not just the transcript keys a session snapshot uses.
+        secrets = {s for s in raw_secrets if s}
+        if consumer_agent is not None:
+            secrets |= ImprovementRequestService._collect_secrets(db, consumer_agent)
+        context, hits = secret_scrubber.scrub(context, secrets, all_strings=True)
+        context["platform"] = {"scrubbed_hits": hits}
+
+        api_request = context["api_request"]
+        request = AgentImprovementRequest(
+            session_id=None,
+            source_agent_id=consumer_agent.id if consumer_agent else None,
+            target_agent_id=producer.id,
+            bundle_uuid=None,
+            requester_user_id=caller.id,
+            owner_user_id=producer.owner_id,
+            # Mirrors ``need`` so list/CLI consumers that read ``comment`` work.
+            comment=_clean_text(api_request.get("need"), MAX_COMMENT_CHARS),
+            status=IMPROVEMENT_STATUS_NEW,
+            kind=IMPROVEMENT_KIND_AGENT_API,
+            source=IMPROVEMENT_SOURCE_AGENT_API,
+            snapshot={},
+            context=context,
+            snapshot_message_count=0,
+            snapshot_truncated=False,
+        )
+        db.add(request)
+        db.commit()
+        db.refresh(request)
+
+        await ImprovementRequestService._emit(
+            EventType.IMPROVEMENT_REQUEST_CREATED, request
+        )
+        return request
+
+    @staticmethod
+    def list_for_requester_on_target(
+        db: DBSession,
+        requester_id: uuid.UUID,
+        target_id: uuid.UUID,
+        kind: str = IMPROVEMENT_KIND_AGENT_API,
+    ) -> tuple[list[AgentImprovementRequest], int]:
+        """The caller's own requests on one producer, newest first (≤ 50)."""
+        conditions = [
+            AgentImprovementRequest.requester_user_id == requester_id,
+            AgentImprovementRequest.target_agent_id == target_id,
+            AgentImprovementRequest.kind == kind,
+        ]
+        count = (
+            db.exec(
+                select(func.count())
+                .select_from(AgentImprovementRequest)
+                .where(*conditions)
+            ).one()
+            or 0
+        )
+        rows = list(
+            db.exec(
+                select(AgentImprovementRequest)
+                .where(*conditions)
+                .order_by(AgentImprovementRequest.created_at.desc())  # type: ignore[attr-defined]
+                .limit(MAX_AGENT_API_REQUESTER_LIST)
+            ).all()
+        )
+        return rows, count
+
+    @staticmethod
+    def to_capability_public(
+        row: AgentImprovementRequest,
+    ) -> AgentApiCapabilityRequestPublic:
+        """The consumer's projection: status and the owner's note, nothing else."""
+        api_request = _api_request(row)
+        return AgentApiCapabilityRequestPublic(
+            id=row.id,
+            title=api_request.get("title"),
+            status=row.status,
+            resolution_note=row.resolution_note,
+            created_at=row.created_at,
+            status_changed_at=row.status_changed_at,
+            spec_version_seen=api_request.get("spec_version_seen"),
+        )
+
+    # ── Producer env tools (plan §4.5) ───────────────────────────────
+
+    @staticmethod
+    def list_agent_api_for_target(
+        db: DBSession,
+        target_id: uuid.UUID,
+        status: str | None = None,
+        limit: int = 20,
+    ) -> tuple[list[AgentApiRequestToolRow], int]:
+        """Capability requests received on one producer, for its building agent."""
+        conditions = [
+            AgentImprovementRequest.target_agent_id == target_id,
+            AgentImprovementRequest.kind == IMPROVEMENT_KIND_AGENT_API,
+        ]
+        if status:
+            conditions.append(AgentImprovementRequest.status == status)
+        count = (
+            db.exec(
+                select(func.count())
+                .select_from(AgentImprovementRequest)
+                .where(*conditions)
+            ).one()
+            or 0
+        )
+        rows = list(
+            db.exec(
+                select(AgentImprovementRequest)
+                .where(*conditions)
+                .order_by(
+                    case(
+                        (AgentImprovementRequest.status == IMPROVEMENT_STATUS_NEW, 0),
+                        else_=1,
+                    ),
+                    AgentImprovementRequest.created_at.desc(),  # type: ignore[attr-defined]
+                )
+                .limit(limit)
+            ).all()
+        )
+        users_by_id = {
+            u.id: u
+            for u in db.exec(
+                select(User).where(
+                    User.id.in_({r.requester_user_id for r in rows})  # type: ignore[attr-defined]
+                )
+            ).all()
+        } if rows else {}
+        return [
+            ImprovementRequestService._to_tool_row(
+                row, users_by_id.get(row.requester_user_id)
+            )
+            for row in rows
+        ], count
+
+    @staticmethod
+    def get_agent_api_for_target(
+        db: DBSession, request_id: uuid.UUID, target_id: uuid.UUID
+    ) -> AgentImprovementRequest | None:
+        """A capability request on this producer, or None (never another's)."""
+        row = db.get(AgentImprovementRequest, request_id)
+        if (
+            row is None
+            or row.target_agent_id != target_id
+            or row.kind != IMPROVEMENT_KIND_AGENT_API
+        ):
+            return None
+        return row
+
+    @staticmethod
+    def to_tool_detail(
+        db: DBSession, row: AgentImprovementRequest
+    ) -> AgentApiRequestToolDetail:
+        api_request = _api_request(row)
+        base = ImprovementRequestService._to_tool_row(
+            row, db.get(User, row.requester_user_id)
+        )
+        return AgentApiRequestToolDetail(
+            **base.model_dump(),
+            need=api_request.get("need"),
+            proposed_endpoint=api_request.get("proposed_endpoint"),
+            example_request=api_request.get("example_request"),
+            example_response=api_request.get("example_response"),
+            resolution_note=row.resolution_note,
+            status_changed_at=row.status_changed_at,
+        )
+
+    @staticmethod
+    def _to_tool_row(
+        row: AgentImprovementRequest, requester: User | None
+    ) -> AgentApiRequestToolRow:
+        api_request = _api_request(row)
+        consumer = (row.context or {}).get("consumer") or {}
+        return AgentApiRequestToolRow(
+            id=row.id,
+            title=api_request.get("title"),
+            status=row.status,
+            requester_display=display_name_for_user(requester),
+            consumer_agent_name=consumer.get("agent_name"),
+            created_at=row.created_at,
+            spec_version_seen=api_request.get("spec_version_seen"),
+        )
 
     @staticmethod
     def _collect_secrets(db: DBSession, source_agent: Agent) -> set[str]:
@@ -615,8 +941,11 @@ class ImprovementRequestService:
             agents_by_id.get(row.source_agent_id) if row.source_agent_id else None
         )
         requester = users_by_id.get(row.requester_user_id)
+        is_agent_api = row.kind == IMPROVEMENT_KIND_AGENT_API
         return ImprovementRequestPublic(
             id=row.id,
+            kind=row.kind,
+            title=_api_request(row).get("title") if is_agent_api else None,
             session_id=row.session_id,
             target_agent_id=row.target_agent_id,
             target_agent_name=target.name if target else None,
@@ -654,7 +983,11 @@ class ImprovementRequestService:
         return ImprovementRequestDetailPublic(
             **base.model_dump(),
             context=row.context or {},
-            session_title=snapshot_session.get("title"),
+            session_title=(
+                None
+                if row.kind == IMPROVEMENT_KIND_AGENT_API
+                else snapshot_session.get("title")
+            ),
         )
 
     # ── Single-row access ────────────────────────────────────────────
@@ -764,6 +1097,9 @@ class ImprovementRequestService:
         """
         requester = db.get(User, request.requester_user_id)
         target = db.get(Agent, request.target_agent_id)
+        source = (
+            db.get(Agent, request.source_agent_id) if request.source_agent_id else None
+        )
         snapshot_session = (request.snapshot or {}).get("session") or {}
         payload = ImprovementArchiveService.build(
             request,
@@ -777,6 +1113,7 @@ class ImprovementRequestService:
                     db.get(User, request.owner_user_id)
                 ),
                 "session_title": snapshot_session.get("title"),
+                "source_agent_name": source.name if source else None,
             },
         )
         return payload, archive_filename(request)
@@ -805,10 +1142,17 @@ class ImprovementRequestService:
                         str(request.bundle_uuid) if request.bundle_uuid else None
                     ),
                     "status": request.status,
+                    "kind": request.kind,
                 },
             )
         except Exception as e:  # noqa: BLE001 — the row is already committed
             logger.warning("Failed to emit %s for request %s: %s", event_type, request.id, e)
+
+
+def _api_request(row: AgentImprovementRequest) -> dict:
+    """The capability-request payload of an ``agent_api`` row ({} otherwise)."""
+    payload = (row.context or {}).get("api_request")
+    return payload if isinstance(payload, dict) else {}
 
 
 def _clean_text(value: str | None, limit: int) -> str | None:

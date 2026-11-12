@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy import union
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import Session, col, delete, func, select, and_
+from sqlmodel import Session, col, delete, func, select, and_, or_
 
 from app.models.agents.agent import Agent
 from app.models.bundles.agent_bundle import AgentBundle
@@ -21,6 +21,7 @@ from app.models.credentials.credential_share import (
     CredentialShareLocalSkillUsage,
     CredentialSharePublic,
     CredentialShareRevocation,
+    ReshareVia,
     SharedCredentialPublic,
 )
 from app.models.credentials.credential_group_share import (
@@ -33,6 +34,7 @@ from app.models.skills.skill_package_revision import SkillPackageRevision
 from app.models.users.user import User
 from app.models.users.user_group import UserGroup, UserGroupMember, UserGroupRef
 from app.services.credentials.credentials_service import CredentialsService
+from app.services.credentials.credential_reuse_policy import reuse_effective_ids
 from app.services.users.user_group_access import UserGroupAccess
 
 logger = logging.getLogger(__name__)
@@ -162,14 +164,23 @@ class CredentialShareService:
     async def revoke_credential_share(
         session: Session,
         share_id: UUID,
-        owner_id: UUID
+        owner_id: UUID,
+        credential_id: UUID | None = None,
     ) -> None:
         """
         Revoke a credential share.
 
+        ``credential_id`` (the route's path id), when given, must be the
+        share's credential; otherwise the share is "not found".
+
         Validations:
         - Share must exist
-        - Credential must be owned by owner_id
+        - The caller (``owner_id``) is the credential's owner, or the
+          re-sharer who made this share through their own bundle or skill
+          (``share.shared_by_user_id == caller != owner``)
+
+        The revocation is recorded with the caller as its author (D5): a
+        re-sharer's revocation blocks re-adding only through that re-sharer.
 
         Deletes the CredentialShare record, then unlinks the credential from the
         recipient's agents and re-syncs their running environments — a link
@@ -178,15 +189,23 @@ class CredentialShareService:
         recipient's containers.
         """
         share = session.get(CredentialShare, share_id)
-        if not share:
+        if not share or (
+            credential_id is not None and share.credential_id != credential_id
+        ):
             raise ValueError("Share not found")
 
         # Verify credential ownership
         credential = session.get(Credential, share.credential_id)
         if not credential:
             raise ValueError("Credential not found")
-        if credential.owner_id != owner_id:
-            raise ValueError("Not enough permissions to revoke this share")
+        is_owner = credential.owner_id == owner_id
+        is_resharer = share.shared_by_user_id == owner_id and not is_owner
+        if not (is_owner or is_resharer):
+            raise ValueError(
+                "Not enough permissions to revoke this share: only the "
+                "credential's owner, or the person who re-shared it through "
+                "their bundle or skill, can remove it"
+            )
 
         credential_id = share.credential_id
         recipient_id = share.shared_with_user_id
@@ -203,7 +222,8 @@ class CredentialShareService:
         session.commit()
 
         logger.info(
-            f"Credential share {share_id} revoked by owner {owner_id}"
+            f"Credential share {share_id} revoked by "
+            f"{'owner' if is_owner else 're-sharer'} {owner_id}"
         )
 
         await CredentialsService.unlink_credential_from_revoked_recipients(
@@ -233,51 +253,16 @@ class CredentialShareService:
         if credential.owner_id != owner_id:
             raise ValueError("Not enough permissions to view shares for this credential")
 
-        # Get owner info
-        owner = session.get(User, owner_id)
-
-        # Query all shares for this credential
+        # Query all shares for this credential. ``shared_by`` is the owner for
+        # direct and owner-package shares, a re-sharer for shares made through
+        # a recipient's own bundle or skill (``reshared_via`` names it).
         statement = select(CredentialShare).where(
             CredentialShare.credential_id == credential_id
         )
         shares = session.exec(statement).all()
-
-        (
-            agent_usages,
-            direct_agent_counts,
-            local_skill_usages,
-        ) = CredentialShareService._recipient_usages(
-            session,
-            credential=credential,
-            recipient_ids=[share.shared_with_user_id for share in shares],
+        return CredentialShareService._shares_to_public(
+            session, credential, shares, with_usages=True
         )
-
-        result = []
-        for share in shares:
-            # Get shared_with user info
-            shared_with_user = session.get(User, share.shared_with_user_id)
-            result.append(CredentialSharePublic(
-                id=share.id,
-                credential_id=share.credential_id,
-                credential_name=credential.name,
-                credential_type=credential.type.value,
-                shared_with_user_id=share.shared_with_user_id,
-                shared_with_email=shared_with_user.email if shared_with_user else "",
-                shared_by_user_id=share.shared_by_user_id,
-                shared_by_email=owner.email if owner else "",
-                shared_at=share.shared_at,
-                access_level=share.access_level,
-                source=share.source,
-                agent_usages=agent_usages.get(share.shared_with_user_id, []),
-                direct_agent_use_count=direct_agent_counts.get(
-                    share.shared_with_user_id, 0
-                ),
-                local_skill_usages=local_skill_usages.get(
-                    share.shared_with_user_id, []
-                ),
-            ))
-
-        return result
 
     # ── Owner revocations ────────────────────────────────────────────────
 
@@ -289,21 +274,36 @@ class CredentialShareService:
         user_id: UUID,
         revoked_by_user_id: UUID,
     ) -> None:
-        """Record that the owner removed ``user_id``'s share. Idempotent and
-        race-safe (``ON CONFLICT DO NOTHING``); never commits."""
-        session.exec(
-            pg_insert(CredentialShareRevocation)
-            .values(
-                id=uuid4(),
-                credential_id=credential_id,
-                user_id=user_id,
-                revoked_by_user_id=revoked_by_user_id,
-                created_at=datetime.now(timezone.utc),
+        """Record that ``revoked_by_user_id`` removed ``user_id``'s share.
+
+        Race-safe; never commits. An owner-authored revocation overwrites a
+        re-sharer's row for the same person (it blocks every path, D5); a
+        re-sharer's never overwrites an existing row.
+
+        Known limitation: there is one row per ``(credential, user)``. When a
+        second re-sharer revokes the same person while a first re-sharer's
+        row exists, the second revocation is dropped (``DO NOTHING``), so an
+        install of the second re-sharer's package may share it again.
+        """
+        credential = session.get(Credential, credential_id)
+        now = datetime.now(timezone.utc)
+        stmt = pg_insert(CredentialShareRevocation).values(
+            id=uuid4(),
+            credential_id=credential_id,
+            user_id=user_id,
+            revoked_by_user_id=revoked_by_user_id,
+            created_at=now,
+        )
+        if credential is not None and credential.owner_id == revoked_by_user_id:
+            stmt = stmt.on_conflict_do_update(
+                constraint="uq_credential_share_revocation_credential_user",
+                set_={"revoked_by_user_id": revoked_by_user_id, "created_at": now},
             )
-            .on_conflict_do_nothing(
+        else:
+            stmt = stmt.on_conflict_do_nothing(
                 constraint="uq_credential_share_revocation_credential_user"
             )
-        )
+        session.exec(stmt)
 
     @staticmethod
     def clear_revocation(
@@ -318,18 +318,191 @@ class CredentialShareService:
         )
 
     @staticmethod
-    def is_revoked(session: Session, *, credential_id: UUID, user_id: UUID) -> bool:
-        """The credential's owner removed ``user_id``'s share and has not
-        shared it with them again."""
+    def is_revoked(
+        session: Session,
+        *,
+        credential_id: UUID,
+        user_id: UUID,
+        via_publisher: UUID | None = None,
+    ) -> bool:
+        """Whether a removal of ``user_id``'s share blocks re-adding it.
+
+        True when the credential's owner removed it (blocks every path) and has
+        not shared it with them again, or — with ``via_publisher`` — when that
+        re-sharer removed it (blocks only re-adding through them, D5).
+        """
+        authors = [col(CredentialShareRevocation.revoked_by_user_id) == Credential.owner_id]
+        if via_publisher is not None:
+            authors.append(
+                col(CredentialShareRevocation.revoked_by_user_id) == via_publisher
+            )
         return (
             session.exec(
-                select(CredentialShareRevocation.id).where(
+                select(CredentialShareRevocation.id)
+                .join(
+                    Credential,
+                    col(Credential.id) == col(CredentialShareRevocation.credential_id),
+                )
+                .where(
                     CredentialShareRevocation.credential_id == credential_id,
                     CredentialShareRevocation.user_id == user_id,
+                    or_(*authors),
                 )
             ).first()
             is not None
         )
+
+    @staticmethod
+    def list_reshares(
+        session: Session, *, credential_id: UUID, caller_id: UUID
+    ) -> list[CredentialSharePublic]:
+        """The shares ``caller_id`` made as a non-owner through their own
+        bundles and skills. ``ValueError("Credential not found")`` when the
+        caller holds no access, so existence does not leak."""
+        credential = session.get(Credential, credential_id)
+        if credential is None or not (
+            credential.owner_id == caller_id
+            or CredentialShareService.has_share(session, credential_id, caller_id)
+        ):
+            raise ValueError("Credential not found")
+        if credential.owner_id == caller_id:
+            return []
+        shares = session.exec(
+            select(CredentialShare)
+            .where(
+                CredentialShare.credential_id == credential_id,
+                CredentialShare.shared_by_user_id == caller_id,
+            )
+            .order_by(col(CredentialShare.shared_at))
+        ).all()
+        return CredentialShareService._shares_to_public(session, credential, shares)
+
+    @staticmethod
+    def _shares_to_public(
+        session: Session,
+        credential: Credential,
+        shares: Iterable[CredentialShare],
+        *,
+        with_usages: bool = False,
+    ) -> list[CredentialSharePublic]:
+        """Project share rows, resolving both emails per row and the
+        ``reshared_via`` package for rows a re-sharer made (D7)."""
+        shares = list(shares)
+        if with_usages:
+            (
+                agent_usages,
+                direct_agent_counts,
+                local_skill_usages,
+            ) = CredentialShareService._recipient_usages(
+                session,
+                credential=credential,
+                recipient_ids=[share.shared_with_user_id for share in shares],
+            )
+        else:
+            agent_usages, direct_agent_counts, local_skill_usages = {}, {}, {}
+        users: dict[UUID, User | None] = {}
+
+        def user(uid: UUID) -> User | None:
+            if uid not in users:
+                users[uid] = session.get(User, uid)
+            return users[uid]
+
+        via = CredentialShareService._reshared_via(session, credential, shares, user)
+        result = []
+        for share in shares:
+            shared_with_user = user(share.shared_with_user_id)
+            shared_by_user = user(share.shared_by_user_id)
+            result.append(CredentialSharePublic(
+                id=share.id,
+                credential_id=share.credential_id,
+                credential_name=credential.name,
+                credential_type=credential.type.value,
+                shared_with_user_id=share.shared_with_user_id,
+                shared_with_email=shared_with_user.email if shared_with_user else "",
+                shared_by_user_id=share.shared_by_user_id,
+                shared_by_email=shared_by_user.email if shared_by_user else "",
+                shared_at=share.shared_at,
+                access_level=share.access_level,
+                source=share.source,
+                agent_usages=agent_usages.get(share.shared_with_user_id, []),
+                direct_agent_use_count=direct_agent_counts.get(
+                    share.shared_with_user_id, 0
+                ),
+                local_skill_usages=local_skill_usages.get(
+                    share.shared_with_user_id, []
+                ),
+                reshared_via=via.get(share.id),
+            ))
+        return result
+
+    @staticmethod
+    def _reshared_via(
+        session: Session,
+        credential: Credential,
+        shares: list[CredentialShare],
+        user,
+    ) -> dict[UUID, ReshareVia]:
+        """Computed-on-read provenance for re-shares (D7), batched: one
+        bundle query and one skill query for the whole page.
+
+        The package is the one published by the re-sharer that the recipient
+        installed and that links the credential.
+        """
+        from app.models.skills.skill_package import SkillPackage
+        from app.services.credentials.credential_reuse_policy import user_display
+
+        reshares = [s for s in shares if s.shared_by_user_id != credential.owner_id]
+        if not reshares:
+            return {}
+        recipient_ids = {s.shared_with_user_id for s in reshares}
+        sharer_ids = {s.shared_by_user_id for s in reshares}
+
+        bundle_names: dict[tuple[UUID, UUID], str] = {}
+        for owner_id, publisher_id, name in session.exec(
+            select(Agent.owner_id, AgentBundle.publisher_user_id, AgentBundle.display_name)
+            .join(AgentBundle, col(AgentBundle.id) == col(Agent.bundle_uuid))
+            .join(AgentCredentialLink, col(AgentCredentialLink.agent_id) == col(Agent.id))
+            .where(
+                AgentCredentialLink.credential_id == credential.id,
+                col(Agent.owner_id).in_(recipient_ids),
+                col(AgentBundle.publisher_user_id).in_(sharer_ids),
+                Agent.is_publisher_install == False,  # noqa: E712
+            )
+        ).all():
+            bundle_names.setdefault((owner_id, publisher_id), name)
+
+        skill_names: dict[tuple[UUID, UUID], str] = {}
+        for owner_id, publisher_id, name in session.exec(
+            select(Agent.owner_id, SkillPackage.publisher_user_id, SkillPackage.display_name)
+            .join(AgentPluginLink, col(AgentPluginLink.agent_id) == col(Agent.id))
+            .join(
+                SkillPackageRevision,
+                col(SkillPackageRevision.id)
+                == col(AgentPluginLink.skill_package_revision_id),
+            )
+            .join(SkillPackage, col(SkillPackage.id) == col(SkillPackageRevision.package_id))
+            .join(AgentCredentialLink, col(AgentCredentialLink.agent_id) == col(Agent.id))
+            .where(
+                AgentCredentialLink.credential_id == credential.id,
+                AgentPluginLink.source == PluginSource.catalog,
+                col(Agent.owner_id).in_(recipient_ids),
+                col(SkillPackage.publisher_user_id).in_(sharer_ids),
+            )
+        ).all():
+            skill_names.setdefault((owner_id, publisher_id), name)
+
+        result: dict[UUID, ReshareVia] = {}
+        for share in reshares:
+            key = (share.shared_with_user_id, share.shared_by_user_id)
+            kind = "bundle" if share.source == "bundle_install" else "skill"
+            names = bundle_names if kind == "bundle" else skill_names
+            result[share.id] = ReshareVia(
+                user_id=share.shared_by_user_id,
+                display=user_display(user(share.shared_by_user_id)),
+                package_kind=kind,
+                package_name=names.get(key),
+            )
+        return result
 
     # ── What a share is used for (owner warnings) ────────────────────────
 
@@ -544,6 +717,9 @@ class CredentialShareService:
             owner_scope=user_id,  # recipient-scoped: agents *of mine* using it
         )
 
+        reusable_ids = reuse_effective_ids(
+            session, [credential for *_, credential in resolved]
+        )
         result = []
         for source, shared_at, access_level, credential in resolved:
             owner = session.get(User, credential.owner_id)
@@ -573,6 +749,7 @@ class CredentialShareService:
                 agent_usage_count=usage_counts.get(credential.id, 0),
                 used_in_bundle=False,
                 via_groups=groups_by_credential.get(credential.id, []),
+                allow_bundle_reuse_effective=credential.id in reusable_ids,
             ))
 
         return result
@@ -647,6 +824,10 @@ class CredentialShareService:
             )
 
         credential.allow_sharing = allow_sharing
+        if not allow_sharing:
+            # Sharing off clears re-use (D2); every re-share row is already
+            # deleted above with the rest.
+            credential.allow_bundle_reuse = False
         session.add(credential)
         session.commit()
         session.refresh(credential)
@@ -784,6 +965,11 @@ class CredentialShareService:
         Excludes the owner, direct share holders and members of any group the
         credential is shared with (D8). ``exclude_group_id`` ignores one group
         share, to preview what revoking it would cost.
+
+        A re-share (a row whose ``shared_by`` is not the owner, made through a
+        recipient's own bundle or skill) counts only while its sharer still
+        holds an owner-rooted path. Re-sharing is one level deep, so two
+        re-sharers can never keep each other alive.
         """
         remaining = {uid for uid in user_ids if uid is not None}
         if not remaining:
@@ -791,14 +977,59 @@ class CredentialShareService:
         credential = session.get(Credential, credential_id)
         if credential is None:
             return remaining
-        remaining.discard(credential.owner_id)
+        rooted = CredentialShareService._owner_rooted_users(
+            session, credential, remaining, exclude_group_id=exclude_group_id
+        )
+        remaining -= rooted
         if not remaining:
             return set()
-        direct = set(
+        reshares = session.exec(
+            select(
+                CredentialShare.shared_with_user_id,
+                CredentialShare.shared_by_user_id,
+            ).where(
+                CredentialShare.credential_id == credential_id,
+                col(CredentialShare.shared_with_user_id).in_(remaining),
+                CredentialShare.shared_by_user_id != credential.owner_id,
+            )
+        ).all()
+        if not reshares:
+            return remaining
+        rooted_sharers = CredentialShareService._owner_rooted_users(
+            session,
+            credential,
+            {sharer for _, sharer in reshares},
+            exclude_group_id=exclude_group_id,
+        )
+        kept = {
+            recipient for recipient, sharer in reshares if sharer in rooted_sharers
+        }
+        return remaining - kept
+
+    @staticmethod
+    def _owner_rooted_users(
+        session: Session,
+        credential: Credential,
+        user_ids: set[UUID],
+        *,
+        exclude_group_id: UUID | None = None,
+    ) -> set[UUID]:
+        """The users among ``user_ids`` who reach the credential through its
+        owner: they own it, hold a share the owner made, or belong to a group
+        it is shared with. Re-shares never count here."""
+        remaining = set(user_ids)
+        rooted: set[UUID] = set()
+        if credential.owner_id in remaining:
+            rooted.add(credential.owner_id)
+            remaining.discard(credential.owner_id)
+        if not remaining:
+            return rooted
+        rooted.update(
             session.exec(
                 select(CredentialShare.shared_with_user_id).where(
-                    CredentialShare.credential_id == credential_id,
+                    CredentialShare.credential_id == credential.id,
                     col(CredentialShare.shared_with_user_id).in_(remaining),
+                    CredentialShare.shared_by_user_id == credential.owner_id,
                 )
             ).all()
         )
@@ -809,7 +1040,7 @@ class CredentialShareService:
                 col(CredentialGroupShare.group_id) == col(UserGroupMember.group_id),
             )
             .where(
-                CredentialGroupShare.credential_id == credential_id,
+                CredentialGroupShare.credential_id == credential.id,
                 col(UserGroupMember.user_id).in_(remaining),
             )
         )
@@ -817,8 +1048,20 @@ class CredentialShareService:
             group_stmt = group_stmt.where(
                 CredentialGroupShare.group_id != exclude_group_id
             )
-        via_group = set(session.exec(group_stmt).all())
-        return remaining - direct - via_group
+        rooted.update(session.exec(group_stmt).all())
+        return rooted
+
+    @staticmethod
+    def has_owner_rooted_share(
+        session: Session, credential: Credential, user_id: UUID
+    ) -> bool:
+        """Whether ``user_id`` (not the owner) holds a share the owner made or
+        a group share — the only paths a re-sharer may re-share from."""
+        if user_id == credential.owner_id:
+            return False
+        return bool(
+            CredentialShareService._owner_rooted_users(session, credential, {user_id})
+        )
 
     @staticmethod
     def share_counts_by_credential(

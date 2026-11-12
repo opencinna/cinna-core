@@ -254,8 +254,9 @@ class _AICredentialDraft(BaseModel):
 class PublishSettingsUpdate(BaseModel):
     """Body of ``PATCH /agents/{agent_id}/publish-settings``.
 
-    Only the publisher install (``is_publisher_install=True``) can hold
-    publish settings. Fields are partial — omitting a top-level key
+    Only an agent that can publish holds publish settings: the publisher
+    install, or a never-published agent (``bundle_uuid`` None) whose first
+    publish reads them. A foreign install is rejected with 400. Fields are partial — omitting a top-level key
     preserves the existing value; sending it (even as empty) replaces it.
 
     - ``credential_overrides``: per-spec ``provided_by`` map. Keys must
@@ -388,15 +389,16 @@ def get_bundle_credential_drift(
     bundle is republished. Returns ``stale=False`` with an empty list when
     nothing has drifted (or the install has never published).
 
-    Publisher-install owner-only. Returns 404 (not 403) for non-owners and
-    for installs that are not publisher installs, to avoid leaking the
-    existence of a bundle to non-publishers.
+    Owner-only, for a publisher install or an agent that has never been
+    published (``live`` then carries the provisioning value for the first
+    publish). Returns 404 (not 403) for non-owners and for foreign installs,
+    to avoid leaking the existence of an agent or bundle.
     """
     install = session.get(Agent, agent_id)
     if (
         install is None
         or (install.owner_id != current_user.id and not current_user.is_superuser)
-        or not install.is_publisher_install
+        or not PublishService.can_publish_from(install)
     ):
         raise HTTPException(status_code=404, detail="Agent not found")
     return PublishService.compute_credential_spec_drift(session, install)
@@ -623,6 +625,7 @@ async def update_setup_credential(
         notes=updated.notes,
         allow_sharing=updated.allow_sharing,
         allow_template_sharing=updated.allow_template_sharing,
+        allow_bundle_reuse=updated.allow_bundle_reuse,
         template_private_fields=list(updated.template_private_fields or []),
         owner_id=updated.owner_id,
         user_workspace_id=updated.user_workspace_id,

@@ -80,6 +80,13 @@ PRE_ALLOWED_TOOLS = frozenset([
     "mcp__cinna__dashboards_update_tile",
     "cinna_dashboards_tiles",
     "cinna_dashboards_update_tile",
+    # Capability-request tools (server "cinna", building mode) — both forms
+    "mcp__cinna__api_requests_list",
+    "mcp__cinna__api_requests_get",
+    "mcp__cinna__api_requests_update_status",
+    "cinna_api_requests_list",
+    "cinna_api_requests_get",
+    "cinna_api_requests_update_status",
     # Cinna Task Protocol tools — OpenCode form ({server}_{tool})
     "cinna_tasks_targets",
     "cinna_tasks_list",

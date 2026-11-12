@@ -81,6 +81,7 @@ from .opencode_event_transformer import (
     OPENCODE_QUESTION_REQUEST_ID_KEY,
 )
 from .tool_name_registry import (
+    CINNA_API_REQUEST_TOOL_NAMES_CLAUDE,
     CINNA_ARTIFACT_TOOL_NAMES_CLAUDE,
     CINNA_DASHBOARD_TOOL_NAMES_CLAUDE,
     CINNA_TASK_TOOL_NAMES_CLAUDE,
@@ -89,6 +90,7 @@ from .tool_name_registry import (
 from ..prompt_generator import PromptGenerator
 from ..active_session_manager import active_session_manager
 from ..agent_env_service import AgentEnvService
+from ..tools.cinna_api_requests_protocol import api_requests_schema_path, serves_agent_api
 from ..tools.cinna_dashboards_protocol import dashboards_schema_path, verified_dashboard_id
 
 
@@ -1070,6 +1072,14 @@ class OpenCodeAdapter(BaseSDKAdapter):
             # no_dashboard. A core without the schema serves none.
             if mode == "conversation" and dashboards_schema_path().is_file():
                 mcp_tool_names.extend(CINNA_DASHBOARD_TOOL_NAMES_CLAUDE)
+            # Capability-request tools: building mode in an agent that serves
+            # a REST API, the same check as the bridge.
+            if (
+                mode == "building"
+                and serves_agent_api()
+                and api_requests_schema_path().is_file()
+            ):
+                mcp_tool_names.extend(CINNA_API_REQUEST_TOOL_NAMES_CLAUDE)
             for key in self._active_plugin_mcp_keys():
                 mcp_tool_names.append(f"mcp__{key}")
             all_tools.extend(mcp_tool_names)

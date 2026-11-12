@@ -1,4 +1,5 @@
-"""AgentImprovementRequest — a consent-gated, frozen share of one session.
+"""AgentImprovementRequest — a consent-gated, frozen share of one session,
+or a capability request filed by a caller of an agent's REST API.
 
 A session owner (the *requester*) explicitly hands a **snapshot** of one of
 their sessions, plus the tuning-relevant runtime context, to the agent's owner
@@ -10,11 +11,19 @@ conversation does not change what the recipient sees. That "frozen at consent"
 invariant is the whole privacy argument, so ``snapshot`` / ``context`` are
 written once and never refreshed.
 
-See ``docs/plans/agent_improvement_requests_plan.md`` §3.
+A second ``kind`` (``agent_api``) reuses the same row, inbox, events and
+archive for capability requests: any identified caller of a producer's agent
+API files one through ``POST /agent-api/{id}/_cinna/improvement-requests``.
+Such a row carries no snapshot; its payload lives in
+``context["api_request"]``.
+
+See ``docs/plans/agent_improvement_requests_plan.md`` §3 and
+``docs/plans/agent_api_bundle_reuse_and_capability_requests_plan.md`` §4.
 """
 import uuid
 from datetime import datetime, UTC
 
+from pydantic import BaseModel, ConfigDict, Field as PydanticField
 from sqlmodel import Field, SQLModel, Column
 from sqlalchemy import JSON, Boolean, DateTime, Index, Integer, String, Text, text
 
@@ -40,10 +49,23 @@ IMPROVEMENT_STATUSES: tuple[str, ...] = (
 # Which surface the requester consented from. Same VARCHAR rationale.
 IMPROVEMENT_SOURCE_WEB_UI = "web_ui"
 IMPROVEMENT_SOURCE_COMMAND = "command"
+IMPROVEMENT_SOURCE_AGENT_API = "agent_api"
 
 IMPROVEMENT_SOURCES: tuple[str, ...] = (
     IMPROVEMENT_SOURCE_WEB_UI,
     IMPROVEMENT_SOURCE_COMMAND,
+    IMPROVEMENT_SOURCE_AGENT_API,
+)
+
+# ── Kind ─────────────────────────────────────────────────────────────
+# What the row is: a frozen session share, or an agent-API capability request.
+# Same VARCHAR rationale as ``status``.
+IMPROVEMENT_KIND_SESSION = "session"
+IMPROVEMENT_KIND_AGENT_API = "agent_api"
+
+IMPROVEMENT_KINDS: tuple[str, ...] = (
+    IMPROVEMENT_KIND_SESSION,
+    IMPROVEMENT_KIND_AGENT_API,
 )
 
 # API-enforced length caps (the columns themselves are unbounded TEXT).
@@ -68,6 +90,15 @@ class AgentImprovementRequest(SQLModel, table=True):
         Index("ix_air_requester", "requester_user_id"),
         # Per-session rate-limit check.
         Index("ix_air_session", "session_id"),
+        # The producer's capability-request inbox (env tools, card filter).
+        Index("ix_air_target_kind_status", "target_agent_id", "kind", "status"),
+        # Agent-API rate limit and the consumer's "my requests on this API".
+        Index(
+            "ix_air_requester_target_created",
+            "requester_user_id",
+            "target_agent_id",
+            text("created_at DESC"),
+        ),
     )
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
@@ -120,6 +151,14 @@ class AgentImprovementRequest(SQLModel, table=True):
     # The owner's closing note. Visible to the requester (≤ 2000 chars).
     resolution_note: str | None = Field(
         default=None, sa_column=Column(Text, nullable=True)
+    )
+    kind: str = Field(
+        default=IMPROVEMENT_KIND_SESSION,
+        sa_column=Column(
+            String(16),
+            nullable=False,
+            server_default=text(f"'{IMPROVEMENT_KIND_SESSION}'"),
+        ),
     )
     source: str = Field(
         default=IMPROVEMENT_SOURCE_WEB_UI,
@@ -196,6 +235,12 @@ class ImprovementRequestPublic(SQLModel):
     """
 
     id: uuid.UUID
+    # ``session`` (a frozen session share) or ``agent_api`` (a capability
+    # request from a caller of the target's REST API).
+    kind: str = IMPROVEMENT_KIND_SESSION
+    # Projected from ``context.api_request.title`` for ``agent_api``; None for
+    # session requests (their label is the session title on the detail view).
+    title: str | None = None
     # The session this request froze. Titles are neither unique nor stable, so
     # without the id two captures of the same conversation are indistinguishable
     # in a listing — the reader has to download both archives to find out they
@@ -246,6 +291,123 @@ class ImprovementRequestUpdate(SQLModel):
     resolution_note: str | None = Field(
         default=None, max_length=MAX_RESOLUTION_NOTE_CHARS
     )
+
+
+# ── Agent-API capability requests (plan §4.1) ────────────────────────
+
+MAX_CAPABILITY_REQUEST_BODY_BYTES = 64 * 1024
+
+
+class _StrictModel(BaseModel):
+    """Caller-authored input: unknown keys are refused, not dropped."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class CapabilityRequestParam(_StrictModel):
+    name: str = PydanticField(min_length=1, max_length=100)
+    # Where the parameter goes: path, query, header, body.
+    in_: str | None = PydanticField(default=None, max_length=20, alias="in")
+    type: str | None = PydanticField(default=None, max_length=100)
+    description: str | None = PydanticField(default=None, max_length=1000)
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+
+class CapabilityRequestResponseField(_StrictModel):
+    name: str = PydanticField(min_length=1, max_length=100)
+    type: str | None = PydanticField(default=None, max_length=100)
+    description: str | None = PydanticField(default=None, max_length=1000)
+
+
+class CapabilityRequestProposedEndpoint(_StrictModel):
+    method: str | None = PydanticField(default=None, max_length=10)
+    path: str | None = PydanticField(default=None, max_length=300)
+    params: list[CapabilityRequestParam] | None = PydanticField(default=None, max_length=30)
+    response_fields: list[CapabilityRequestResponseField] | None = PydanticField(
+        default=None, max_length=50
+    )
+
+
+class AgentApiCapabilityRequestCreate(_StrictModel):
+    """A consumer's request for a capability the producer API does not have."""
+
+    title: str = PydanticField(min_length=3, max_length=200)
+    need: str = PydanticField(min_length=1, max_length=MAX_COMMENT_CHARS)
+    proposed_endpoint: CapabilityRequestProposedEndpoint | None = None
+    example_request: str | None = PydanticField(default=None, max_length=8000)
+    example_response: str | None = PydanticField(default=None, max_length=8000)
+    spec_version_seen: str | None = PydanticField(default=None, max_length=50)
+
+
+class AgentApiCapabilityRequestPublic(SQLModel):
+    """The consumer's view of a request they filed (no owner-side data)."""
+
+    id: uuid.UUID
+    title: str | None = None
+    status: str
+    resolution_note: str | None = None
+    created_at: datetime
+    status_changed_at: datetime | None = None
+    spec_version_seen: str | None = None
+
+
+class AgentApiCapabilityRequestsPublic(SQLModel):
+    data: list[AgentApiCapabilityRequestPublic]
+    count: int
+
+
+# ── Producer env tools (``/agent/api-requests/*``, plan §4.5) ────────
+
+
+class AgentApiRequestToolListRequest(SQLModel):
+    status: str | None = Field(default=None, max_length=16)
+    limit: int = Field(default=20, ge=1, le=50)
+
+
+class AgentApiRequestToolGetRequest(SQLModel):
+    request_id: uuid.UUID
+
+
+class AgentApiRequestToolUpdateStatusRequest(SQLModel):
+    request_id: uuid.UUID
+    status: str = Field(max_length=16)
+    resolution_note: str | None = Field(
+        default=None, max_length=MAX_RESOLUTION_NOTE_CHARS
+    )
+
+
+class AgentApiRequestToolRow(SQLModel):
+    id: uuid.UUID
+    title: str | None = None
+    status: str
+    requester_display: str | None = None
+    consumer_agent_name: str | None = None
+    created_at: datetime
+    spec_version_seen: str | None = None
+
+
+class AgentApiRequestToolListResult(SQLModel):
+    requests: list[AgentApiRequestToolRow]
+    count: int
+
+
+class AgentApiRequestToolDetail(AgentApiRequestToolRow):
+    need: str | None = None
+    proposed_endpoint: dict | None = None
+    example_request: str | None = None
+    example_response: str | None = None
+    resolution_note: str | None = None
+    status_changed_at: datetime | None = None
+
+
+class AgentApiRequestToolErrorDetail(SQLModel):
+    code: str
+    message: str
+
+
+class AgentApiRequestToolError(SQLModel):
+    error: AgentApiRequestToolErrorDetail
 
 
 class ImprovementContextPublic(SQLModel):

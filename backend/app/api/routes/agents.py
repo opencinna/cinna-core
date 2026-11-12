@@ -422,6 +422,7 @@ def read_agent_credentials(
                 "notes": credential.notes,
                 "allow_sharing": credential.allow_sharing,
                 "allow_template_sharing": credential.allow_template_sharing,
+                "allow_bundle_reuse": credential.allow_bundle_reuse,
                 # The slot a skill finds this credential by. Non-secret and
                 # shown for shared credentials too, like every other listing;
                 # without it a client reading this list sees every slot unfilled.

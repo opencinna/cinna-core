@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query"
-import { Loader2, Share2, Users, X } from "lucide-react"
+import { Forward, Loader2, Share2, Users, X } from "lucide-react"
 import type { ReactNode } from "react"
 import { useEffect, useRef, useState } from "react"
 
@@ -32,6 +32,10 @@ export interface UserAllowlistSelectedItem {
   // no longer loads the full user list — pass the user's name or email.
   // Falls back to the raw id when omitted.
   fallbackLabel?: string
+  // Optional passive fact about how this person got access ("Via Ann ·
+  // Bundle Sales desk"). Renders a glyph with the note as its tooltip; a pill
+  // without a note is unchanged.
+  note?: string
 }
 
 export interface GroupSelectedItem {
@@ -357,6 +361,22 @@ export function UserAllowlistPicker({
                 key={item.id}
                 className="flex items-center gap-1 bg-secondary text-secondary-foreground text-xs px-2 py-1 rounded-full"
               >
+                {item.note && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="flex items-center">
+                        <Forward
+                          className="h-3 w-3 shrink-0 text-muted-foreground"
+                          aria-hidden
+                        />
+                        <span className="sr-only">{item.note}</span>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-xs text-xs">
+                      {item.note}
+                    </TooltipContent>
+                  </Tooltip>
+                )}
                 {pillLabel}
                 <RemovePillButton
                   label={`Remove ${pillLabel}`}

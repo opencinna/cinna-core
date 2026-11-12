@@ -1623,13 +1623,16 @@ class InstallService:
           reference an ``AICredential`` owned by the install owner.
 
         Raises ``ValueError`` for any validation failure (route maps to
-        HTTP 400). Caller must have already verified the install is the
-        publisher install — this method asserts and raises ``ValueError``
-        defensively if not.
+        HTTP 400). Only an agent that can publish holds publish settings:
+        the publisher install, or an owner's never-published agent (the
+        first publish reads the overrides saved here). A foreign install
+        is rejected.
         """
-        if not install.is_publisher_install:
+        from app.services.bundles.publish_service import PublishService
+
+        if not PublishService.can_publish_from(install):
             raise ValueError(
-                "Publish settings can only be edited on the publisher install."
+                "Publish settings can only be edited on an agent you publish."
             )
 
         current = dict(install.publish_settings or {})

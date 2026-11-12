@@ -58,6 +58,10 @@ from app.services.bundles.exceptions import BundleAccessDeniedError
 from app.services.bundles.revision_format import RevisionFormat
 from app.services.catalog.catalog_access_service import BUNDLE, CatalogAccessService
 from app.services.credentials.credentials_service import CredentialsService
+from app.services.credentials.credential_reuse_policy import (
+    owner_display,
+    publisher_may_provide,
+)
 from app.services.environments.workspace_classification import (
     PLUGIN_DERIVED_FILES,
     PLUGINS_DIRNAME,
@@ -68,7 +72,10 @@ from app.services.environments.workspace_classification import (
 )
 
 if TYPE_CHECKING:
-    from app.models.bundles.catalog import BundleCredentialDrift
+    from app.models.bundles.catalog import (
+        BundleCredentialDrift,
+        CredentialProvisioningOption,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -732,7 +739,7 @@ class PublishService:
 
     @staticmethod
     def resolve_provided_by(
-        credential: Credential, publisher_install: Agent
+        session: Session, credential: Credential, publisher_install: Agent
     ) -> str:
         """Single source of truth for ``provided_by`` resolution.
 
@@ -741,9 +748,13 @@ class PublishService:
         1. ``publisher_install.publish_settings["credential_overrides"]
            [credential.name]["provided_by"]`` — explicit publisher choice
            from the bundle tab UI. Wins if present and equals ``"user"``,
-           ``"publisher"``, or ``"template"``.
+           ``"publisher"``, or ``"template"``. An explicit ``"publisher"``
+           the publisher may not provide is returned as-is so
+           ``_validate_publisher_provides`` can name it.
         2. Fallback inference:
-           - ``allow_sharing=True`` → ``"publisher"``
+           - ``allow_sharing=True`` and the bundle's publisher may provide
+             it (``credential_reuse_policy.publisher_may_provide``: they own
+             it, or the owner allowed re-use) → ``"publisher"``
            - else if ``allow_template_sharing=True`` → ``"template"``
            - else → ``"user"``
 
@@ -762,11 +773,28 @@ class PublishService:
                 if raw in ("user", "publisher", "template"):
                     return raw
 
-        if bool(credential.allow_sharing):
+        if bool(credential.allow_sharing) and publisher_may_provide(
+            session, credential, PublishService._publisher_user_id(publisher_install)
+        ).ok:
             return "publisher"
-        if bool(getattr(credential, "allow_template_sharing", False)):
+        if bool(
+            getattr(credential, "allow_template_sharing", False)
+        ) and PublishService._publisher_owns(credential, publisher_install):
             return "template"
         return "user"
+
+    @staticmethod
+    def _publisher_owns(credential: Credential, publisher_install: Agent) -> bool:
+        """Only the owner may hand out a template of a credential: its
+        non-private values are copied into the revision."""
+        return credential.owner_id == PublishService._publisher_user_id(
+            publisher_install
+        )
+
+    @staticmethod
+    def _publisher_user_id(publisher_install: Agent) -> uuid.UUID | None:
+        """The user a publisher install publishes as: its owner."""
+        return getattr(publisher_install, "owner_id", None)
 
     @staticmethod
     def _collect_credential_specs(session: Session, install: Agent) -> list[dict]:
@@ -802,7 +830,9 @@ class PublishService:
                         if hasattr(cred.type, "value")
                         else str(cred.type)
                     ),
-                    provided_by=PublishService.resolve_provided_by(cred, install),
+                    provided_by=PublishService.resolve_provided_by(
+                        session, cred, install
+                    ),
                     name=cred.name,
                     service_uri=cred.service_uri,
                     description=cred.notes or None,
@@ -829,9 +859,12 @@ class PublishService:
         reads. A credential added or removed relative to the snapshot is
         reported as drifted.
 
-        Returns an empty, non-stale result when the install is not a publisher
-        install or has never published a revision (nothing to be stale
-        against).
+        Returns an empty, non-stale result for a foreign install. A
+        never-published agent (publisher install without a revision, or an
+        agent with no bundle yet) is non-stale with an empty ``drift``
+        (nothing to be stale against) but still carries ``live``, the
+        per-credential provisioning value the bundle tab renders before the
+        first publish.
         """
         from app.models.bundles.catalog import (
             BundleCredentialDrift,
@@ -839,15 +872,47 @@ class PublishService:
         )
         from app.services.bundles.credential_spec import parse_credential_spec
 
-        if not install.is_publisher_install or install.bundle_uuid is None:
+        if not PublishService.can_publish_from(install):
             return BundleCredentialDrift(stale=False, drift=[])
 
-        bundle = session.get(AgentBundle, install.bundle_uuid)
+        # Live side: one row per linked credential name. ``name`` is the spec
+        # key (it keys both the snapshot index and ``resolve_provided_by``'s
+        # override lookup), so dedupe by name — a duplicate link or two
+        # same-named credentials must not yield two rows.
+        stmt = select(AgentCredentialLink).where(
+            AgentCredentialLink.agent_id == install.id
+        )
+        links = list(session.exec(stmt).all())
+        live_creds: list[Credential] = []
+        live_names: set[str] = set()
+        for link in links:
+            cred = session.get(Credential, link.credential_id)
+            if cred is None or cred.name in live_names:
+                continue
+            live_names.add(cred.name)
+            live_creds.append(cred)
+
+        live_values = {
+            cred.name: PublishService.resolve_provided_by(session, cred, install)
+            for cred in live_creds
+        }
+        live_options = [
+            PublishService._provisioning_option(
+                session, cred, install, live_values[cred.name]
+            )
+            for cred in live_creds
+        ]
+
+        bundle = (
+            session.get(AgentBundle, install.bundle_uuid)
+            if install.bundle_uuid is not None
+            else None
+        )
         revision = (
             BundleService.latest_revision(session, bundle) if bundle else None
         )
         if revision is None:
-            return BundleCredentialDrift(stale=False, drift=[])
+            return BundleCredentialDrift(stale=False, drift=[], live=live_options)
 
         # Snapshot side: index the latest revision's specs by credential name.
         snapshot_by_name: dict[str, str] = {}
@@ -856,25 +921,9 @@ class PublishService:
             if parsed is not None:
                 snapshot_by_name[parsed.name] = parsed.provided_by
 
-        # Live side: recompute provided_by for every currently linked cred.
-        # ``name`` is the spec key (it keys both the snapshot index and
-        # ``resolve_provided_by``'s override lookup), so dedupe by name — a
-        # duplicate link or two same-named credentials must not yield two rows.
-        stmt = select(AgentCredentialLink).where(
-            AgentCredentialLink.agent_id == install.id
-        )
-        links = list(session.exec(stmt).all())
-
         drift: list[CredentialSpecDrift] = []
-        live_names: set[str] = set()
-        for link in links:
-            cred = session.get(Credential, link.credential_id)
-            if cred is None:
-                continue
-            if cred.name in live_names:
-                continue
-            live_names.add(cred.name)
-            live = PublishService.resolve_provided_by(cred, install)
+        for cred in live_creds:
+            live = live_values[cred.name]
             # A credential newly linked since the last publish has no snapshot
             # entry — installers don't receive it at all, so treat it as
             # "user" (the install-side default) and flag the drift.
@@ -905,6 +954,51 @@ class PublishService:
         return BundleCredentialDrift(
             stale=removed_in_snapshot or any(d.drifted for d in drift),
             drift=drift,
+            live=live_options,
+        )
+
+    @staticmethod
+    def can_publish_from(agent: Agent) -> bool:
+        """A publisher install, or an agent of the owner's that has never
+        been published (no bundle yet). A foreign install never is."""
+        return bool(agent.is_publisher_install) or agent.bundle_uuid is None
+
+    @staticmethod
+    def _provisioning_option(
+        session: Session,
+        credential: Credential,
+        install: Agent,
+        resolved_provided_by: str,
+    ) -> "CredentialProvisioningOption":
+        """The bundle tab's provisioning value for one linked credential.
+
+        ``can_provide_as`` mirrors what ``_validate_publisher_provides``
+        accepts, so the UI never offers a choice publish would reject.
+        """
+        from app.models.bundles.catalog import CredentialProvisioningOption
+
+        can_provide_as: list[str] = []
+        blocked_reason: str | None = None
+        if not credential.allow_sharing:
+            blocked_reason = "sharing_off"
+        else:
+            verdict = publisher_may_provide(
+                session, credential, PublishService._publisher_user_id(install)
+            )
+            if verdict.ok:
+                can_provide_as.append("publisher")
+            else:
+                blocked_reason = verdict.reason
+        if bool(
+            getattr(credential, "allow_template_sharing", False)
+        ) and PublishService._publisher_owns(credential, install):
+            can_provide_as.append("template")
+        return CredentialProvisioningOption(
+            credential_id=credential.id,
+            name=credential.name,
+            resolved_provided_by=resolved_provided_by,
+            can_provide_as=can_provide_as,
+            blocked_reason=blocked_reason,
         )
 
     @staticmethod
@@ -1461,11 +1555,36 @@ class PublishService:
             cred = session.get(Credential, link.credential_id)
             if cred is None:
                 continue
-            provided_by = PublishService.resolve_provided_by(cred, install)
+            provided_by = PublishService.resolve_provided_by(session, cred, install)
             if provided_by == "publisher" and not bool(cred.allow_sharing):
                 raise ValueError(
                     f"Credential '{cred.name}' is marked publisher-provided "
                     "but is not shareable (allow_sharing=False)"
+                )
+            if provided_by == "publisher":
+                verdict = publisher_may_provide(
+                    session, cred, PublishService._publisher_user_id(install)
+                )
+                if not verdict.ok:
+                    owner = owner_display(session, cred)
+                    if verdict.reason == "type_not_reusable":
+                        raise ValueError(
+                            f"Credential '{cred.name}' is owned by {owner} and "
+                            "cannot be re-used inside bundles. Choose 'User "
+                            "provides'."
+                        )
+                    raise ValueError(
+                        f"Credential '{cred.name}' is owned by {owner} and they "
+                        "have not allowed re-use inside bundles. Choose 'User "
+                        f"provides', or ask {owner} to allow re-use."
+                    )
+            if provided_by == "template" and not PublishService._publisher_owns(
+                cred, install
+            ):
+                raise ValueError(
+                    f"Credential '{cred.name}' is owned by "
+                    f"{owner_display(session, cred)}; only its owner can share "
+                    "it as a template. Choose 'User provides'."
                 )
             if provided_by == "template" and not bool(
                 getattr(cred, "allow_template_sharing", False)

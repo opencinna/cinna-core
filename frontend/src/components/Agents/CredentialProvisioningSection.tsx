@@ -4,10 +4,13 @@
  *
  * Surfaces two controls on the publisher install's bundle tab:
  *
- *   1. Per linked credential — a "User provides" / "I provide" dropdown
- *      that auto-saves on change. Persists into the install's
- *      ``publish_settings.credential_overrides`` JSON map. Empty = inferred
- *      from the credential's ``allow_sharing`` at publish time.
+ *   1. Per linked credential — a "User provides" / "Embedded (shared)" /
+ *      "Template" dropdown that auto-saves on change. Persists into the
+ *      install's ``publish_settings.credential_overrides`` JSON map. The value
+ *      shown, and which choices are open, come from the server
+ *      (``getBundleCredentialDrift().live``): the same resolver and re-use
+ *      policy publish applies, so a credential shared *with* the publisher is
+ *      embeddable only when its owner allows re-use inside bundles.
  *
  *   2. AI credential pickers (Conversation + Building) showing the
  *      currently used SDK engine. The dropdown is filtered by the
@@ -16,13 +19,21 @@
  *      clears the bundle-level FK; foreign installs revert to user
  *      provides AI.
  *
- * Only rendered for the publisher install (``agent.is_publisher_install
- * === true``).
+ * Rendered for an agent that can publish (see ``canPublishFrom``): the
+ * publisher install, or a never-published agent whose first publish reads
+ * the overrides saved here. Before the first publish ``bundle`` is
+ * undefined and there is nothing to drift from, so no "republish" hint.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
-import { AlertTriangle, Hammer, KeyRound, MessageCircle } from "lucide-react"
-import { useMemo } from "react"
+import {
+  AlertTriangle,
+  Hammer,
+  Info,
+  KeyRound,
+  MessageCircle,
+} from "lucide-react"
+import { useEffect, useMemo } from "react"
 
 import {
   type AgentBundlePublic,
@@ -33,6 +44,7 @@ import {
   EnvironmentsService,
   InstallsService,
 } from "@/client"
+import { QueryErrorAlert } from "@/components/Common/QueryErrorAlert"
 import { CredentialTypeBadge } from "@/components/Credentials/CredentialTypeBadge"
 import {
   type ProvidedBy,
@@ -61,7 +73,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Skeleton } from "@/components/ui/skeleton"
 import useCustomToast from "@/hooks/useCustomToast"
+import { reuseBlockedSentence } from "@/utils/credentialBundleReuse"
+
+/**
+ * Mirrors ``PublishService.can_publish_from`` on the backend: a publisher
+ * install, or an agent of the owner's that has never been published (no
+ * bundle yet). A foreign install (bundle set, not the publisher) never is.
+ */
+export function canPublishFrom(agent: AgentPublic): boolean {
+  return !!agent.is_publisher_install || !agent.bundle_uuid
+}
 
 interface CredentialProvisioningSectionProps {
   agent: AgentPublic
@@ -74,30 +97,42 @@ export function CredentialProvisioningSection({
 }: CredentialProvisioningSectionProps) {
   const queryClient = useQueryClient()
   const { showSuccessToast, showErrorToast } = useCustomToast()
+  const canPublish = canPublishFrom(agent)
 
   // ── Data ────────────────────────────────────────────────────────────
 
-  const { data: agentCredentials } = useQuery({
+  const {
+    data: agentCredentials,
+    isLoading: isAgentCredentialsLoading,
+    isError: isAgentCredentialsError,
+    error: agentCredentialsError,
+    refetch: refetchAgentCredentials,
+  } = useQuery({
     queryKey: ["agent-credentials", agent.id],
     queryFn: () => AgentsService.readAgentCredentials({ id: agent.id }),
-    enabled: agent.is_publisher_install,
+    enabled: canPublish,
   })
 
   const { data: aiCredentials } = useQuery({
     queryKey: ["aiCredentials"],
     queryFn: () => AiCredentialsService.listAiCredentials(),
-    enabled: agent.is_publisher_install,
+    enabled: canPublish,
   })
 
   // Live-vs-published ``provided_by`` drift. Installers receive the value
   // frozen into the latest published revision; this screen recomputes it
   // live. When they diverge (the publisher changed sharing after publishing)
   // we surface a "republish to apply" hint per drifted credential.
-  const { data: drift } = useQuery({
+  const {
+    data: drift,
+    isError: isDriftError,
+    error: driftError,
+    refetch: refetchDrift,
+  } = useQuery({
     queryKey: ["bundle-credential-drift", agent.id],
     queryFn: () =>
       InstallsService.getBundleCredentialDrift({ agentId: agent.id }),
-    enabled: agent.is_publisher_install,
+    enabled: canPublish,
   })
 
   const driftByName = useMemo<
@@ -121,7 +156,7 @@ export function CredentialProvisioningSection({
       EnvironmentsService.getEnvironment({
         id: agent.active_environment_id as string,
       }),
-    enabled: agent.is_publisher_install && !!agent.active_environment_id,
+    enabled: canPublish && !!agent.active_environment_id,
   })
 
   const linkedCredentials = agentCredentials?.data ?? []
@@ -182,20 +217,17 @@ export function CredentialProvisioningSection({
     return out
   }, [agent.publish_settings])
 
-  const inferredFor = (cred: {
-    allow_sharing?: boolean
-    allow_template_sharing?: boolean
-  }): ProvidedBy => {
-    if (cred.allow_sharing) return "publisher"
-    if (cred.allow_template_sharing) return "template"
-    return "user"
-  }
-
-  const valueFor = (cred: {
-    name: string
-    allow_sharing?: boolean
-    allow_template_sharing?: boolean
-  }): ProvidedBy => serverOverrides[cred.name] ?? inferredFor(cred)
+  // Server-computed provisioning value per linked credential: the same
+  // resolver and re-use policy publish applies (a credential shared with the
+  // publisher is not embeddable unless its owner allows re-use). Never
+  // inferred client-side — that inference was the P0 bug.
+  const liveById = useMemo(
+    () =>
+      new Map(
+        (drift?.live ?? []).map((option) => [option.credential_id, option]),
+      ),
+    [drift],
+  )
 
   // Pre-publish AI credential draft — stored on the publisher install's
   // ``publish_settings.ai_credentials`` until the bundle row exists. After
@@ -227,6 +259,14 @@ export function CredentialProvisioningSection({
   const buildingAiId = bundle
     ? (bundle.publisher_ai_credential_building_id ?? null)
     : draftAiCredentials.building_credential_id
+
+  // A credential linked after the drift was read has no server value yet:
+  // its select stays a skeleton, and the drift is read again once.
+  const missingLive =
+    !!drift && linkedCredentials.some((cred) => !liveById.has(cred.id))
+  useEffect(() => {
+    if (missingLive) refetchDrift()
+  }, [missingLive, refetchDrift])
 
   // ── Mutations ───────────────────────────────────────────────────────
 
@@ -332,7 +372,7 @@ export function CredentialProvisioningSection({
 
   // ── Render ──────────────────────────────────────────────────────────
 
-  if (!agent.is_publisher_install) return null
+  if (!canPublish) return null
 
   return (
     <Card>
@@ -343,21 +383,54 @@ export function CredentialProvisioningSection({
         </CardTitle>
         <CardDescription>
           Decide which credentials you (the publisher) provide for foreign
-          installs and which the user must supply themselves. These choices are
-          baked into the next published revision.
+          installs and which the user must supply themselves.{" "}
+          {bundle
+            ? "These choices are baked into the next published revision."
+            : "These choices are saved now and applied when you first publish."}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
+        {isDriftError && !drift && linkedCredentials.length > 0 && (
+          <QueryErrorAlert
+            error={driftError}
+            fallback="Couldn't check which credentials you can embed"
+            onRetry={() => refetchDrift()}
+            compact
+          />
+        )}
         {/* Per-credential override map. */}
-        {linkedCredentials.length === 0 ? (
+        {isAgentCredentialsLoading ? (
+          <Skeleton className="h-[48px] w-full rounded-md" />
+        ) : isAgentCredentialsError && !agentCredentials ? (
+          <QueryErrorAlert
+            error={agentCredentialsError}
+            fallback="Couldn't load the linked credentials"
+            onRetry={() => refetchAgentCredentials()}
+            compact
+          />
+        ) : linkedCredentials.length === 0 ? (
           <p className="text-sm text-muted-foreground py-2">
-            No service credentials linked to this install yet — link credentials
+            No service credentials linked to this agent yet — link credentials
             from the Credentials tab to manage their provisioning here.
           </p>
         ) : (
           linkedCredentials.map((cred) => {
-            const value = valueFor(cred)
-            const rowDrift = driftByName[cred.name]
+            const live = liveById.get(cred.id)
+            const canEmbed = !!live?.can_provide_as?.includes("publisher")
+            const canTemplate = !!live?.can_provide_as?.includes("template")
+            const reason = live
+              ? reuseBlockedSentence(
+                  live.blocked_reason,
+                  cred.owner_email,
+                  !cred.is_shared,
+                )
+              : null
+            // A stale explicit "Embedded" override publish would reject.
+            const willFail =
+              !!live && live.resolved_provided_by === "publisher" && !canEmbed
+            // Nothing to republish before the first publish.
+            const rowDrift =
+              willFail || !bundle ? undefined : driftByName[cred.name]
             return (
               <div key={cred.id} className="space-y-2 py-2">
                 <div className="flex items-start justify-between gap-4">
@@ -373,44 +446,55 @@ export function CredentialProvisioningSection({
                           {cred.name}
                         </Link>
                       </Badge>
-                      {!cred.allow_sharing && !cred.allow_template_sharing && (
-                        <span className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-300">
-                          <AlertTriangle className="h-3 w-3 shrink-0" />
-                          not shareable — enable Sharing or Template Sharing on
-                          the credential to expose it to users
-                        </span>
-                      )}
                     </div>
+                    {/* Why "Embedded (shared)" is closed. Muted: "User
+                        provides" is a valid answer, nothing is wrong. Not in
+                        the disabled item, whose children would also print in
+                        the trigger. */}
+                    {!canEmbed && !willFail && reason && (
+                      <p className="flex items-start gap-1 text-xs text-muted-foreground">
+                        <Info className="mt-0.5 h-3 w-3 shrink-0" />
+                        <span className="min-w-0 break-words">{reason}</span>
+                      </p>
+                    )}
                   </div>
-                  <Select
-                    value={value}
-                    onValueChange={(val) =>
-                      handleOverrideChange(cred.name, val as ProvidedBy)
-                    }
-                    disabled={savePublishSettingsMutation.isPending}
-                  >
-                    <SelectTrigger className="w-[260px] shrink-0">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="user">User provides</SelectItem>
-                      <SelectItem
-                        value="publisher"
-                        disabled={!cred.allow_sharing}
-                      >
-                        Embedded (shared)
-                      </SelectItem>
-                      {cred.type !== "agent_api" && (
-                        <SelectItem
-                          value="template"
-                          disabled={!cred.allow_template_sharing}
-                        >
-                          Template (defaults + private)
+                  {!live ? (
+                    // Never a client-inferred value while the server's loads.
+                    <Skeleton className="h-9 w-[260px] shrink-0" />
+                  ) : (
+                    <Select
+                      value={live.resolved_provided_by}
+                      onValueChange={(val) =>
+                        handleOverrideChange(cred.name, val as ProvidedBy)
+                      }
+                      disabled={savePublishSettingsMutation.isPending}
+                    >
+                      <SelectTrigger className="w-[260px] shrink-0">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="user">User provides</SelectItem>
+                        <SelectItem value="publisher" disabled={!canEmbed}>
+                          Embedded (shared)
                         </SelectItem>
-                      )}
-                    </SelectContent>
-                  </Select>
+                        {cred.type !== "agent_api" && (
+                          <SelectItem value="template" disabled={!canTemplate}>
+                            Template (defaults + private)
+                          </SelectItem>
+                        )}
+                      </SelectContent>
+                    </Select>
+                  )}
                 </div>
+                {willFail && (
+                  <Alert className="border-warning text-warning">
+                    <AlertTriangle />
+                    <AlertTitle>Publishing will fail</AlertTitle>
+                    <AlertDescription>
+                      {reason ? `${reason} ` : ""}Choose "User provides".
+                    </AlertDescription>
+                  </Alert>
+                )}
                 {/* Full row width, below the badges and the select: inside the
                     left column the fixed-width select squeezed it into a
                     one-word-per-line strip. The house warning `Alert`, like the
@@ -443,13 +527,6 @@ export function CredentialProvisioningSection({
             Pick an AI credential to share with foreign installs, or leave "None
             — user provides" so the user supplies their own. Only credentials
             compatible with the mode's SDK are listed.
-            {!bundle && (
-              <>
-                {" "}
-                Selections are saved as a draft and applied to the bundle on
-                first publish.
-              </>
-            )}
           </p>
         </div>
         {(() => {
@@ -460,7 +537,7 @@ export function CredentialProvisioningSection({
               {/* Conversation mode */}
               <div className="flex items-start justify-between gap-4 py-2">
                 <div className="min-w-0 flex items-start gap-2">
-                  <MessageCircle className="h-4 w-4 text-blue-500 shrink-0 mt-0.5" />
+                  <MessageCircle className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
                   <div className="min-w-0">
                     <Label className="text-sm font-medium">
                       Conversation AI
@@ -499,7 +576,7 @@ export function CredentialProvisioningSection({
               {/* Building mode */}
               <div className="flex items-start justify-between gap-4 py-2">
                 <div className="min-w-0 flex items-start gap-2">
-                  <Hammer className="h-4 w-4 text-orange-500 shrink-0 mt-0.5" />
+                  <Hammer className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
                   <div className="min-w-0">
                     <Label className="text-sm font-medium">Building AI</Label>
                     <p className="text-xs text-muted-foreground">

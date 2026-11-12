@@ -164,6 +164,56 @@ _MAX_MIN_TTL_SECONDS = 1800
 _IN_PROGRESS_RETRY_DELAY_SECONDS = 1.5
 
 
+class CapabilityRequestRateLimited(ValueError):
+    """A capability request was refused because the caller hit the daily limit.
+
+    ``retry_after`` is the number of seconds until another request is accepted
+    (from the ``Retry-After`` header; None if the platform sent none).
+    """
+
+    def __init__(self, message: str, retry_after: int | None = None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+#: The platform-owned route on every agent_api proxy that takes capability
+#: requests (``/_cinna/`` is reserved: a producer route under it is shadowed).
+_CAPABILITY_REQUESTS_PATH = "/_cinna/improvement-requests"
+
+
+def _response_detail(response: Any) -> str:
+    """A short, human-readable ``detail`` from a platform error response."""
+    try:
+        detail = response.json().get("detail")
+    except Exception:  # noqa: BLE001 — not JSON / not an object
+        detail = None
+    if isinstance(detail, list):
+        parts = []
+        for item in detail:
+            if isinstance(item, dict):
+                loc = ".".join(str(p) for p in item.get("loc") or ())
+                parts.append(f"{loc}: {item.get('msg')}" if loc else str(item.get("msg")))
+        detail = "; ".join(parts)
+    return str(detail) if detail else f"HTTP {response.status_code}"
+
+
+def _raise_for_capability_response(response: Any) -> None:
+    """Map a capability-request response to the SDK's errors."""
+    status = response.status_code
+    if status == 429:
+        raw = response.headers.get("Retry-After")
+        try:
+            retry_after = int(raw) if raw is not None else None
+        except ValueError:
+            retry_after = None
+        raise CapabilityRequestRateLimited(
+            f"capability request refused: {_response_detail(response)}", retry_after
+        )
+    if status in (401, 413, 422):
+        raise ValueError(f"capability request refused: {_response_detail(response)}")
+    response.raise_for_status()
+
+
 class CredentialRefreshError(Exception):
     """An OAuth access token could not be obtained.
 
@@ -243,11 +293,65 @@ def _get_agent_api_session_class() -> type:
         should use the verb methods.
         """
 
-        def __init__(self, base_url: str, spec_url: str | None):
+        def __init__(
+            self,
+            base_url: str,
+            spec_url: str | None,
+            improvement_requests_url: str | None = None,
+        ):
             super().__init__()
             self.base_url = base_url
             self.spec_url = spec_url
+            self.improvement_requests_url = improvement_requests_url
             self._credential_header_names: list[str] = []
+
+        def _capability_requests_url(self) -> str:
+            return self.improvement_requests_url or (
+                f"{self.base_url.rstrip('/')}{_CAPABILITY_REQUESTS_PATH}"
+            )
+
+        def capability_requests(self) -> list[dict]:
+            """Your capability requests on this API, newest first.
+
+            Each has ``id``, ``title``, ``status`` (``new``, ``in_progress``,
+            ``completed``, ``declined``), ``resolution_note``, ``created_at``,
+            ``status_changed_at`` and ``spec_version_seen``. Raises
+            ``ValueError`` when the platform refuses (e.g. no caller identity).
+            """
+            response = self.get(self._capability_requests_url())
+            _raise_for_capability_response(response)
+            return list((response.json() or {}).get("data") or [])
+
+        def file_capability_request(
+            self,
+            title: str,
+            need: str,
+            *,
+            proposed_endpoint: dict | None = None,
+            example_request: str | None = None,
+            example_response: str | None = None,
+            spec_version_seen: str | None = None,
+        ) -> dict:
+            """Ask the producer's owner for a capability this API lacks.
+
+            Confirm the draft with the user before calling this. Returns the
+            filed request (``id``, ``title``, ``status`` ...). Raises
+            ``ValueError`` on 401 (no caller identity), 413 (too large) or 422
+            (invalid fields), with the platform's detail, and
+            :class:`CapabilityRequestRateLimited` (a ``ValueError``, with
+            ``retry_after``) on 429.
+            """
+            payload: dict[str, Any] = {"title": title, "need": need}
+            optional = {
+                "proposed_endpoint": proposed_endpoint,
+                "example_request": example_request,
+                "example_response": example_response,
+                "spec_version_seen": spec_version_seen,
+            }
+            payload.update({k: v for k, v in optional.items() if v is not None})
+            response = self.post(self._capability_requests_url(), json=payload)
+            _raise_for_capability_response(response)
+            return response.json()
 
         def set_credential_header(self, name: str, value: str) -> None:
             """Set a session header sent only to :attr:`base_url`'s origin."""
@@ -467,7 +571,9 @@ class _Credentials:
         ``Authorization: Bearer <token>`` plus the caller-identity header when
         the platform provided one (an issued key's identity is bound to the key;
         the producer ignores the header for it), and ``.base_url`` /
-        ``.spec_url`` from the credential.
+        ``.spec_url`` from the credential. ``capability_requests()`` and
+        ``file_capability_request(...)`` talk to the platform's capability
+        request route for this API.
 
         Raises :class:`CredentialMissing` like :meth:`require_slot` (including
         ``key_revoked`` / ``key_expired`` / ``key_paused``), and
@@ -485,6 +591,7 @@ class _Credentials:
         session = _get_agent_api_session_class()(
             base_url=str(data.get("base_url") or ""),
             spec_url=data.get("spec_url"),
+            improvement_requests_url=data.get("improvement_requests_url"),
         )
         session.set_credential_header(
             "Authorization", f"Bearer {data.get('token') or ''}"

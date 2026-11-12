@@ -20,6 +20,7 @@ the proxy strips it after verifying (see ``agent_api_public.consumer_proxy``).
 """
 import logging
 import uuid
+from dataclasses import dataclass
 from datetime import timedelta
 
 import jwt
@@ -72,29 +73,51 @@ CALLER_USERNAME_HEADER = "X-Cinna-Caller-Username"
 CALLER_SCOPES_HEADER = "X-Cinna-Caller-Scopes"
 
 
+# Optional claim naming the calling install. Attribution only (plan D12): the
+# backend trusts it only when that agent exists and is owned by ``sub``.
+AGENT_ID_CLAIM = "agent_id"
+
+
+@dataclass(frozen=True)
+class IdentityClaims:
+    """The verified content of an identity token."""
+
+    user_id: uuid.UUID
+    # Unverified against the DB here — callers check ownership before use.
+    agent_id: uuid.UUID | None = None
+
+
 class AgentApiIdentityService:
     """Mint/verify the L2 ``owner_identity_token``. Stateless (no table)."""
 
     @staticmethod
-    def mint(owner_user_id: uuid.UUID | str) -> str:
+    def mint(
+        owner_user_id: uuid.UUID | str, agent_id: uuid.UUID | str | None = None
+    ) -> str:
         """Mint a signed identity token asserting ``sub = owner_user_id``.
 
         Computed host-side from the install owner during credential prep; never
-        stored. Re-minted for free on every credential sync.
+        stored. Re-minted for free on every credential sync. ``agent_id`` names
+        the calling install when known (attribution only).
         """
+        extra_claims: dict = {
+            "aud": IDENTITY_AUDIENCE,
+            "type": IDENTITY_TYPE,
+        }
+        if agent_id is not None:
+            extra_claims[AGENT_ID_CLAIM] = str(agent_id)
         return security.create_access_token(
             subject=str(owner_user_id),
             expires_delta=timedelta(
                 days=settings.AGENT_API_IDENTITY_TOKEN_EXPIRE_DAYS
             ),
-            extra_claims={
-                "aud": IDENTITY_AUDIENCE,
-                "type": IDENTITY_TYPE,
-            },
+            extra_claims=extra_claims,
         )
 
     @staticmethod
-    def build_owner_identity_block(owner_user_id: uuid.UUID | str) -> dict:
+    def build_owner_identity_block(
+        owner_user_id: uuid.UUID | str, agent_id: uuid.UUID | str | None = None
+    ) -> dict:
         """Build the synthetic ``owner_identity_token`` credentials.json entry.
 
         Mirrors the shape of a real credential entry
@@ -110,7 +133,7 @@ class AgentApiIdentityService:
             "type": OWNER_IDENTITY_TYPE,
             "notes": OWNER_IDENTITY_NOTES,
             "credential_data": {
-                "token": AgentApiIdentityService.mint(owner_user_id),
+                "token": AgentApiIdentityService.mint(owner_user_id, agent_id),
                 "header": IDENTITY_HEADER,
                 "usage": OWNER_IDENTITY_USAGE,
             },
@@ -124,6 +147,17 @@ class AgentApiIdentityService:
         token, wrong audience, bad signature, non-UUID subject). The proxy treats
         ``None`` as "anonymous caller" — never an error (plan SECURITY rule 4).
         The raw token must never be logged.
+        """
+        claims = AgentApiIdentityService.verify_claims(token)
+        return claims.user_id if claims else None
+
+    @staticmethod
+    def verify_claims(token: str | None) -> IdentityClaims | None:
+        """Like :meth:`verify`, but also returns the optional ``agent_id`` claim.
+
+        NEVER raises. A malformed ``agent_id`` claim is dropped (``None``) rather
+        than invalidating the token: the claim is attribution only, and tokens
+        minted before it existed carry no claim at all.
         """
         if not token:
             return None
@@ -145,9 +179,18 @@ class AgentApiIdentityService:
         if not sub:
             return None
         try:
-            return uuid.UUID(str(sub))
+            user_id = uuid.UUID(str(sub))
         except (ValueError, TypeError):
             return None
+
+        agent_id: uuid.UUID | None = None
+        raw_agent_id = claims.get(AGENT_ID_CLAIM)
+        if raw_agent_id:
+            try:
+                agent_id = uuid.UUID(str(raw_agent_id))
+            except (ValueError, TypeError):
+                agent_id = None
+        return IdentityClaims(user_id=user_id, agent_id=agent_id)
 
     @staticmethod
     def resolve_caller_headers(

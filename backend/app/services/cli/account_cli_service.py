@@ -1943,6 +1943,7 @@ class AccountCLIService:
             notes=credential.notes,
             allow_sharing=credential.allow_sharing,
             allow_template_sharing=credential.allow_template_sharing,
+            allow_bundle_reuse=credential.allow_bundle_reuse,
             service_uri=credential.service_uri,
             template_private_fields=list(credential.template_private_fields or []),
             owner_id=credential.owner_id,

@@ -298,6 +298,23 @@ class CredentialSpecDrift(BaseModel):
     drifted: bool
 
 
+class CredentialProvisioningOption(BaseModel):
+    """One linked credential's server-computed provisioning value.
+
+    ``resolved_provided_by`` is what publish would write for it now (an
+    explicit override is reported as-is, even one publish would reject).
+    ``can_provide_as`` lists the non-``user`` modes the publisher may choose;
+    ``blocked_reason`` is the ``credential_reuse_policy`` reason the
+    publisher may not provide it (``None`` when it may, or when the
+    publisher owns it).
+    """
+    credential_id: uuid.UUID
+    name: str
+    resolved_provided_by: Literal["user", "publisher", "template"]
+    can_provide_as: list[Literal["publisher", "template"]] = []
+    blocked_reason: str | None = None
+
+
 class BundleCredentialDrift(BaseModel):
     """Response of ``GET /agents/{agent_id}/bundle-credential-drift``.
 
@@ -305,6 +322,11 @@ class BundleCredentialDrift(BaseModel):
     differs from the latest published revision's snapshot. An install that
     has never been published (no latest revision) reports ``stale=False``
     with an empty ``drift`` list — there is nothing to be stale against.
+
+    ``live`` is filled for every publisher install, published or not: the
+    provisioning value of each linked credential, computed by the same
+    resolver and policy publish uses.
     """
     stale: bool
     drift: list[CredentialSpecDrift] = []
+    live: list[CredentialProvisioningOption] = []

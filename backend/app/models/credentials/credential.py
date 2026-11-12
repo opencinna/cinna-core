@@ -46,6 +46,10 @@ class CredentialBase(SQLModel):
     allow_local_use: bool = Field(default=False)
     allow_sharing: bool = Field(default=False)  # Whether this credential can be shared with other users
     allow_template_sharing: bool = Field(default=False)  # Whether this credential can be shared as a template (non-private fields are copied as defaults; the installer must supply the private ones)
+    # Owner consent for recipients to embed this credential as publisher-provided
+    # in their own bundles/skills (agent_api connections only, see
+    # credential_reuse_policy). Requires allow_sharing; turning sharing off clears it.
+    allow_bundle_reuse: bool = Field(default=False)
     # Non-secret audience/slot id (I4). When set, the bundle publisher stamps
     # the same value on the linked spec credential AND every per-user token for
     # the same slot; their names and token values differ. Steers the install-time
@@ -206,6 +210,7 @@ class CredentialUpdate(SQLModel):
     allow_local_use: bool | None = None
     allow_sharing: bool | None = None  # Update sharing permission
     allow_template_sharing: bool | None = None  # Toggle template-sharing
+    allow_bundle_reuse: bool | None = None  # Owner-only; requires allow_sharing and a re-usable type
     template_private_fields: list[str] | None = None  # Fields the installer must supply when installing a bundle that uses this credential as a template
     service_uri: str | None = None  # Editable non-secret audience/slot id (I4)
     # Per-mode toggles for MCP_PROVIDER credentials (ignored for other types).
@@ -349,6 +354,10 @@ class CredentialBundleUsage(SQLModel):
     display_name: str
     publisher_install_id: uuid.UUID | None = None
     provided_by: str  # "user" | "publisher" | "template"
+    # The bundle's publisher. Differs from the credential owner when a
+    # recipient re-uses a shared connection in their own bundle.
+    publisher_user_id: uuid.UUID | None = None
+    publisher_display: str | None = None
 
 
 class CredentialBundleUsages(SQLModel):
@@ -367,6 +376,9 @@ class CredentialSkillUsage(SQLModel):
     package_id: str
     display_name: str
     revision_numbers: list[int] = []
+    # The package's publisher (may be a re-sharer, not the owner).
+    publisher_user_id: uuid.UUID | None = None
+    publisher_display: str | None = None
 
 
 class CredentialAffectedAgent(SQLModel):

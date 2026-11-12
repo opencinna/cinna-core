@@ -33,6 +33,7 @@ from fastapi.testclient import TestClient
 
 from app.core.config import settings
 from tests.utils.agent import create_agent_via_api
+from tests.utils.agent_api_keys import make_developer
 from tests.utils.ai_credential import create_random_ai_credential
 from tests.utils.background_tasks import drain_tasks
 from tests.utils.bundle import (
@@ -638,3 +639,90 @@ def test_install_new_payload_works_after_shim_removal(
     assert install.get("bundle_id") == bundle_id, (
         f"Installed agent bundle_id should match; got {install.get('bundle_id')}"
     )
+
+
+# ── Scenario K: never-published agent (owner's, bundle_uuid None) ────────────
+
+
+def test_owner_saves_override_on_never_published_agent_and_first_publish_freezes_it(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """K. PATCH publish-settings works before the first publish.
+
+    1. Owner links a shareable credential (inference would say "publisher").
+    2. PATCH override provided_by="user" on the never-published agent: 200.
+    3. First publish freezes provided_by="user" into the revision's spec.
+    """
+    agent = create_agent_via_api(
+        client, superuser_token_headers, name="PubSet-K-Agent"
+    )
+    drain_tasks()
+    assert not agent.get("bundle_uuid"), "Agent must be never-published"
+    cred = _create_credential(
+        client, superuser_token_headers, name="inference", allow_sharing=True
+    )
+    _link_credential(client, superuser_token_headers, agent["id"], cred["id"])
+
+    r = _patch_publish_settings(
+        client,
+        superuser_token_headers,
+        agent["id"],
+        {"inference": {"provided_by": "user"}},
+    )
+    assert r.status_code == 200, r.text
+    overrides = r.json()["publish_settings"]["credential_overrides"]
+    assert overrides["inference"]["provided_by"] == "user", overrides
+
+    fresh = _publish(client, superuser_token_headers, agent["id"])
+    assert fresh["bundle_uuid"], "Expected bundle_uuid after first publish"
+    specs = _get_latest_specs(
+        client, superuser_token_headers, fresh["bundle_uuid"]
+    )
+    matched = [s for s in specs if s["name"] == "inference"]
+    assert len(matched) == 1, f"Expected spec 'inference'; got {specs}"
+    assert matched[0]["provided_by"] == "user", matched[0]
+    assert matched[0]["publisher_credential_id"] is None, matched[0]
+
+
+# ── Scenario L: denials — foreign install and non-owner ──────────────────────
+
+
+def test_publish_settings_rejected_for_foreign_install_and_non_owner(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """L. A consumer's install is 400; a non-owner of a never-published agent
+    gets the existing denial.
+    """
+    # Publisher publishes and makes the bundle public
+    pub_agent = create_agent_via_api(
+        client, superuser_token_headers, name="PubSet-L-Publisher"
+    )
+    drain_tasks()
+    published = _publish(client, superuser_token_headers, pub_agent["id"])
+    _make_public(client, superuser_token_headers, published["bundle_uuid"])
+
+    # Consumer installs it: a foreign install
+    # (a developer, so the role gate passes and the foreign-install rule decides)
+    _, installer_headers = make_developer(client, superuser_token_headers)
+    install = _install(client, installer_headers, published["bundle_id"])
+    r = _patch_publish_settings(client, installer_headers, install["id"], {})
+    assert r.status_code == 400, (
+        f"Expected 400 for foreign install; got {r.status_code}: {r.text}"
+    )
+
+    # Non-owner on someone else's never-published agent
+    fresh_agent = create_agent_via_api(
+        client, superuser_token_headers, name="PubSet-L-NeverPublished"
+    )
+    drain_tasks()
+    r = _patch_publish_settings(client, installer_headers, fresh_agent["id"], {})
+    assert r.status_code in (400, 403, 404), (
+        f"Expected denial for non-owner; got {r.status_code}: {r.text}"
+    )
+    # The owner's agent must be untouched by the rejected attempt
+    got = client.get(
+        f"{API}/agents/{fresh_agent['id']}", headers=superuser_token_headers
+    ).json()
+    assert not (got.get("publish_settings") or {}).get("credential_overrides")

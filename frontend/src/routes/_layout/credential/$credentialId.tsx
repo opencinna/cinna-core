@@ -2,7 +2,7 @@ import { ServiceUriField } from "@/components/Credentials/CredentialFields/Servi
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
-import { ArrowLeft, Lock, Trash2, Users } from "lucide-react"
+import { ArrowLeft, KeyRound, Lock, Trash2, Users } from "lucide-react"
 import { useCallback, useEffect, useState } from "react"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
@@ -19,6 +19,7 @@ import {
   ServiceAccountCredentialForm,
   SSHKeyEditView,
 } from "@/components/Credentials/CredentialForms"
+import { CredentialResharesCard } from "@/components/Credentials/CredentialResharesCard"
 import { CredentialSharing } from "@/components/Credentials/CredentialSharing"
 import { CredentialTemplateSharing } from "@/components/Credentials/CredentialTemplateSharing"
 import DeleteCredential from "@/components/Credentials/DeleteCredential"
@@ -50,6 +51,7 @@ import useCustomToast from "@/hooks/useCustomToast"
 import { useNavigationHistory } from "@/hooks/useNavigationHistory"
 import { usePageHeader } from "@/routes/_layout"
 import { handleError } from "@/utils"
+import { isBundleReusableCredentialType } from "@/utils/credentialBundleReuse"
 
 const formSchema = z.object({
   name: z.string().min(1, { message: "Name is required" }),
@@ -118,6 +120,9 @@ function SharedCredentialView({
 }: {
   credential: CredentialPublic
 }) {
+  const isReusableType = isBundleReusableCredentialType(credential.type)
+  const reuseAllowed =
+    !!credential.allow_sharing && !!credential.allow_bundle_reuse
   return (
     <div className="space-y-6">
       <Alert>
@@ -130,61 +135,76 @@ function SharedCredentialView({
         </AlertDescription>
       </Alert>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Credential Information</CardTitle>
-          <CardDescription>
-            Basic information about this shared credential.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div>
-            <label className="text-sm font-medium text-muted-foreground">
-              Name
-            </label>
-            <p className="text-base">{credential.name}</p>
-          </div>
-
-          <div>
-            <label className="text-sm font-medium text-muted-foreground">
-              Type
-            </label>
-            <p className="text-base">
-              {getCredentialTypeLabel(credential.type)}
-            </p>
-          </div>
-
-          {credential.notes && (
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 min-w-0">
+              <KeyRound className="h-5 w-5 shrink-0" />
+              Credential information
+            </CardTitle>
+            <CardDescription>
+              Basic information about this shared credential.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
             <div>
-              <label className="text-sm font-medium text-muted-foreground">
-                Notes
-              </label>
-              <p className="text-base">{credential.notes}</p>
+              <p className="text-sm font-medium text-muted-foreground">Name</p>
+              <p className="text-base break-words">{credential.name}</p>
             </div>
-          )}
 
-          <div>
-            <label className="text-sm font-medium text-muted-foreground">
-              Shared by
-            </label>
-            <p className="text-base">{credential.owner_email}</p>
-          </div>
+            <div>
+              <p className="text-sm font-medium text-muted-foreground">Type</p>
+              <p className="text-base">
+                {getCredentialTypeLabel(credential.type)}
+              </p>
+            </div>
 
-          <div className="flex items-center gap-2 pt-2">
-            <Badge
-              variant="outline"
-              className="gap-1 bg-blue-50 text-blue-700 border-blue-200"
-            >
-              <Users className="h-3 w-3" />
-              Shared with you
-            </Badge>
-            <Badge variant="outline" className="gap-1">
-              <Lock className="h-3 w-3" />
-              Read-only
-            </Badge>
-          </div>
-        </CardContent>
-      </Card>
+            {credential.notes && (
+              <div>
+                <p className="text-sm font-medium text-muted-foreground">
+                  Notes
+                </p>
+                <p className="text-base break-words">{credential.notes}</p>
+              </div>
+            )}
+
+            <div>
+              <p className="text-sm font-medium text-muted-foreground">Owner</p>
+              <p className="text-base break-words">{credential.owner_email}</p>
+            </div>
+
+            {isReusableType && (
+              <div>
+                <p className="text-sm font-medium text-muted-foreground">
+                  Re-use in bundles
+                </p>
+                {reuseAllowed ? (
+                  <>
+                    <p className="text-base">Allowed</p>
+                    <p className="text-sm text-muted-foreground">
+                      Choose <em>Embedded (shared)</em> for it on your bundle's
+                      Credential provisioning.
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-base break-words">
+                    Not allowed by {credential.owner_email || "its owner"}
+                  </p>
+                )}
+              </div>
+            )}
+
+            <div className="flex items-center gap-2 pt-2">
+              <Badge variant="outline" className="gap-1">
+                <Lock className="h-3 w-3" />
+                Read-only
+              </Badge>
+            </div>
+          </CardContent>
+        </Card>
+
+        {isReusableType && <CredentialResharesCard credential={credential} />}
+      </div>
     </div>
   )
 }

@@ -454,7 +454,7 @@ def test_revoke_share_not_found(
         f"{settings.API_V1_STR}/credentials/{cred['id']}/shares/{uuid.uuid4()}",
         headers=superuser_token_headers,
     )
-    assert response.status_code == 400
+    assert response.status_code == 404
     assert "not found" in response.json()["detail"].lower()
 
 
@@ -478,7 +478,7 @@ def test_revoke_share_not_owner(
         f"{settings.API_V1_STR}/credentials/{cred['id']}/shares/{share_id}",
         headers=user2_headers,
     )
-    assert response.status_code == 400
+    assert response.status_code == 403
     assert "permissions" in response.json()["detail"].lower()
 
 

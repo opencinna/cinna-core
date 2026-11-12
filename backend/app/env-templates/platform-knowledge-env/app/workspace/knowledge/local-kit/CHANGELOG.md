@@ -16,6 +16,21 @@ folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
 
+## 1.24.0 — capability requests on agent_api connections
+
+Additive. Every 1.x folder stays valid: the manifest schema and the folder roles
+are unchanged; `kit.json` gains one `protocols` key.
+
+- **`protocols/api-requests-tools.schema.json`** (new, `kit.json` →
+  `protocols.api_requests_tools`) — the producer's `cinna` tools
+  `api_requests_list`, `api_requests_get` and `api_requests_update_status`, with
+  error codes `not_found`, `agent_api_disabled` and `invalid_input`. cinna-core
+  serves them in building mode to an agent whose workspace has `agent_api/`.
+- **`guides/04-credentials.md`** — a caller of another agent's API can file a
+  capability request (`POST <base_url>/_cinna/improvement-requests`, or
+  `file_capability_request` on the cloud SDK session) after the user confirms the
+  draft, and read its status back. `/_cinna/` is reserved on every agent API.
+
 ## How cloud credential names answer `requires_credentials`
 
 Documentation update, with no schema or contract-version change.

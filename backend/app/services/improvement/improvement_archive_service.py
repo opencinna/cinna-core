@@ -29,6 +29,15 @@ Layout::
         ├── messages.md
         └── messages.json
 
+An agent-API capability request (``kind == "agent_api"``) has no session, so
+its archive is flat::
+
+    improvement-<short-id>.zip
+    ├── README.md          (who asked, which producer, what, how to close it)
+    ├── request.md         (the rendered request payload)
+    ├── metadata.json
+    └── context.json
+
 ``prompts/`` and ``memory/`` are what make the archive *reproducible* rather
 than merely descriptive: they are the two halves of the system prompt the run
 actually used. For a bundle install the publisher has never seen either — the
@@ -43,6 +52,7 @@ from io import BytesIO
 from typing import Any
 
 from app.models.improvement.agent_improvement_request import (
+    IMPROVEMENT_KIND_AGENT_API,
     AgentImprovementRequest,
 )
 
@@ -116,15 +126,38 @@ class ImprovementArchiveService:
             request: the frozen row.
             requester_projection: ``{"display": str | None, "email": str | None}``.
             target_projection: ``{"agent_name": str | None,
-                "owner_display": str | None, "session_title": str | None}``.
+                "owner_display": str | None, "session_title": str | None,
+                "source_agent_name": str | None}``.
 
         Returns:
             The complete ZIP as bytes.
         """
+        if request.kind == IMPROVEMENT_KIND_AGENT_API:
+            members = ImprovementArchiveService._agent_api_members(
+                request, requester_projection, target_projection
+            )
+        else:
+            members = ImprovementArchiveService._session_members(
+                request, requester_projection, target_projection
+            )
+
+        buffer = BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            for name, content in members.items():
+                info = zipfile.ZipInfo(name, date_time=_ZIP_TIMESTAMP)
+                info.compress_type = zipfile.ZIP_DEFLATED
+                archive.writestr(info, content)
+        return buffer.getvalue()
+
+    @staticmethod
+    def _session_members(
+        request: AgentImprovementRequest,
+        requester_projection: dict,
+        target_projection: dict,
+    ) -> dict[str, str]:
         snapshot = request.snapshot or {}
         context = request.context or {}
-
-        members = {
+        return {
             "README.md": ImprovementArchiveService.render_readme(
                 request, requester_projection, target_projection
             ),
@@ -142,13 +175,166 @@ class ImprovementArchiveService:
             **ImprovementArchiveService._memory_members(context),
         }
 
-        buffer = BytesIO()
-        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-            for name, content in members.items():
-                info = zipfile.ZipInfo(name, date_time=_ZIP_TIMESTAMP)
-                info.compress_type = zipfile.ZIP_DEFLATED
-                archive.writestr(info, content)
-        return buffer.getvalue()
+    # ── Agent-API capability request members ─────────────────────────
+
+    @staticmethod
+    def _agent_api_members(
+        request: AgentImprovementRequest,
+        requester_projection: dict,
+        target_projection: dict,
+    ) -> dict[str, str]:
+        context = request.context or {}
+        api_request = context.get("api_request") or {}
+        metadata = ImprovementArchiveService._metadata(
+            request, requester_projection, target_projection
+        )
+        metadata["kind"] = request.kind
+        metadata["title"] = api_request.get("title")
+        metadata["spec_version_seen"] = api_request.get("spec_version_seen")
+        return {
+            "README.md": ImprovementArchiveService.render_agent_api_readme(
+                request, requester_projection, target_projection
+            ),
+            "request.md": ImprovementArchiveService.render_api_request(
+                api_request
+            ),
+            "metadata.json": _dump_json(metadata),
+            "context.json": _dump_json(context),
+        }
+
+    @staticmethod
+    def render_agent_api_readme(
+        request: AgentImprovementRequest,
+        requester_projection: dict,
+        target_projection: dict,
+    ) -> str:
+        context = request.context or {}
+        api_request = context.get("api_request") or {}
+        consumer = context.get("consumer") or {}
+        producer = context.get("producer") or {}
+        requester = requester_projection.get("display") or "Unknown requester"
+        email = requester_projection.get("email")
+        consumer_name = consumer.get("agent_name") or target_projection.get(
+            "source_agent_name"
+        )
+        producer_name = (
+            target_projection.get("agent_name") or producer.get("agent_name") or "—"
+        )
+        title = _one_line(api_request.get("title")) or "Untitled API request"
+        lines = [
+            f"# Capability request: {title}",
+            "",
+            f"A caller of **{producer_name}**'s REST API asked for a capability "
+            "the API does not have yet. The full request is in `request.md`.",
+            "",
+            "## Who asked",
+            "",
+            "| Field | Value |",
+            "|---|---|",
+            _row("Requester", f"{requester} ({email})" if email else requester),
+            _row("Consumer agent", consumer_name),
+            _row("Token kind", consumer.get("token_kind")),
+            _row("Token label", consumer.get("token_label")),
+            "",
+            "## Producer",
+            "",
+            "| Field | Value |",
+            "|---|---|",
+            _row("Agent", producer_name),
+            _row("Agent id", str(request.target_agent_id)),
+            _row("API version seen by the caller", api_request.get("spec_version_seen")),
+            "",
+            "## Request",
+            "",
+            "| Field | Value |",
+            "|---|---|",
+            _row("Request id", str(request.id)),
+            _row("Status", request.status),
+            _row("Submitted", _iso(request.created_at)),
+            _row("Status changed", _iso(request.status_changed_at)),
+            _row("Resolution note", _one_line(request.resolution_note)),
+            "",
+            "## Need",
+            "",
+            _quote(api_request.get("need")),
+            "",
+            "## How to close it",
+            "",
+            "Extend the API, then set the request to `completed` with a "
+            "resolution note the caller can read (or `declined` with the "
+            "reason). Use the agent's Improvement Requests card, "
+            "`cinna improve`, or the building agent's `api_requests` tools. The "
+            "caller sees the status and the note on "
+            "`GET /agent-api/<agent-id>/_cinna/improvement-requests`.",
+            "",
+        ]
+        return "\n".join(lines)
+
+    @staticmethod
+    def render_api_request(api_request: dict) -> str:
+        """Render the capability-request payload as plain Markdown.
+
+        Caller-authored values are quoted or fenced, never interpreted.
+        """
+        title = _one_line(api_request.get("title")) or "Untitled API request"
+        lines = [f"# {title}", "", "## Need", "", _quote(api_request.get("need")), ""]
+
+        endpoint = api_request.get("proposed_endpoint") or {}
+        method = _one_line(endpoint.get("method"))
+        path = _one_line(endpoint.get("path"))
+        if method or path:
+            lines += [
+                "## Proposed endpoint",
+                "",
+                f"`{' '.join(p for p in (method.upper(), path) if p)}`",
+                "",
+            ]
+        params = endpoint.get("params") or []
+        if params:
+            lines += [
+                "## Parameters",
+                "",
+                "| Name | In | Type | Description |",
+                "|---|---|---|---|",
+                *(
+                    "| "
+                    + " | ".join(
+                        _cell(p.get(key)) for key in ("name", "in", "type", "description")
+                    )
+                    + " |"
+                    for p in params
+                ),
+                "",
+            ]
+        fields = endpoint.get("response_fields") or []
+        if fields:
+            lines += [
+                "## Response fields",
+                "",
+                "| Name | Type | Description |",
+                "|---|---|---|",
+                *(
+                    "| "
+                    + " | ".join(_cell(f.get(key)) for key in ("name", "type", "description"))
+                    + " |"
+                    for f in fields
+                ),
+                "",
+            ]
+        for heading, key in (
+            ("Example request", "example_request"),
+            ("Example response", "example_response"),
+        ):
+            value = api_request.get(key)
+            if value:
+                lines += [f"## {heading}", "", _fence(str(value)), ""]
+        if api_request.get("spec_version_seen"):
+            lines += [
+                f"_API version seen by the caller: "
+                f"{_one_line(api_request.get('spec_version_seen'))}_",
+                "",
+            ]
+        return "\n".join(lines)
 
     # ── Members ──────────────────────────────────────────────────────
 
@@ -807,6 +993,31 @@ def _revision_track_note(agent_ctx: dict) -> str | None:
         f'"latest published" pointer. Nothing is pending because there is no '
         f"newer *published* revision to apply.{head_note}"
     )
+
+
+def _quote(text: Any) -> str:
+    """Render caller text as a Markdown blockquote (never interpreted inline)."""
+    body = str(text or "").strip()
+    if not body:
+        return "_Not provided._"
+    return "\n".join(f"> {line}" if line else ">" for line in body.splitlines())
+
+
+def _fence(text: str) -> str:
+    """Fence caller text with a run of backticks longer than any inside it."""
+    longest = 0
+    run = 0
+    for ch in text:
+        run = run + 1 if ch == "`" else 0
+        longest = max(longest, run)
+    ticks = "`" * max(3, longest + 1)
+    return f"{ticks}\n{_ensure_trailing_newline(text)}{ticks}"
+
+
+def _cell(value: Any) -> str:
+    """A table cell: one line, pipes escaped."""
+    rendered = _one_line(value).replace("|", "\\|")
+    return rendered or "—"
 
 
 def _row(label: str, value: Any) -> str:

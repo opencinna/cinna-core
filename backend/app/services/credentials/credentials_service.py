@@ -27,6 +27,10 @@ from app.models.credentials.credential_share import (
 
 logger = logging.getLogger(__name__)
 
+#: The platform route on every agent_api proxy that takes capability requests
+#: (``agent_api_public.consumer_create_capability_request``).
+AGENT_API_CAPABILITY_REQUESTS_PATH = "/_cinna/improvement-requests"
+
 # Legal characters in an SSH `Host` pattern. Matches OpenSSH host pattern syntax
 # (alnum, dot, hyphen, underscore, wildcards `*` / `?`, bracket groups). Rejects
 # whitespace, newlines, and control chars — a defence-in-depth layer that
@@ -186,7 +190,16 @@ class CredentialsService:
         # producer's proxy, plus spec_url to fetch the contract. producer_agent_id
         # and label are informational. The token is redacted in the README render
         # (SENSITIVE_FIELDS) but IS synced to credentials.json so scripts can use it.
-        "agent_api": ["base_url", "spec_url", "token", "label", "producer_agent_id"],
+        # improvement_requests_url is derived at env prep (never stored): the
+        # platform route where the caller files capability requests.
+        "agent_api": [
+            "base_url",
+            "spec_url",
+            "token",
+            "label",
+            "producer_agent_id",
+            "improvement_requests_url",
+        ],
         # mcp_provider: NEVER written to credentials.json. An MCP provider is
         # materialised into the per-mode SDK MCP config via
         # collect_mcp_provider_manifest, not as a credential file. An empty
@@ -938,6 +951,23 @@ class CredentialsService:
         ]
 
     @staticmethod
+    def _capability_requests_readme_lines() -> list[str]:
+        """The "Capability requests" paragraph of an agent_api README entry."""
+        return [
+            "**Capability requests.** When this API cannot do what the user "
+            "needs, you can ask its owner to extend it. Draft the request "
+            "(title, need, optionally a proposed endpoint and examples), show "
+            "the draft to the user and submit only after they confirm: "
+            "`api.file_capability_request(title, need, ..., "
+            "spec_version_seen=<the spec's version>)` on the SDK session "
+            "(`credentials.agent_api_session('<slot>')`), or `POST` to the "
+            "entry's `improvement_requests_url`. Check progress later with "
+            "`api.capability_requests()`; once one is `completed`, re-read the "
+            "spec before using the new capability.",
+            "",
+        ]
+
+    @staticmethod
     def _agent_api_unavailable_hint(reason: str) -> str:
         """What the user can do about an unavailable issued key (README)."""
         return {
@@ -1540,6 +1570,7 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
                     "`Authorization: Bearer <token>` to its `base_url`."
                 )
                 lines.append("")
+                lines.extend(CredentialsService._capability_requests_readme_lines())
             elif cred_type == "agent_api":
                 lines.append(f"### Agent API Connection: {cred_name}")
                 lines.append(f"**ID**: `{cred_id}`")
@@ -1573,6 +1604,8 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
                 lines.append("spec = requests.get(api['spec_url'], headers=headers).json()")
                 lines.append("response = requests.get(f\"{api['base_url']}/some/endpoint\", headers=headers)")
                 lines.append("```")
+                lines.append("")
+                lines.extend(CredentialsService._capability_requests_readme_lines())
                 lines.append("")
             elif cred_type == "ssh_key":
                 lines.append(f"### SSH Key Credential: {cred_name}")
@@ -1739,6 +1772,24 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
                     cred["credential_data"]
                 )
 
+        # Derived after the origin rewrite, so it carries the same origin as
+        # base_url. Only for usable entries: a token-less issued key gets none.
+        for cred in credentials:
+            data = cred.get("credential_data")
+            if (
+                cred["type"] == "agent_api"
+                and not cred.get("unavailable_reason")
+                and isinstance(data, dict)
+                and data.get("base_url")
+            ):
+                cred["credential_data"] = {
+                    **data,
+                    "improvement_requests_url": (
+                        str(data["base_url"]).rstrip("/")
+                        + AGENT_API_CAPABILITY_REQUESTS_PATH
+                    ),
+                }
+
         # Filter out sensitive fields that should never be exposed to agent environment
         # (e.g., refresh tokens, client secrets for OAuth credentials)
         filtered_credentials = []
@@ -1815,7 +1866,9 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
                 owner = session.get(User, agent.owner_id) if agent else None
                 if owner is not None:
                     filtered_credentials.append(
-                        AgentApiIdentityService.build_owner_identity_block(owner.id)
+                        AgentApiIdentityService.build_owner_identity_block(
+                            owner.id, agent_id=agent.id
+                        )
                     )
                 else:
                     logger.warning(
@@ -2140,6 +2193,12 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         # Capture and delete the shares in the same write as the flag change;
         # links are removed and environments re-synced after the commit below.
         update_dict = credential_in.model_dump(exclude_unset=True)
+        if update_dict.get("allow_bundle_reuse") is None:
+            update_dict.pop("allow_bundle_reuse", None)
+        reuse_was_on = bool(credential.allow_bundle_reuse)
+        CredentialsService._apply_bundle_reuse_rules(
+            session, credential, update_dict
+        )
         revoked_recipient_ids: list[uuid.UUID] = []
         if update_dict.get("allow_sharing") is False:
             shares = session.exec(
@@ -2251,6 +2310,14 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             credential_id=credential_id,
             recipient_user_ids=revoked_recipient_ids,
         )
+        if reuse_was_on and not credential.allow_bundle_reuse:
+            # Re-use off: every re-share a recipient made through their own
+            # bundle or skill goes, and so does whatever rode on it.
+            from app.services.credentials.credential_reshare_service import (
+                CredentialReshareService,
+            )
+
+            await CredentialReshareService.release_all(session, credential_id)
 
         # Trigger sync to affected agent environments
         await CredentialsService.event_credential_updated(
@@ -2259,6 +2326,34 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         )
 
         return credential
+
+    @staticmethod
+    def _apply_bundle_reuse_rules(
+        session: Session, credential: Credential, update_dict: dict
+    ) -> None:
+        """Validate and normalise ``allow_bundle_reuse`` in an owner update.
+
+        Turning it on requires sharing (stored or in the same update) and a
+        re-usable credential (``credential_reuse_policy``). Turning sharing
+        off clears it (D2): a later sharing-on must not silently restore
+        third-party redistribution. Mutates ``update_dict``.
+        """
+        from app.services.credentials.credential_reuse_policy import (
+            is_reusable_type,
+        )
+
+        sharing_after = update_dict.get("allow_sharing", credential.allow_sharing)
+        if update_dict.get("allow_bundle_reuse") is True:
+            if not sharing_after:
+                raise ValueError(
+                    "Allow sharing before allowing re-use inside bundles."
+                )
+            if not is_reusable_type(session, credential):
+                raise ValueError(
+                    "Only agent API connections can be re-used inside bundles."
+                )
+        if not sharing_after:
+            update_dict["allow_bundle_reuse"] = False
 
     @staticmethod
     def assert_sharing_allowed(session: Session, credential: Credential) -> None:
@@ -2418,7 +2513,8 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             SkillCredentialRequirements.publisher_usages_of_credential(
                 session,
                 credential_id=credential_id,
-                publisher_user_id=requester_id,
+                # Any publisher: a recipient's skill may re-use the connection.
+                publisher_user_id=None,
             )
         )
         active_skill_install_count = 0
@@ -2681,6 +2777,7 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
             "allow_sharing": credential.allow_sharing,
             "allow_local_use": credential.allow_local_use,
             "allow_template_sharing": credential.allow_template_sharing,
+            "allow_bundle_reuse": credential.allow_bundle_reuse,
             "service_uri": credential.service_uri,
             "template_private_fields": list(credential.template_private_fields or []),
             "owner_id": credential.owner_id,
@@ -3035,6 +3132,8 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         session: Session,
         credential_id: uuid.UUID,
         recipient_user_ids: list[uuid.UUID],
+        *,
+        _seen: set[uuid.UUID] | None = None,
     ) -> list[uuid.UUID]:
         """
         Drop a revoked recipient's links to a credential and re-sync their envs.
@@ -3070,6 +3169,25 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         from app.services.credentials.credential_share_service import (
             CredentialShareService,
         )
+
+        # Re-sharing is one level deep: a recipient who no longer reaches the
+        # credential through its owner (owner share or group) loses the
+        # re-shares they made through their own bundles and skills, even when
+        # someone else's re-share still keeps their own access (D6). Before
+        # the links early exit: a re-sharer with no agent of their own still
+        # cascades.
+        from app.services.credentials.credential_reshare_service import (
+            CredentialReshareService,
+        )
+
+        credential = session.get(Credential, credential_id)
+        if credential is not None:
+            unrooted = recipient_ids - CredentialShareService._owner_rooted_users(
+                session, credential, recipient_ids
+            )
+            await CredentialReshareService.release_by_sharers(
+                session, credential_id, unrooted, _seen=_seen
+            )
 
         recipient_ids = CredentialShareService.users_without_access(
             session, credential_id, recipient_ids
@@ -3666,31 +3784,57 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         """Batched "used in ≥1 bundle" flags for a page of credentials.
 
         Returns the subset of ``credential_ids`` that appear in at least one of
-        the owner's bundles, via a single ``DISTINCT credential_id`` query over
-        the whole id list. Reuses the publisher-install join from
-        :meth:`list_bundle_usages` (owner-scoped — only the owner's bundles
-        count) rather than calling the full impact path per credential.
+        the owner's bundles (any provisioning mode), or are embedded as
+        publisher-provided in someone else's bundle — a recipient re-using a
+        shared connection, a usage the owner must see. Reuses the
+        publisher-install join from :meth:`list_bundle_usages` rather than
+        calling the full impact path per credential.
         """
         if not credential_ids:
             return set()
 
         from app.models.bundles.agent_bundle import AgentBundle
+        from app.services.bundles.publish_service import PublishService
 
-        stmt = (
-            select(AgentCredentialLink.credential_id)
-            .distinct()
+        own = set(
+            session.exec(
+                select(AgentCredentialLink.credential_id)
+                .distinct()
+                .join(Agent, Agent.id == AgentCredentialLink.agent_id)
+                .join(
+                    AgentBundle,
+                    (AgentBundle.id == Agent.bundle_uuid)
+                    & (AgentBundle.publisher_user_id == owner_id),
+                )
+                .where(
+                    Agent.is_publisher_install == True,  # noqa: E712
+                    AgentCredentialLink.credential_id.in_(credential_ids),
+                )
+            ).all()
+        )
+        # Foreign bundles exist only for credentials the owner lets others
+        # re-use; resolve each candidate the way publish would.
+        foreign = session.exec(
+            select(Credential, Agent)
+            .join(AgentCredentialLink, AgentCredentialLink.credential_id == Credential.id)
             .join(Agent, Agent.id == AgentCredentialLink.agent_id)
-            .join(
-                AgentBundle,
-                (AgentBundle.id == Agent.bundle_uuid)
-                & (AgentBundle.publisher_user_id == owner_id),
-            )
             .where(
                 Agent.is_publisher_install == True,  # noqa: E712
-                AgentCredentialLink.credential_id.in_(credential_ids),
+                Agent.bundle_uuid.is_not(None),
+                Agent.owner_id != owner_id,
+                Credential.allow_bundle_reuse == True,  # noqa: E712
+                Credential.id.in_([cid for cid in credential_ids if cid not in own]),
             )
-        )
-        return set(session.exec(stmt).all())
+        ).all()
+        for credential, install in foreign:
+            if credential.id in own:
+                continue
+            if (
+                PublishService.resolve_provided_by(session, credential, install)
+                == "publisher"
+            ):
+                own.add(credential.id)
+        return own
 
     @staticmethod
     def list_bundle_usages(
@@ -3736,21 +3880,39 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         )
         rows = session.exec(stmt).all()
 
+        from app.models.users.user import User
+        from app.services.credentials.credential_reuse_policy import user_display
+
         seen: set[uuid.UUID] = set()
+        displays: dict[uuid.UUID, str] = {}
         usages: list[CredentialBundleUsage] = []
         for bundle, publisher_install in rows:
             if bundle.id in seen:
                 continue
             seen.add(bundle.id)
+            # The publisher may be a recipient re-using a shared connection,
+            # not the owner; the impact view names them.
+            publisher_id = publisher_install.owner_id
+            if publisher_id not in displays:
+                displays[publisher_id] = user_display(
+                    session.get(User, publisher_id)
+                )
             usages.append(
                 CredentialBundleUsage(
                     bundle_uuid=bundle.id,
                     bundle_id=bundle.bundle_id,
                     display_name=bundle.display_name,
-                    publisher_install_id=publisher_install.id,
-                    provided_by=PublishService.resolve_provided_by(
-                        credential, publisher_install
+                    # Another user's install id is not the viewer's to know.
+                    publisher_install_id=(
+                        publisher_install.id
+                        if publisher_id == requester_id
+                        else None
                     ),
+                    provided_by=PublishService.resolve_provided_by(
+                        session, credential, publisher_install
+                    ),
+                    publisher_user_id=publisher_id,
+                    publisher_display=displays[publisher_id],
                 )
             )
         return usages

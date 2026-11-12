@@ -97,6 +97,21 @@ CINNA_DASHBOARD_TOOL_NAMES_OPENCODE: tuple[str, ...] = tuple(
     f"{CINNA_TASKS_SERVER}_{name}" for name in CINNA_DASHBOARD_TOOLS
 )
 
+# The producer's capability-request tools on the same "cinna" server
+# (core/protocols/api-requests-tools.schema.json). Served in building mode
+# only, when the workspace has agent_api/.
+CINNA_API_REQUEST_TOOLS: tuple[str, ...] = (
+    "api_requests_list",
+    "api_requests_get",
+    "api_requests_update_status",
+)
+CINNA_API_REQUEST_TOOL_NAMES_CLAUDE: tuple[str, ...] = tuple(
+    f"mcp__{CINNA_TASKS_SERVER}__{name}" for name in CINNA_API_REQUEST_TOOLS
+)
+CINNA_API_REQUEST_TOOL_NAMES_OPENCODE: tuple[str, ...] = tuple(
+    f"{CINNA_TASKS_SERVER}_{name}" for name in CINNA_API_REQUEST_TOOLS
+)
+
 # ---------------------------------------------------------------------------
 # Canonical pre-approved tools (lowercase)
 #
@@ -125,6 +140,9 @@ PRE_APPROVED_TOOLS: frozenset[str] = frozenset([
     # Dashboard tile tools (server "cinna") — both forms
     *CINNA_DASHBOARD_TOOL_NAMES_CLAUDE,
     *CINNA_DASHBOARD_TOOL_NAMES_OPENCODE,
+    # Capability-request tools (server "cinna") — both forms
+    *CINNA_API_REQUEST_TOOL_NAMES_CLAUDE,
+    *CINNA_API_REQUEST_TOOL_NAMES_OPENCODE,
     # DEPRECATED: the former "agent_task" server, replaced by "cinna" above.
     # Kept only so environments built before the change are still
     # pre-approved; drop in the release after the Cinna Task Protocol.

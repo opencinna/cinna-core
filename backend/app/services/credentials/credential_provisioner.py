@@ -45,6 +45,7 @@ from app.services.bundles.credential_spec import (
     ParsedCredentialSpec,
     parse_credential_spec,
 )
+from app.services.credentials.credential_reuse_policy import publisher_may_provide
 from app.services.credentials.credential_share_service import CredentialShareService
 from app.services.credentials.credentials_service import CredentialsService
 
@@ -305,9 +306,8 @@ class CredentialProvisioner:
             )
             if (
                 credential is None
-                or publisher.user_id is None
-                or credential.owner_id != publisher.user_id
                 or not credential.allow_sharing
+                or not publisher_may_provide(session, credential, publisher.user_id).ok
                 or credential_type_value(credential) != parsed.type
                 or credential.service_uri != slot
             ):
@@ -341,7 +341,10 @@ class CredentialProvisioner:
                 slots.append(outcome("already_shared", credential.id))
                 continue
             if CredentialShareService.is_revoked(
-                session, credential_id=credential.id, user_id=user.id
+                session,
+                credential_id=credential.id,
+                user_id=user.id,
+                via_publisher=publisher.user_id,
             ):
                 # The owner removed this person's share; only the owner
                 # sharing again lifts that, never an install. A group share
@@ -351,11 +354,19 @@ class CredentialProvisioner:
                 else:
                     slots.append(outcome("not_shareable"))
                 continue
+            sharer_id = publisher.user_id or credential.owner_id
+            if sharer_id == user.id:
+                # A re-sharer installing their own package: the predicate
+                # already proved their own path. A self-share row would outlive
+                # that path (e.g. a group membership) and keep access alive.
+                slots.append(outcome("already_shared", credential.id))
+                continue
             inserted = CredentialProvisioner._insert_share(
                 session,
                 credential=credential,
                 user_id=user.id,
                 source=SHARE_SOURCE_SKILL_LOCAL_INSTALL,
+                sharer_id=sharer_id,
             )
             slots.append(
                 outcome("shared" if inserted else "already_shared", credential.id)
@@ -378,17 +389,23 @@ class CredentialProvisioner:
 
     @staticmethod
     def _insert_share(
-        session: Session, *, credential: Credential, user_id: uuid.UUID, source: str
+        session: Session,
+        *,
+        credential: Credential,
+        user_id: uuid.UUID,
+        source: str,
+        sharer_id: uuid.UUID,
     ) -> bool:
         """Insert a share in a savepoint; ``False`` when a concurrent request
-        inserted the same ``(credential, user)`` row first."""
+        inserted the same ``(credential, user)`` row first. ``sharer_id`` is
+        the package publisher: the owner, or a re-sharer (D4)."""
         savepoint = session.begin_nested()
         try:
             session.add(
                 CredentialShare(
                     credential_id=credential.id,
                     shared_with_user_id=user_id,
-                    shared_by_user_id=credential.owner_id,
+                    shared_by_user_id=sharer_id,
                     access_level="read",
                     source=source,
                 )
@@ -630,6 +647,9 @@ class CredentialProvisioner:
                         agent=agent,
                         publisher_cred=publisher_cred,
                         policy=policy,
+                        sharer_id=CredentialProvisioner._sharer_id(
+                            publisher_cred, publisher
+                        ),
                     ):
                         report.changed = True
                     report.items.append(
@@ -761,7 +781,11 @@ class CredentialProvisioner:
             credential = decision.credential
             if outcome == "linked_publisher" and credential is not None:
                 if CredentialProvisioner._share_and_link_publisher_credential(
-                    session, agent=agent, publisher_cred=credential, policy=policy
+                    session,
+                    agent=agent,
+                    publisher_cred=credential,
+                    policy=policy,
+                    sharer_id=CredentialProvisioner._sharer_id(credential, publisher),
                 ):
                     report.changed = True
             elif outcome == "linked_existing" and credential is not None:
@@ -939,10 +963,13 @@ class CredentialProvisioner:
         log: bool,
     ) -> Credential | None:
         """The publisher credential when it still exists, still allows sharing,
-        is owned by the package publisher and its owner has not removed the
-        installer's share of it; ``None`` otherwise.
+        the package publisher may provide it (owns it, or the owner allowed
+        re-use and the publisher still holds a share — see
+        ``credential_reuse_policy``) and neither the owner nor that publisher
+        removed the installer's share of it; ``None`` otherwise.
 
-        With ``publisher=None`` the ownership check is skipped (I7, D2).
+        With ``publisher=None`` the publisher check is skipped (I7, D2); a
+        boundary whose ``user_id`` is ``None`` rejects every credential.
         """
         publisher_cred = session.get(Credential, credential_id)
         if publisher_cred is None:
@@ -964,25 +991,33 @@ class CredentialProvisioner:
                     agent.id,
                 )
             return None
-        # Package publisher == credential owner is the trust boundary.
-        if publisher is not None and publisher_cred.owner_id != publisher.user_id:
-            if log:
-                logger.warning(
-                    "Publisher credential %s not owned by package publisher %s "
-                    "(actual owner %s) — falling through for spec '%s'",
-                    credential_id,
-                    publisher.user_id,
-                    publisher_cred.owner_id,
-                    spec_name,
-                )
-            return None
+        # The trust boundary: the package publisher owns the credential, or
+        # the owner allowed re-use and the publisher still holds a share.
+        if publisher is not None:
+            verdict = publisher_may_provide(session, publisher_cred, publisher.user_id)
+            if not verdict.ok:
+                if log:
+                    logger.warning(
+                        "Publisher credential %s may not be provided by package "
+                        "publisher %s (owner %s, %s) — falling through for "
+                        "spec '%s'",
+                        credential_id,
+                        publisher.user_id,
+                        publisher_cred.owner_id,
+                        verdict.reason,
+                        spec_name,
+                    )
+                return None
         # The owner removed the installer's share: an install must not bring
         # it back (only the owner sharing again does). A group share still
         # held is real access, so the install links through it.
         if (
             publisher_cred.owner_id != agent.owner_id
             and CredentialShareService.is_revoked(
-                session, credential_id=publisher_cred.id, user_id=agent.owner_id
+                session,
+                credential_id=publisher_cred.id,
+                user_id=agent.owner_id,
+                via_publisher=publisher.user_id if publisher is not None else None,
             )
             and not CredentialShareService.has_share(
                 session, publisher_cred.id, agent.owner_id
@@ -1006,8 +1041,12 @@ class CredentialProvisioner:
         agent: Agent,
         publisher_cred: Credential,
         policy: ProvisionPolicy,
+        sharer_id: uuid.UUID,
     ) -> bool:
         """Share a checked publisher credential with the installer and link it.
+
+        ``sharer_id`` is stamped as ``shared_by_user_id``: the owner, or the
+        re-sharer whose package provides the credential (D4).
 
         No share when the installer is the publisher. First-writer-wins: an
         existing share (e.g. ``source="direct"``) keeps its source. No share
@@ -1018,18 +1057,26 @@ class CredentialProvisioner:
         changed = False
         if (
             publisher_cred.owner_id != agent.owner_id
+            # A re-sharer installing their own package rides on their own
+            # path; a self-share would outlive it (e.g. a group membership).
+            and sharer_id != agent.owner_id
             and not CredentialProvisioner._has_direct_share(
                 session, credential_id=publisher_cred.id, user_id=agent.owner_id
             )
             and not CredentialShareService.is_revoked(
-                session, credential_id=publisher_cred.id, user_id=agent.owner_id
+                session,
+                credential_id=publisher_cred.id,
+                user_id=agent.owner_id,
+                via_publisher=(
+                    sharer_id if sharer_id != publisher_cred.owner_id else None
+                ),
             )
         ):
             session.add(
                 CredentialShare(
                     credential_id=publisher_cred.id,
                     shared_with_user_id=agent.owner_id,
-                    shared_by_user_id=publisher_cred.owner_id,
+                    shared_by_user_id=sharer_id,
                     access_level="read",
                     source=policy.share_source,
                 )
@@ -1039,6 +1086,16 @@ class CredentialProvisioner:
         if CredentialProvisioner._ensure_link(session, agent.id, publisher_cred.id):
             changed = True
         return changed
+
+    @staticmethod
+    def _sharer_id(
+        publisher_cred: Credential, publisher: PublisherBoundary | None
+    ) -> uuid.UUID:
+        """Who a publisher-provided share is made by: the package publisher
+        when it is a re-sharer, else the owner."""
+        if publisher is not None and publisher.user_id is not None:
+            return publisher.user_id
+        return publisher_cred.owner_id
 
     @staticmethod
     def _materialise_template(

@@ -37,6 +37,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from sqlalchemy import Text, cast
 from sqlmodel import Session, col, select
 
 from app.models.agent_api.agent_api_token import AgentApiKeyStatus
@@ -72,6 +73,10 @@ from app.services.credentials.credential_provisioner import (
     spec_slot,
 )
 from app.services.agent_api.agent_api_key_status import key_states_by_credential
+from app.services.credentials.credential_reuse_policy import (
+    publisher_may_provide,
+    user_display,
+)
 from app.services.credentials.credentials_service import CredentialsService
 from app.services.skills.exceptions import SkillCatalogError
 
@@ -234,7 +239,7 @@ class SkillCredentialRequirements:
             credential = session.get(Credential, chosen[slot])
             if (
                 credential is None
-                or credential.owner_id != publisher.id
+                or not publisher_may_provide(session, credential, publisher.id).ok
                 or credential.is_placeholder
                 or credential_type_value(credential) != declaration["type"]
                 or credential.service_uri != slot
@@ -242,7 +247,8 @@ class SkillCredentialRequirements:
                 raise _invalid_publisher_credential(
                     f"The credential for slot '{slot}' must be one of your own "
                     f"filled {declaration['type']} credentials whose slot is "
-                    f"'{slot}'."
+                    f"'{slot}', or a connection shared with you whose owner "
+                    "allows re-use inside bundles."
                 )
             resolution = SkillCredentialRequirements._resolve_one(
                 session, declaration=declaration, linked=[credential], publisher=publisher
@@ -262,12 +268,18 @@ class SkillCredentialRequirements:
     def desktop_publish_candidates(
         session: Session, *, publisher: User, declarations: list[dict[str, Any]]
     ) -> dict[str, list[SkillPublishCredentialCandidate]]:
-        """Per declared slot, the caller's own credentials that may be named
-        for it in ``publisher_credentials``, and as what. Read-only."""
+        """Per declared slot, the credentials the caller may name for it in
+        ``publisher_credentials``, and as what: their own, plus connections
+        shared with them whose owner allows re-use inside bundles
+        (``credential_reuse_policy``). Read-only."""
+        from app.services.credentials.credential_share_service import (
+            CredentialShareService,
+        )
+
         slots = {declaration["slot"] for declaration in declarations}
         if not slots:
             return {}
-        owned = session.exec(
+        own = session.exec(
             select(Credential)
             .where(
                 Credential.owner_id == publisher.id,
@@ -275,6 +287,25 @@ class SkillCredentialRequirements:
             )
             .order_by(Credential.id.desc())
         ).all()
+        reusable = [
+            credential
+            for credential in session.exec(
+                select(Credential)
+                .where(
+                    col(Credential.id).in_(
+                        CredentialShareService.shared_credential_ids_subquery(
+                            publisher.id
+                        )
+                    ),
+                    Credential.owner_id != publisher.id,
+                    Credential.allow_bundle_reuse == True,  # noqa: E712
+                    col(Credential.service_uri).in_(slots),
+                )
+                .order_by(Credential.id.desc())
+            ).all()
+            if publisher_may_provide(session, credential, publisher.id).ok
+        ]
+        owned = [*own, *reusable]
         candidates: dict[str, list[SkillPublishCredentialCandidate]] = {}
         for declaration in declarations:
             slot, credential_type = declaration["slot"], declaration["type"]
@@ -322,7 +353,14 @@ class SkillCredentialRequirements:
             for cred in linked
             if credential_type_value(cred) == credential_type and cred.service_uri == slot
         ]
-        owned = [cred for cred in candidates if cred.owner_id == publisher.id]
+        # "Owned" here means "the publisher may provide it": their own, or a
+        # connection shared with them whose owner allows re-use (D3). A
+        # re-usable credential is always agent_api, so never a template.
+        owned = [
+            cred
+            for cred in candidates
+            if publisher_may_provide(session, cred, publisher.id).ok
+        ]
 
         provided_by: ProvidedBy = "user"
         reason: str | None = None
@@ -668,9 +706,13 @@ class SkillCredentialRequirements:
         session: Session,
         *,
         credential_id: uuid.UUID,
-        publisher_user_id: uuid.UUID,
+        publisher_user_id: uuid.UUID | None,
     ) -> tuple[list[CredentialSkillUsage], list[uuid.UUID]]:
         """Packages of ``publisher_user_id`` providing ``credential_id``.
+
+        ``publisher_user_id=None`` means any publisher: a recipient may
+        re-use a shared connection in their own skill. The package scan is
+        then narrowed to packages whose revisions mention the credential id.
 
         A revision counts when one of its frozen specs is
         ``provided_by="publisher"`` with this ``publisher_credential_id``.
@@ -678,11 +720,21 @@ class SkillCredentialRequirements:
         packages those revisions belong to — see the loop below for why the
         second element is wider than the first. Two queries.
         """
-        packages = session.exec(
-            select(SkillPackage)
-            .where(SkillPackage.publisher_user_id == publisher_user_id)
-            .order_by(SkillPackage.display_name)
-        ).all()
+        package_query = select(SkillPackage).order_by(SkillPackage.display_name)
+        if publisher_user_id is not None:
+            package_query = package_query.where(
+                SkillPackage.publisher_user_id == publisher_user_id
+            )
+        else:
+            package_query = package_query.where(
+                col(SkillPackage.id).in_(
+                    select(SkillPackageRevision.package_id).where(
+                        cast(SkillPackageRevision.required_credential_specs, Text)
+                        .contains(str(credential_id))
+                    )
+                )
+            )
+        packages = session.exec(package_query).all()
         if not packages:
             return [], []
 
@@ -725,12 +777,21 @@ class SkillCredentialRequirements:
             for revision_id in revisions_by_package[package_id]
         ]
 
+        displays: dict[uuid.UUID, str] = {}
+        for package in packages:
+            if package.id in revision_numbers and package.publisher_user_id:
+                if package.publisher_user_id not in displays:
+                    displays[package.publisher_user_id] = user_display(
+                        session.get(User, package.publisher_user_id)
+                    )
         usages = [
             CredentialSkillUsage(
                 package_uuid=package.id,
                 package_id=package.package_id,
                 display_name=package.display_name,
                 revision_numbers=revision_numbers[package.id],
+                publisher_user_id=package.publisher_user_id,
+                publisher_display=displays.get(package.publisher_user_id),
             )
             for package in packages
             if package.id in revision_numbers

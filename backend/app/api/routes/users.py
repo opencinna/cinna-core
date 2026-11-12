@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlmodel import Session, delete, func, select
 
+from app.services.credentials.credential_reshare_service import CredentialReshareService
 from app.services.catalog.desktop_agent_service import DesktopAgentService
 from app.api.deps import (
     CurrentUser,
@@ -804,7 +805,7 @@ async def update_user_role(
 
 
 @router.delete("/me", response_model=Message)
-def delete_user_me(
+async def delete_user_me(
     session: SessionDep, current_user: CurrentUser, background_tasks: BackgroundTasks
 ) -> Any:
     """
@@ -823,14 +824,17 @@ def delete_user_me(
     )
     # Containers and folders the cascade below orphans, read while the rows exist.
     cleanup = UserDataCleanupService.snapshot(session, current_user.id)
+    # Shares this user made by re-using others' credentials cascade away with
+    # the account; read their recipients first to unlink and re-sync them.
+    reshares = CredentialReshareService.snapshot_reshares_by(session, current_user.id)
     # Desktop agents outlive their creator (superusers manage them).
     DesktopAgentService.detach_publisher(session, current_user.id)
     session.delete(current_user)
     session.commit()
+    await CredentialReshareService.release_after_sharer_deleted(session, reshares)
     background_tasks.add_task(UserDataCleanupService.run, cleanup)
-    # Only after the delete commits. A synchronous handler cannot await a
-    # provider call, and must not destroy a key for a deletion that did not
-    # happen.
+    # Only after the delete commits: provider revocations are scheduled, not
+    # awaited, and must not destroy a key for a deletion that did not happen.
     key_provisioning_service.schedule_revocations(revocations)
     return Message(message="User deleted successfully")
 
@@ -948,7 +952,7 @@ async def update_user(
 
 
 @router.delete("/{user_id}", dependencies=[Depends(get_current_active_superuser)])
-def delete_user(
+async def delete_user(
     session: SessionDep,
     current_user: CurrentUser,
     user_id: uuid.UUID,
@@ -971,10 +975,12 @@ def delete_user(
         session, user, actor_id=current_user.id
     )
     cleanup = UserDataCleanupService.snapshot(session, user.id)
+    reshares = CredentialReshareService.snapshot_reshares_by(session, user.id)
     # Desktop agents outlive their creator (superusers manage them).
     DesktopAgentService.detach_publisher(session, user.id)
     session.delete(user)
     session.commit()
+    await CredentialReshareService.release_after_sharer_deleted(session, reshares)
     background_tasks.add_task(UserDataCleanupService.run, cleanup)
     key_provisioning_service.schedule_revocations(revocations)
     return Message(message="User deleted successfully")

@@ -3,8 +3,9 @@ The `cinna` MCP server for Claude Code (in-process SDK server).
 
 Registers one SDK tool per entry in the protocol schemas it is asked for —
 ``tasks.schema.json`` (toolset ``"tasks"``), ``artifacts.schema.json``
-(toolset ``"artifacts"``) and ``dashboards-tools.schema.json`` (toolset
-``"dashboards"``) — with the schema's own description and input schema, each
+(toolset ``"artifacts"``), ``dashboards-tools.schema.json`` (toolset
+``"dashboards"``) and ``api-requests-tools.schema.json`` (toolset
+``"api_requests"``) — with the schema's own description and input schema, each
 forwarding to its client (``CinnaTasksClient`` / ``CinnaArtifactsClient`` /
 ``CinnaDashboardsClient``). The OpenCode binding (``mcp_bridge/cinna_server.py``)
 serves the same specs.
@@ -22,13 +23,14 @@ from typing import Any, Protocol
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
 from ..adapters.claude_code_sdk_adapter import get_backend_session_id
+from .cinna_api_requests_protocol import CinnaApiRequestsClient, load_api_request_specs
 from .cinna_artifacts_protocol import CinnaArtifactsClient, load_artifact_specs
 from .cinna_dashboards_protocol import CinnaDashboardsClient, load_dashboard_specs
 from .cinna_tasks_protocol import SERVER_NAME, CinnaTasksClient, load_tool_specs
 
 logger = logging.getLogger(__name__)
 
-TOOLSETS = ("tasks", "artifacts", "dashboards")
+TOOLSETS = ("tasks", "artifacts", "dashboards", "api_requests")
 
 
 class _Client(Protocol):
@@ -70,6 +72,14 @@ def _load(toolsets: Iterable[str]) -> list[tuple[str, dict[str, Any], _Client]]:
                 logger.warning("dashboards-tools.schema.json not installed; no dashboard tools: %s", exc)
                 continue
             client = CinnaDashboardsClient(tool_names=frozenset(specs))
+        elif toolset == "api_requests":
+            try:
+                specs = load_api_request_specs()
+            except FileNotFoundError as exc:
+                # A core whose kit snapshot predates capability requests.
+                logger.warning("api-requests-tools.schema.json not installed; no api_requests tools: %s", exc)
+                continue
+            client = CinnaApiRequestsClient(tool_names=frozenset(specs))
         else:
             raise ValueError(f"Unknown cinna toolset: {toolset!r}")
         entries.extend((name, spec, client) for name, spec in specs.items())

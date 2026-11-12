@@ -17,6 +17,7 @@
 
 - `backend/app/api/routes/agent_api.py` — owner-preview routes + connect helper + producer connections list/delete + the **owner-gated grant routes** (`/grants*`) + the **owner-gated issued-key routes** (`/access`, `/keys`, `/keys/{key_id}/revoke`); prefix `/api/v1/agents/{agent_id}/agent-api`
 - `backend/app/api/routes/agent_api_public.py` — consumer serving routes (token auth); prefix `/api/v1/agent-api/{agent_id}`. The `consumer_proxy` handler also does the L2 identity verify / strip / inject (see [Caller Identity](#caller-identity--producer-scopes))
+- `backend/app/api/routes/agent_api_request_tools.py` — `/agent/api-requests/{list,get,update-status}`, the producer's capability-request tools (env token; see [Capability requests](#capability-requests-routes-and-tools))
 - `backend/app/api/routes/credentials.py` — `GET /credentials/{id}/agent-api-connection` (connection detail for the credential page)
 - `backend/app/api/main.py` — both agent_api routers registered
 
@@ -185,7 +186,7 @@ Unique `(producer_agent_id, group_id)` (`uq_agent_api_access_group_grant_produce
 
 ### `AGENT_ENV_ALLOWED_FIELDS["agent_api"]`
 
-`["base_url", "spec_url", "token", "label", "producer_agent_id"]` — all five fields are synced into `credentials.json`, but only for a **connection** credential. The consumer's code needs `token` to authenticate and `base_url` to call the proxy.
+`["base_url", "spec_url", "token", "label", "producer_agent_id", "improvement_requests_url"]` — all six fields are synced into `credentials.json`, but only for a **connection** credential. The consumer's code needs `token` to authenticate and `base_url` to call the proxy.
 
 **Issued keys reach only their recipient's environments.** `CredentialsService._shape_agent_api_keys_for_env(session, credentials, env_owner_id, for_desktop)` runs before the whitelist filter (it replaced `_drop_external_agent_api_keys`). Connections are kept when bound to a `kind="connection"` token whose producer still exists. An issued key is kept only when `credential.owner_id == token.subject_user_id == env_owner_id`; otherwise it is dropped. An **active** key ships as-is; a **non-active** key ships **token-less**: `credential_data` is cut to `UNAVAILABLE_AGENT_API_KEY_FIELDS` (`base_url`, `spec_url`, `label`, `producer_agent_id`) and the entry gains `unavailable_reason` (`key_revoked` | `key_expired` | `key_paused`, from `unavailable_reason_for`) and `key_status` (detail), both top-level (outside `credential_data`). With `for_desktop=True`, key URLs are recomputed from the public origin (`AgentApiTokenService.build_base_url`, never `AGENT_ENV_BACKEND_URL`); with no producer left the stored URLs stay. Issued-key entries carry an internal marker so `prepare_credentials_for_environment` does not count them as a connection: **a key never triggers the `owner_identity` block** (`has_agent_api_cred` is connections only, and never on the Desktop path). The container-network URL rewrite (`_rewrite_agent_api_urls_for_env`) applies to key entries in cloud envs like to connections; the Desktop path skips it and uses the public origin.
 
@@ -269,6 +270,12 @@ Prefix: `/api/v1/agent-api/{agent_id}`; token auth via `Authorization: Bearer <t
 |--------|------|---------|
 | `GET` | `/openapi.json` | Spec passthrough; subject to `expose_spec` in policy. `403` when `expose_spec=false`. |
 | `ANY` | `/{path:path}` | Full HTTP passthrough: validate token → enforce policy → compute request-loop headers → keep-alive → auto-activate producer env → adapter proxy. Excluded from OpenAPI schema. |
+
+| `POST` | `/_cinna/improvement-requests` | Capability request, caller side (identified callers; 413/422/429). See [Capability requests](#capability-requests-routes-and-tools). |
+| `GET` | `/_cinna/improvement-requests` | The caller's own capability requests (≤ 50). |
+| `ANY` | `/_cinna`, `/_cinna/{rest:path}` | Reserved prefix: 404/405 after token validation; never forwarded, never wakes the env. |
+
+The `_cinna` routes are registered above the `{path:path}` passthrough. The capability-request pair appears in `frontend/openapi.json` (the body is read raw, so the request schema is injected through `openapi_extra`); the reserved catch-alls are `include_in_schema=False`.
 
 Agent disabled or not found → `404` (no existence leak). Invalid/revoked/expired token, or an external key while `agent_api_external_access_enabled=false` → `401` (all indistinguishable from the caller's point of view — see `_validate_token_or_401` / `AgentApiTokenService.validate_token`). A rejected external-key call never bumps `last_used_at`.
 
@@ -549,6 +556,8 @@ The business-logic overview is in [agent_api.md → Caller Identity & Producer S
 
 `backend/app/services/agent_api/agent_api_identity_service.py`. Stateless (no table).
 
+- `mint(owner_user_id, agent_id=None) -> str` — optional `agent_id` adds the claim `agent_id` (the calling install; `build_owner_identity_block(owner_user_id, agent_id=...)` passes it, and credential sync passes the agent being synced). The claim is attribution only.
+- `verify_claims(token) -> IdentityClaims | None` (`IdentityClaims(user_id, agent_id)`; `verify` is now a thin wrapper returning `user_id`). A malformed `agent_id` is dropped, the token stays valid; the DB ownership check (`agent.owner_id == sub`) happens in the consumer of the claim (`ImprovementRequestService.create_from_agent_api`), not here.
 - `mint(owner_user_id) -> str` — `security.create_access_token(subject=str(owner_user_id), expires_delta=timedelta(days=AGENT_API_IDENTITY_TOKEN_EXPIRE_DAYS), extra_claims={"aud": "agent_api_caller", "type": "agent_api_identity"})`. HS256 / `SECRET_KEY`. Claims: `{ sub, aud="agent_api_caller", type="agent_api_identity", exp, iat }`.
 - `verify(token) -> uuid.UUID | None` — `jwt.decode` with `audience="agent_api_caller"`; rejects unless `type == "agent_api_identity"` and `sub` is a UUID. **Never raises** — any failure (missing/malformed/expired/wrong-audience/bad-signature/non-UUID-sub) returns `None` (= anonymous). The raw token is never logged.
 - `build_owner_identity_block(owner_user_id) -> dict` — the synthetic credentials.json entry: `{ id:"owner_identity", name:"Owner Identity Token", type:"owner_identity_token", notes:..., credential_data:{ token:<minted JWT>, header:"X-Cinna-Caller-Identity", usage:... } }`. Self-describing (`header` + `usage`) so the building agent reads the entry and sends what it names.
@@ -623,6 +632,19 @@ The header params are declared `include_in_schema=False`, so they never leak int
 - `["agentApiGrants", agentId]` — the producer's per-user grant list (Access & Scopes card)
 - `["agentApiScopeCatalog", agentId]` — the `policy.yaml` scope catalog for the picker
 
+## Capability requests (routes and tools)
+
+Business overview: [agent_api.md → Capability requests](agent_api.md#capability-requests). Storage, limits, payload shape and the archive are in [Agent Improvement Requests — Technical Details](../../application/agent_improvement_requests/agent_improvement_requests_tech.md).
+
+- **Caller routes** in `agent_api_public.py`: `_resolve_identified_caller` validates the token (same identity precedence as `consumer_proxy`: EXTERNAL key = bound subject, CONNECTION = `verify_claims` of `X-Cinna-Caller-Identity`; anonymous = 401) and never touches the producer env; `consumer_create_capability_request` reads the raw body (≤ `MAX_CAPABILITY_REQUEST_BODY_BYTES` = 64 KiB), validates `AgentApiCapabilityRequestCreate` and calls `ImprovementRequestService.create_from_agent_api`; `consumer_reserved_prefix` answers the rest of `_cinna/`.
+- **Env tool routes** in `agent_api_request_tools.py`, all `POST`, env-token authenticated, HTTP 200 with a result or `{error: {code, message}}`; the backend enforces `agent_api_enabled`.
+- **Env-core**: `core/server/tools/cinna_api_requests_protocol.py` (`CinnaApiRequestsClient`, `load_api_request_specs`) reads `/app/core/protocols/api-requests-tools.schema.json` (authored in `docs/local_agent_kit/protocols/`, listed in `PLATFORM_PROTOCOL_FILES` in `services/environments/platform_protocol_files.py`, part of kit contract 1.24.0). Toolset `api_requests` is served on the `cinna` server by both bindings (`cinna_tasks_claude.py`, `mcp_bridge/cinna_server.py`) in **building mode only** and only when `/app/workspace/agent_api/` exists; tool names are registered in `adapters/tool_name_registry.py` (`CINNA_API_REQUEST_TOOLS`) and the message-service allowlist.
+- **SDK** (`cinna_api/credentials.py`): on the object returned by `agent_api_session`, `file_capability_request(title, need, *, proposed_endpoint, example_request, example_response, spec_version_seen)` and `capability_requests()`; `CapabilityRequestRateLimited(ValueError)` with `retry_after`, exported from `cinna_api`. The session resolves its URL from the entry's `improvement_requests_url`, falling back to `<base_url>/_cinna/improvement-requests`.
+- **Credential sync** (`CredentialsService`): `AGENT_API_CAPABILITY_REQUESTS_PATH`; `improvement_requests_url` is derived after the origin rewrite for usable `agent_api` entries only (never stored), and `_capability_requests_readme_lines` adds the capability-request paragraph to the generated credentials README.
+- **Docs for the building agent**: a "capability requests" section in `core/prompts/REST_API_BUILDING.md`; kit guide `guides/04-credentials.md` and `CHANGELOG.md` (contract 1.24.0).
+- **Rollout**: `/app/core` is per environment, so environments must be rebuilt for the SDK helpers and tools; the backend routes need no rebuild.
+- **Tests**: `agents_agent_api_capability_requests_test.py`, `agents_agent_api_request_tools_test.py` (API), `tests/unit/test_agent_api_identity_claims.py`, `test_api_requests_protocol.py`, `test_cinna_api_capability_requests_sdk.py`.
+
 ## Test Coverage
 
 `backend/tests/api/agents/agent_api/agents_agent_api_test.py` — 31 scenario-based API tests. Tokens are minted via the connect helper (the raw token is read back from the created credential's data, exactly as a consumer obtains it); "revoke" = delete the credential. Covered:
@@ -673,4 +695,4 @@ The header params are declared `include_in_schema=False`, so they never leak int
 
 ---
 
-*Last updated: 2026-08-07*
+*Last updated: 2026-11-12*

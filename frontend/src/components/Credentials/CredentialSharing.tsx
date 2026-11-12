@@ -5,6 +5,7 @@ import type {
   CredentialGroupSharePublic,
   CredentialPublic,
   CredentialSharePublic,
+  ReshareVia,
 } from "@/client"
 import { CredentialsService } from "@/client"
 import { ListRowGroup } from "@/components/Common/ListRow"
@@ -38,12 +39,14 @@ import { Switch } from "@/components/ui/switch"
 import useCustomToast from "@/hooks/useCustomToast"
 import useRole from "@/hooks/useRole"
 import { handleError } from "@/utils"
+import { isBundleReusableCredentialType } from "@/utils/credentialBundleReuse"
 import { isLocallyDeliverableCredentialType } from "@/utils/credentialLocalUse"
 import { peopleAndGroups, sharedWithSentence } from "@/utils/sharedWith"
 import {
   bundleImpactSentence,
   skillImpactSentence,
 } from "@/utils/skillCredentials"
+import { CredentialBundleReuseSwitch } from "./CredentialBundleReuseSwitch"
 import { BundleUsageRow, SkillUsageRow } from "./CredentialUsageRows"
 import { CredentialUsagesSheet } from "./CredentialUsagesSheet"
 import { localSkillImpactSentence } from "./localSkillImpact"
@@ -62,6 +65,14 @@ interface CredentialSharingProps {
    * nothing.
    */
   hint?: ReactNode
+}
+
+/** The pill's re-share note: "Via Ann · Bundle Sales desk". */
+function reshareNote(via: ReshareVia): string {
+  const kind = via.package_kind === "skill" ? "Skill" : "Bundle"
+  return via.package_name
+    ? `Via ${via.display || "another publisher"} · ${kind} ${via.package_name}`
+    : `Via ${via.display || "another publisher"}`
 }
 
 export function CredentialSharing({
@@ -136,16 +147,24 @@ export function CredentialSharing({
 
   // Invalidate every cache that carries this credential's share_count so the
   // "Shared with N users" header and card badge update immediately.
-  const invalidateShareCaches = () => {
-    queryClient.invalidateQueries({
-      queryKey: ["credential-shares", credential.id],
-    })
-    queryClient.invalidateQueries({ queryKey: ["credentials"] })
-    queryClient.invalidateQueries({ queryKey: ["credential", credential.id] })
-    queryClient.invalidateQueries({
-      queryKey: ["credential-with-data", credential.id],
-    })
-  }
+  // Returned, so a caller can hold its pending state until the refetch lands.
+  const invalidateShareCaches = () =>
+    Promise.all([
+      queryClient.invalidateQueries({
+        queryKey: ["credential-shares", credential.id],
+      }),
+      queryClient.invalidateQueries({ queryKey: ["credentials"] }),
+      queryClient.invalidateQueries({
+        queryKey: ["credential", credential.id],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ["credential-with-data", credential.id],
+      }),
+      // Other publishers' bundles appear here too (re-use inside bundles).
+      queryClient.invalidateQueries({
+        queryKey: ["credential-bundle-usages", credential.id],
+      }),
+    ])
 
   const shareMutation = useMutation({
     mutationFn: (email: string) =>
@@ -227,7 +246,13 @@ export function CredentialSharing({
     id: s.id, // share id — revoke endpoint key
     userId: s.shared_with_user_id,
     fallbackLabel: s.shared_with_email,
+    note: s.reshared_via ? reshareNote(s.reshared_via) : undefined,
   }))
+  // People who got it through someone else's bundle or skill; unknown until
+  // the share list has loaded.
+  const resharedCount = sharesData
+    ? shares.filter((s) => s.reshared_via).length
+    : null
   const selectedGroups: GroupSelectedItem[] = groupShares.map((g) => ({
     id: g.group_id,
     groupId: g.group_id,
@@ -356,6 +381,13 @@ export function CredentialSharing({
               />
             </div>
           )}
+        {allowSharing && isBundleReusableCredentialType(credential.type) && (
+          <CredentialBundleReuseSwitch
+            credential={credential}
+            resharedCount={resharedCount}
+            onChanged={invalidateShareCaches}
+          />
+        )}
         {allowSharing && (
           <div className="space-y-3">
             <h4 className="text-sm font-medium">
@@ -616,6 +648,12 @@ export function CredentialSharing({
               <p className="text-sm text-muted-foreground">
                 If you turn sharing on again later, skills on people's computers
                 get it back, except for people you removed one by one.
+              </p>
+            )}
+            {credential.allow_bundle_reuse && (
+              <p className="text-sm text-muted-foreground">
+                Re-use inside bundles is switched off too, and turning sharing
+                back on does not switch it back.
               </p>
             )}
             <DialogFooter>

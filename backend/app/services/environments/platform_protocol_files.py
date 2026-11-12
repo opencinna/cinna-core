@@ -19,6 +19,7 @@ them with no second hand-edited copy in ``app_core_base``:
   /app/core/protocols/dashboards.schema.json — the component.json contract
   /app/core/skills/cinna-dashboards/      — its skill (incl. scripts/check_component.py,
                                             imported by env-core's /dashboards/components)
+  /app/core/protocols/api-requests-tools.schema.json — the producer's capability-request tools
 
 Paths are relative to the environment's core directory and mirrored by
 ``core/server/tools/cinna_tasks_protocol.py`` (SCHEMA_RELATIVE_PATH /
@@ -44,6 +45,7 @@ PROTOCOL_FILES: tuple[str, ...] = (
     "protocols/dashboards-tools.schema.json",
     "protocols/dashboards.schema.json",
     "skills/cinna-dashboards",
+    "protocols/api-requests-tools.schema.json",
 )
 
 #: Kit directory holding the platform skills (``skills/<name>``).

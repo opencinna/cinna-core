@@ -521,12 +521,14 @@ def test_drift_detection_stale_after_sharing_enabled_post_publish(
     # The drift endpoint requires is_publisher_install=True; the install gains
     # that flag on first publish. Before the first publish there is no publisher
     # install for this agent, so the endpoint simply 404s (publisher-only guard).
-    # Confirm the endpoint returns 404 (not a 500) before publish:
+    # The endpoint now serves the owner's never-published agents: stale=False,
+    # an empty drift list, and ``live`` carrying the linked credential.
     r_before_pub = client.get(_drift_url(consumer_id), headers=headers)
-    assert r_before_pub.status_code == 404, (
-        f"Drift endpoint must return 404 for an agent that is not yet a "
-        f"publisher install; got {r_before_pub.status_code}: {r_before_pub.text}"
-    )
+    assert r_before_pub.status_code == 200, r_before_pub.text
+    before_body = r_before_pub.json()
+    assert before_body["stale"] is False
+    assert before_body["drift"] == []
+    assert isinstance(before_body["live"], list)
 
     # ── Phase B: Publish with allow_sharing=False (snapshot "user") ───────────
     # The credential was created with allow_sharing=False by the connect helper

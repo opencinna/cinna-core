@@ -70,7 +70,9 @@ def collect_credential_secrets(credentials: list[dict]) -> set[str]:
     return secrets
 
 
-def scrub(payload: dict, secrets: set[str]) -> tuple[dict, int]:
+def scrub(
+    payload: dict, secrets: set[str], *, all_strings: bool = False
+) -> tuple[dict, int]:
     """Replace every occurrence of a secret in the payload's text fields.
 
     Walks ``payload`` recursively and rewrites any string living under a key in
@@ -82,6 +84,9 @@ def scrub(payload: dict, secrets: set[str]) -> tuple[dict, int]:
             returned.
         secrets: candidate secret values. Entries shorter than
             :data:`MIN_SECRET_LENGTH` are ignored.
+        all_strings: scrub every string leaf, not only those under
+            :data:`SCRUBBED_KEYS`. For payloads that are caller-authored free
+            text end to end (agent-API capability requests).
 
     Returns:
         ``(payload, hits)`` where ``hits`` is the total number of replaced
@@ -112,7 +117,7 @@ def scrub(payload: dict, secrets: set[str]) -> tuple[dict, int]:
             return {k: _walk(v, k) for k, v in node.items()}
         if isinstance(node, list):
             return [_walk(item, key) for item in node]
-        if isinstance(node, str) and key in SCRUBBED_KEYS:
+        if isinstance(node, str) and (all_strings or key in SCRUBBED_KEYS):
             return _scrub_text(node)
         return node
 

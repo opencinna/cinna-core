@@ -43,6 +43,7 @@ def _credential_to_public(session, credential: Credential) -> CredentialPublic:
         notes=credential.notes,
         allow_sharing=credential.allow_sharing,
         allow_template_sharing=credential.allow_template_sharing,
+        allow_bundle_reuse=credential.allow_bundle_reuse,
         template_private_fields=list(credential.template_private_fields or []),
         owner_id=credential.owner_id,
         user_workspace_id=credential.user_workspace_id,
@@ -101,6 +102,27 @@ def get_credential_shares(
         raise HTTPException(status_code=status_code, detail=str(e))
 
 
+@router.get("/{credential_id}/reshares", response_model=CredentialSharesPublic)
+def get_credential_reshares(
+    credential_id: UUID,
+    session: SessionDep,
+    current_user: CurrentUser
+) -> Any:
+    """
+    List the shares you made of someone else's credential by re-using it in
+    your own bundles and skills. You can revoke them like any share.
+    """
+    try:
+        shares = CredentialShareService.list_reshares(
+            session=session,
+            credential_id=credential_id,
+            caller_id=current_user.id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return CredentialSharesPublic(data=shares, count=len(shares))
+
+
 @router.delete("/{credential_id}/shares/{share_id}")
 async def revoke_credential_share(
     credential_id: UUID,
@@ -109,17 +131,27 @@ async def revoke_credential_share(
     current_user: CurrentUser
 ) -> Message:
     """
-    Revoke a credential share.
+    Revoke a credential share. Allowed for the credential's owner, and for a
+    re-sharer on the shares they made through their own bundles and skills.
     """
     try:
         await CredentialShareService.revoke_credential_share(
             session=session,
             share_id=share_id,
-            owner_id=current_user.id
+            owner_id=current_user.id,
+            credential_id=credential_id,
         )
         return Message(message="Share revoked successfully")
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        detail = str(e)
+        lowered = detail.lower()
+        if "not found" in lowered:
+            status_code = 404
+        elif "permission" in lowered:
+            status_code = 403
+        else:
+            status_code = 400
+        raise HTTPException(status_code=status_code, detail=detail)
 
 
 @router.get("/shared-with-me", response_model=SharedCredentialsPublic)

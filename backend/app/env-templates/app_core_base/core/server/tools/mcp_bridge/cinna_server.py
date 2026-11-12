@@ -16,6 +16,10 @@ listed in every conversation chat; outside a chat opened from a dashboard the
 backend answers ``no_dashboard``. Their results carry ``structuredContent``
 beside the same JSON as text.
 
+The capability-request tools (``api-requests-tools.schema.json``) are served
+in building mode only, and only when the workspace has ``agent_api/`` (the
+agent serves a REST API); the backend scopes them to the agent's own requests.
+
 Session context (backend_session_id, dashboard_id) is read at call time from
 the file the OpenCode adapter writes before each message
 (``CINNA_SESSION_CONTEXT_PATH``); the mode from ``CINNA_OPENCODE_MODE``. That
@@ -45,6 +49,11 @@ import jsonschema  # noqa: E402
 import mcp.types as types  # noqa: E402
 from mcp.server.lowlevel import Server  # noqa: E402
 
+from cinna_api_requests_protocol import (  # noqa: E402
+    CinnaApiRequestsClient,
+    load_api_request_specs,
+    serves_agent_api,
+)
 from cinna_artifacts_protocol import CinnaArtifactsClient, load_artifact_specs  # noqa: E402
 from cinna_dashboards_protocol import CinnaDashboardsClient, load_dashboard_specs  # noqa: E402
 from cinna_tasks_protocol import SERVER_NAME, CinnaTasksClient, load_tool_specs  # noqa: E402
@@ -130,6 +139,20 @@ def _dashboard_specs_if_installed() -> dict[str, dict[str, Any]]:
         return {}
 
 
+def _api_request_tools_offered() -> bool:
+    """Building mode in an agent that serves a REST API (``agent_api/``)."""
+    return os.getenv("CINNA_OPENCODE_MODE") == "building" and serves_agent_api()
+
+
+def _api_request_specs_if_installed() -> dict[str, dict[str, Any]]:
+    """The capability-request tools' specs; none when an older core lacks the schema."""
+    try:
+        return load_api_request_specs()
+    except FileNotFoundError as exc:
+        logger.warning("api-requests-tools.schema.json not installed; no api_requests tools: %s", exc)
+        return {}
+
+
 def build_server(
     specs: dict[str, dict[str, Any]] | None = None,
     client: CinnaTasksClient | None = None,
@@ -137,6 +160,8 @@ def build_server(
     artifacts_client: CinnaArtifactsClient | None = None,
     dashboard_specs: dict[str, dict[str, Any]] | None = None,
     dashboards_client: CinnaDashboardsClient | None = None,
+    api_request_specs: dict[str, dict[str, Any]] | None = None,
+    api_requests_client: CinnaApiRequestsClient | None = None,
 ) -> Server:
     task_specs = specs if specs is not None else load_tool_specs()
     artifact_specs = artifact_specs if artifact_specs is not None else _artifact_specs_if_installed()
@@ -144,13 +169,21 @@ def build_server(
     task_client = client or CinnaTasksClient()
     artifacts_client = artifacts_client or CinnaArtifactsClient()
     dashboards_client = dashboards_client or CinnaDashboardsClient(tool_names=frozenset(dashboard_specs))
+    if api_request_specs is None:
+        api_request_specs = _api_request_specs_if_installed() if _api_request_tools_offered() else {}
+    api_requests_client = api_requests_client or CinnaApiRequestsClient(
+        tool_names=frozenset(api_request_specs)
+    )
     specs = {**task_specs, **artifact_specs}
     server = Server(SERVER_NAME)
 
     def _offered() -> dict[str, dict[str, Any]]:
+        offered = dict(specs)
         if dashboard_specs and _dashboard_tools_offered():
-            return {**specs, **dashboard_specs}
-        return specs
+            offered.update(dashboard_specs)
+        if api_request_specs:
+            offered.update(api_request_specs)
+        return offered
 
     @server.list_tools()
     async def list_tools() -> list[types.Tool]:
@@ -182,6 +215,15 @@ def build_server(
                 content=[types.TextContent(type="text", text=result.text)],
                 structuredContent=result.structured,
                 isError=result.is_error,
+            )
+        if name in api_request_specs:
+            api_result = await asyncio.to_thread(
+                api_requests_client.call_result, name, arguments,
+            )
+            return types.CallToolResult(
+                content=[types.TextContent(type="text", text=api_result.text)],
+                structuredContent=api_result.structured,
+                isError=api_result.is_error,
             )
         target = artifacts_client if name in artifact_specs else task_client
         text, is_error = await asyncio.to_thread(

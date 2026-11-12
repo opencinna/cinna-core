@@ -74,6 +74,13 @@ export function UnshareCredentialDialog({
   const localSkillCount = new Set(localSkillUsages.map((u) => u.package_uuid))
     .size
   const hasRows = agentUsages.length > 0 || localSkillUsages.length > 0
+  // A person who got it through someone else's bundle or skill (D5: the
+  // owner's removal blocks that path too).
+  const via = share?.reshared_via
+  const viaKind = via?.package_kind === "skill" ? "skill" : "bundle"
+  const viaPackage = via?.package_name
+    ? `${viaKind} ${via.package_name}`
+    : viaKind
 
   return (
     <Dialog
@@ -90,6 +97,14 @@ export function UnshareCredentialDialog({
           </DialogTitle>
           <DialogDescription className="break-words">
             {person} loses access to this credential right away.
+            {via && (
+              <>
+                {" "}
+                They got it through {via.display || "another publisher"}'s{" "}
+                {viaPackage}; removing it here also stops that {viaKind} from
+                giving it back to them.
+              </>
+            )}
           </DialogDescription>
         </DialogHeader>
         <Alert variant="destructive">

@@ -11,6 +11,10 @@
 ### Backend - Models (user search picker)
 - `backend/app/models/users/user.py` - `UserSearchResult` (id / email / full_name) and `UsersSearchPublic` (data + count) — minimal projection returned by `GET /users/search` for the sharing pickers; re-exported from `models/__init__.py`
 
+### Backend - Services (re-use inside bundles)
+- `backend/app/services/credentials/credential_reuse_policy.py` - `BUNDLE_REUSABLE_TYPES` (`{AGENT_API}`), `ReuseVerdict`/`ReuseReason` (`owned`, `reuse_allowed`, `not_owned`, `reuse_off`, `type_not_reusable`, `no_share_path`, `sharing_off`), `publisher_may_provide`, `is_reusable_type`, `reuse_effective`, `reuse_effective_ids` (batched), `user_display`, `owner_display`
+- `backend/app/services/credentials/credential_reshare_service.py` - `CredentialReshareService`: `release_by_sharers`, `release_all`, `snapshot_reshares_by`, `release_after_sharer_deleted`
+
 ### Backend - Services
 - `backend/app/services/credentials/credential_share_service.py` - Core direct-sharing logic: share, revoke, toggle, access checks
 - `backend/app/services/users/user_service.py` - `search_users(session, query, exclude_user_id, limit)` — case-insensitive substring match on `email` / `full_name` over active users, ordered by email; excludes the requester when `exclude_user_id` is set (`None` includes them); backs `GET /users/search`
@@ -22,6 +26,7 @@
 ### Backend - Routes
 - `backend/app/api/routes/credential_shares.py` - Sharing CRUD endpoints (share, list, revoke, toggle, shared-with-me)
 - `backend/app/api/routes/credentials.py` - `_credential_to_public()` exposes `allow_template_sharing` + `template_private_fields`; new `GET /credentials/{id}/bundles` endpoint with `provided_by` per usage
+- `backend/app/api/routes/credential_shares.py` also serves `GET /credentials/{id}/reshares` and the widened `DELETE /credentials/{id}/shares/{share_id}` (re-sharer may revoke their own shares; 404/403 mapping)
 - `backend/app/api/routes/installs.py` - `PATCH /agents/{id}/publish-settings` accepts `provided_by="template"`; `GET /agents/{id}/setup-credentials` returns `template_private_fields` + `template_prefilled_data` per placeholder; `update_setup_credential` re-runs the gate
 
 ### Frontend - Components
@@ -65,6 +70,7 @@
 ### Modified Table: `credential`
 - `allow_sharing` (boolean, default false) — direct-sharing consent flag
 - `allow_template_sharing` (boolean, default false) — template-sharing consent flag (independent from `allow_sharing`)
+- `allow_bundle_reuse` (boolean, default false) — owner consent for recipients to embed the credential as publisher-provided in their own bundles and skills; agent_api connections only; requires `allow_sharing` and is cleared when sharing is turned off (migration `713c48f71fc6`). Exposed on `CredentialPublic`, `CredentialUpdate` (owner-only) and the CLI account payload
 - `template_private_fields` (JSON, default `[]`) — list of `credential_data` field names that must be supplied per-installer; only stored, never inferred
 - `service_uri` (TEXT, nullable, default NULL) — plaintext audience/slot id used by the Tier 0a/0b matcher. NULL = legacy behavior, no change in matching. Non-secret; included in `CredentialPublic` without redaction. Added in migration `3f8f2a2e7f23`
 - Index: `ix_credential_allow_sharing` (partial index for shareable credentials)
@@ -74,7 +80,7 @@
 - `id` (UUID, PK)
 - `credential_id` (UUID, FK → credential, CASCADE delete)
 - `shared_with_user_id` (UUID, FK → user, CASCADE delete)
-- `shared_by_user_id` (UUID, FK → user)
+- `shared_by_user_id` (UUID, FK → user, `ON DELETE CASCADE`, constraint `credential_shares_shared_by_user_id_fkey`) — the owner, or the re-sharer whose package created the share. Account deletion of a re-sharer therefore removes their shares; the user-delete routes snapshot and release the recipients first
 - `shared_at` (datetime)
 - `access_level` (varchar, default 'read')
 - `source` (varchar(20), nullable) — provenance marker: `"direct"` | `"bundle_install"` | `"skill_install"` | NULL (legacy, read as `"direct"`). Stamped at creation, never updated. Added in migration `3c3c37a5e144` (nullable, no server default, no index, no backfill); the skill source uses the existing column.
@@ -83,8 +89,11 @@
 ### New Table: `credential_share_revocation`
 Records that the owner removed a person's share. Written by `revoke_credential_share` on `DELETE /credentials/{id}/shares/{share_id}` for any source (`INSERT ... ON CONFLICT DO NOTHING`); cleared only by the owner's direct re-share via `share_credential`. Read by `provision-local` (answers `not_shareable`) and by the cloud bundle/skill install path (`CredentialProvisioner`: publisher credential treated as unavailable, giving `publisher_unavailable` / placeholder). Turning sharing off neither writes nor clears rows. Migration `bfd8b2ff2e3c`.
 
+`credential_share_revocation.revoked_by_user_id` is now the author that decides scope: an owner-authored row blocks every path, a re-sharer-authored row blocks only re-adding via that re-sharer (`is_revoked(..., via_publisher=)`). `record_revocation` upserts for the owner (overwrites a re-sharer row) and does nothing on conflict for a re-sharer; hence one row per `(credential, user)` and the known limitation that a second re-sharer's revocation is dropped.
+
 ### Share and deletion-impact payload additions
-- `CredentialSharePublic` gains `agent_usages [{id, name, skill_display_names}]` (only agents with at least one owner skill), `direct_agent_use_count`, and `local_skill_usages [{package_uuid, package_id, display_name, revision_number, host_agent_name?}]` (`host_agent_name` only when the recipient published that desktop agent).
+- `CredentialSharePublic.reshared_via: ReshareVia | None` (`user_id`, `display`, `package_kind` `bundle|skill`, `package_name | None`) — computed on read when `shared_by` is not the owner; `shared_by_email` now resolves per row. `SharedCredentialPublic.allow_bundle_reuse_effective` tells a recipient whether they may embed the credential.
+- `CredentialBundleUsage` and `CredentialSkillUsage` gain `publisher_user_id` / `publisher_display`; the owner's "Used in" lists include other people's packages that embed the credential. `CredentialProvisioningOption` (`credential_id`, `name`, `resolved_provided_by`, `can_provide_as`, `blocked_reason`) fills `BundleCredentialDrift.live`.- `CredentialSharePublic` gains `agent_usages [{id, name, skill_display_names}]` (only agents with at least one owner skill), `direct_agent_use_count`, and `local_skill_usages [{package_uuid, package_id, display_name, revision_number, host_agent_name?}]` (`host_agent_name` only when the recipient published that desktop agent).
 - `CredentialDeletionImpact` gains `local_install_share_count`, `active_local_skill_install_count`, `local_install_skill_usages`. Active local skill installs make delete Tier 2 (409 unless `force=true`).
 
 ### Bundle Revision Spec (no DB column — JSON inside `agent_bundle_revision.required_credential_specs`)
@@ -127,6 +136,8 @@ Each entry the publish flow emits:
 ### CredentialShareService (`backend/app/services/credentials/credential_share_service.py`)
 - `share_credential(..., source="direct")` - Create share with validations (ownership, allow_sharing, target exists, not self, not duplicate); stamps `source="direct"` on the new `CredentialShare` row. The direct-sharing UI passes the default; no client-supplied source is accepted.
 - `revoke_credential_share()` - Async. Deletes the share record with an ownership check, then calls `CredentialsService.unlink_credential_from_revoked_recipients` for that recipient
+- `revoke_credential_share(..., credential_id=)` - the caller is the owner or the share's re-sharer; a share on another credential is "not found"; records the revocation with the caller as author
+- `list_reshares(credential_id, caller_id)` - shares the caller made as a non-owner (`[]` for the owner; "Credential not found" when the caller has no access); `_shares_to_public` + `_reshared_via` project rows; `has_owner_rooted_share` / `_owner_rooted_users` define the one-level rule
 - `get_shares_by_credential()` - List shares with resolved user emails
 - `get_credentials_shared_with_me()` - Query shares where user is recipient; enriched to compute `category` via `classify_credential_category(is_owned=False, ...)` from `share.source`, populate `agent_usage_count` via batched `get_agent_usage_counts` (recipient-scoped), and carry `source` on `SharedCredentialPublic`.
 - `get_share_count_for_credential()` - Count shares for a credential
@@ -135,6 +146,8 @@ Each entry the publish flow emits:
 - `delete_all_shares_for_credential()` - Bulk delete for credential deletion
 
 ### CredentialsService (`backend/app/services/credentials/credentials_service.py`)
+- `_apply_bundle_reuse_rules` validates `allow_bundle_reuse` in an owner update (needs sharing, reusable type; sharing off clears it); `update_credential` calls `CredentialReshareService.release_all` when re-use goes off
+- `unlink_credential_from_revoked_recipients` is the cascade hook: before its early exit it calls `CredentialReshareService.release_by_sharers` for recipients who lost every owner-rooted path (transitively, `_seen` guards cycles)
 - `classify_credential_category(*, is_owned, credential_type, share_source)` — **the categorization SSOT**. Pure static method. Holds `AUTOMATIC_TYPES = {CredentialType.AGENT_API, CredentialType.MCP_PROVIDER}`. Rules: owned + automatic type → `"automatic"`; owned + other type → `"mine"`; shared + `source="bundle_install"` → `"bundle"`; shared + `source="skill_install"` → `"automatic"` (the one case where a *received* share is automatic — a catalog skill install created it, no hand action did); shared + `source in {"direct", None}` → `"mine"`. A received share is classified by provenance alone, never by type. NULL is coalesced to `"direct"`. Both the `/credentials` projection and `get_credentials_shared_with_me` delegate to this function — the frontend never re-derives category.
 - `get_agent_usage_counts(session, credential_ids, owner_scope=None)` — **batched** count helper. One `GROUP BY` query over `AgentCredentialLink` for the whole page, returning `{credential_id: count}`. For shared credentials, pass `owner_scope=recipient_id` to count only the recipient's own agents. Avoids per-row N+1.
 - `get_used_in_bundle_flags(session, *, owner_id, credential_ids)` — **batched** boolean helper. Single `DISTINCT credential_id` query over the `list_bundle_usages` join, returning the subset of ids that appear in ≥1 of the owner's bundles. Owner-scoped (only the owner's published bundles count).
@@ -154,6 +167,7 @@ Each entry the publish flow emits:
 - `_get_owned_credential_or_404(session, credential_id, user_id)` - Returns 404 (not 403) when the credential exists but is not owned by `user_id`, preventing existence leaks on owner-only deletion paths. The general `get_credential` still returns 403 for non-owners; only the deletion paths use this stricter helper.
 
 ### PublishService (`backend/app/services/bundles/publish_service.py`)
+- `resolve_provided_by(session, credential, install)`, `_validate_publisher_provides` (publish errors above; template of a non-owned credential rejected via `_publisher_owns`), `can_publish_from`, `_provisioning_option` (mirrors the validation so the UI never offers a rejected choice); `get_credential_drift` serves `live` for never-published agents too
 - `resolve_provided_by(credential, publisher_install)` - Public static method that is the single source of truth for `provided_by` resolution. Order: publisher override → `allow_sharing` → `allow_template_sharing` → `"user"`. Used by three paths so they cannot disagree: (1) publish-time spec emission (`_collect_credential_specs`); (2) `CredentialsService.list_bundle_usages` (`GET /credentials/{id}/bundles` projection); (3) `compute_credential_spec_drift` (live side of the publish-vs-snapshot diff).
 - `compute_credential_spec_drift(session, install)` → `BundleCredentialDrift` — diffs each linked credential's live `provided_by` (via `resolve_provided_by`) against the latest published revision's snapshot (via `parse_credential_spec` from `credential_spec.py`). Returns `BundleCredentialDrift{stale: bool, drift: list[CredentialSpecDrift]}`. `stale` is also set when credentials have been removed from the publisher install since the last publish. Used by `GET /agents/{agent_id}/bundle-credential-drift` (publisher-install owner-only, `require_developer`-gated, 404 leak-safe). See [Agent Bundles — Credential sharing drift detection](../agent_bundles/agent_bundles.md) for the full business-logic description.
 - `_collect_credential_specs()` - Reads linked credentials and emits the per-spec shape; delegates `provided_by` to `resolve_provided_by`; for template specs attaches `template_data` + `template_private_fields` via `_template_payload_for`
@@ -163,6 +177,7 @@ Each entry the publish flow emits:
 - `_TEMPLATE_TEMPLATABLE_FIELDS_BY_TYPE` - Per-type allowlist applied after the publisher's private-field filter
 
 ### CredentialProvisioner (`backend/app/services/credentials/credential_provisioner.py`)
+- Re-use: the publisher boundary uses `publisher_may_provide`; `_sharer_id` stamps `shared_by_user_id` with the re-sharer; a re-sharer installing their own package gets no self-share row; `is_revoked(..., via_publisher=)` honours re-sharer revocations; skill candidates (`skill_credential_requirements`) include shared re-usable connections
 
 **The one writer of install-time shares, links and placeholder credentials**, for bundles and catalog skills alike. The two differ in policy, not mechanism, and every difference is a field of `ProvisionPolicy` (`BUNDLE_INSTALL_POLICY` / `SKILL_INSTALL_POLICY`): the share source, whether a slot match auto-links, how a placeholder is named and whether it is stamped with the slot and workspace, and whether install-form selections are honoured. Synchronous, flushes, **never commits** — the caller owns the transaction.
 
@@ -185,6 +200,13 @@ Each entry the publish flow emits:
 - `_drop_skill_provisioned()` - Drops from the missing list any item whose credential a **catalog skill** on the agent provisioned, unless the agent's bundle revision claims it too. An unfilled skill slot is a warning on the skill's Addons row, not a refusal on every channel. Called only when the list is already non-empty, so a ready agent pays no extra query, and every `GateMissingItem` now carries an internal `credential_id` for it (never serialised — the dispatcher payload and the setup-status response list their keys explicitly). Imports `SkillSlotIndex` lazily: the skills domain sits above bundles in the import graph
 
 ## Frontend Components
+
+### Re-use inside bundles (frontend)
+- `Credentials/CredentialBundleReuseSwitch.tsx` + `utils/credentialBundleReuse.ts` (FE mirror of the allowlist) — the owner switch in `CredentialSharing.tsx`; confirm `AlertDialog` when re-shares exist
+- `Credentials/CredentialResharesCard.tsx`, `CredentialReshareRow.tsx` — "Shared through your bundles" card (query key `["credential-reshares", id]`, `getCredentialReshares`, `revokeCredentialShare`), hidden when the list is known empty
+- `Common/UserAllowlistPicker.tsx` — optional `note` on a selected item renders the Forward glyph + tooltip; `CredentialUsageRows.tsx` — origin `Badge` and no link for rows published by someone else; `UnshareCredentialDialog.tsx` — extra sentence when `reshared_via`
+- `routes/_layout/credential/$credentialId.tsx` — shared view moved into the two-column grid, "Re-use in bundles" fact
+- `Agents/CredentialProvisioningSection.tsx` — values from `getBundleCredentialDrift().live` (`can_provide_as`, `blocked_reason`), skeleton while loading
 
 ### CredentialSharing (`frontend/src/components/Credentials/CredentialSharing.tsx`)
 - Direct-sharing toggle in the CardHeader corner (matches the `WebappShareCard` pattern; the `EmailIntegrationCard` component this originally also matched was deleted along with per-agent Email Integration — see [Email Integration](../../application/email_integration/email_integration.md#capabilities-removed-in-this-refactor)); body collapses when disabled
@@ -317,3 +339,7 @@ Added with [User Groups](../../application/user_groups/user_groups_tech.md) (mig
 - Group shares never touch `credential_share_revocation` or `CredentialShare.source` (D7).
 - Read paths widened to group members: shared-with-me, `get_credential_for_use`, `skill_credential_requirements`, `install_readiness_gate`, `desktop_credential_service` (source `None` = direct).
 - `CredentialPublic.group_share_count` on owned rows.
+
+## Re-use and Groups
+
+A group loss reaches the re-share cascade through `unlink_credential_from_revoked_recipients` like every other loss path: a member who loses their only owner-rooted path (group share revoked, removed from the group, group deleted) also loses the shares they made through their own packages. Group shares themselves are never re-shares: they are the owner's, and count as an owner-rooted path.

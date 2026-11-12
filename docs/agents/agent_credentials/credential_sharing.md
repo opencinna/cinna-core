@@ -10,6 +10,8 @@ Enables users to share their credentials with other users, allowing recipients t
 - **Shareable Credential** - A credential with `allow_sharing=true`, enabling the owner to share it directly
 - **Template Credential** - A credential with `allow_template_sharing=true`; its non-private fields are copied as defaults for new installers, who must supply the private fields themselves
 - **Share Recipient** - User who received a credential share; can link it to their own agents but cannot view credential values
+- **Re-use inside bundles** - An owner switch (`allow_bundle_reuse`) on a shared **agent_api connection** that lets the people it is shared with embed it, as publisher-provided, in bundles and skills *they* publish. See [Re-use inside bundles](#re-use-inside-bundles-re-sharing)
+- **Re-sharer** - A recipient who published a package that provides a connection they do not own; the installers of that package get shares whose `shared_by` is the re-sharer
 - **Access Level** - Currently only `read` access; recipients can use but not modify or view sensitive data
 
 ## User Stories / Flows
@@ -119,15 +121,46 @@ If a token is shared late, the fallback is: user opens the Credentials tab on th
 | User provides | `allow_sharing=false`, `allow_template_sharing=false` | `"user"` | Empty placeholder to fill in |
 | Full sharing | `allow_sharing=true` | `"publisher"` | Publisher's live credential via `CredentialShare` |
 | Template sharing | `allow_template_sharing=true` | `"template"` | Fresh credential pre-filled with non-private fields; installer fills in private fields |
+| Re-use by a recipient | owner's `allow_sharing` + `allow_bundle_reuse`, publisher holds a share | `"publisher"` (set by the re-sharer) | The owner's live connection via a `CredentialShare` made by the re-sharer (see below) |
+
+A credential you do not own is **never** template-provided: only the owner may hand out a template, because its non-private values are copied into the revision. `provided_by="template"` on someone else's credential is rejected at publish.
 
 The two flags can both be `true` simultaneously. `provided_by` resolution at publish time:
 
 1. Publisher's per-spec override in `Agent.publish_settings.credential_overrides[<name>].provided_by` if present (`"user"`, `"publisher"`, or `"template"`)
-2. Inference fallback: `allow_sharing=True` → `"publisher"`; else `allow_template_sharing=True` → `"template"`; else `"user"`
+2. Inference fallback: `allow_sharing=True` and the publisher may provide it (owns it, or [re-use applies](#re-use-inside-bundles-re-sharing)) → `"publisher"`; else `allow_template_sharing=True` → `"template"`; else `"user"`
 
 Validation (enforced by `PublishService._validate_publisher_provides` before snapshot is written):
-- A spec resolved as `"publisher"` requires `allow_sharing=True` on the underlying `Credential` row
+- A spec resolved as `"publisher"` requires `allow_sharing=True` on the underlying `Credential` row, and the publisher must own it or satisfy the re-use predicate; otherwise publish fails naming the owner ("... is owned by X and they have not allowed re-use inside bundles. Choose 'User provides', or ask X to allow re-use." / "... cannot be re-used inside bundles. Choose 'User provides'.")
 - A spec resolved as `"template"` requires `allow_template_sharing=True` on the underlying `Credential` row
+
+### Re-use inside bundles (re-sharing)
+
+Scenario: S owns an agent API connection C and shares it with team admin T. With **Allow re-use inside bundles** on, T may embed C as "Embedded (shared)" in T's bundle or skill; T's team members who install it get C automatically while C stays owned, and revocable, by S.
+
+**Who and what.** Only the owner toggles it (the Sharing card, after sharing is on). Only **agent_api connections** qualify (`BUNDLE_REUSABLE_TYPES`); issued/external keys and orphaned rows never do. Turning it on requires `allow_sharing`.
+
+**Trust predicate** (`publisher_may_provide`, evaluated live at publish, install, update, preview and in the skill publish candidates): the publisher owns the credential, **or** sharing is on, re-use is on, the type qualifies and the publisher still holds an **owner-rooted** share (a direct share or a group share from the owner). A publisher who loses the right falls through to `publisher_unavailable` on the next install or update, exactly as when an owner turns sharing off.
+
+**One level only.** Owner, re-sharer, installer. Someone who received the credential through a re-share has no owner-rooted share, so they cannot re-share it again.
+
+**Provenance.** A share created while installing a re-sharer's package has `shared_by_user_id = <re-sharer>` (first-writer-wins is unchanged: an existing owner share is kept). The owner's share list shows those rows as "via <re-sharer> · Bundle|Skill <name>"; that name is computed on read (the bundle or skill package published by the re-sharer that the recipient installed and that links the credential), not stored.
+
+**Release cascade.**
+- Whenever a re-sharer loses their owner-rooted path (direct revoke, sharing off, group share revoked, member removed, group deleted) they lose the re-shares they made, and the people who held only those re-shares lose the credential: links are removed and environments re-synced. Recipients with another path keep theirs.
+- The owner turning re-use off releases **all** re-shares; the re-sharers keep their own access.
+- Turning **sharing off clears** `allow_bundle_reuse`; turning sharing back on does not restore it.
+- Deleting a re-sharer's account releases their recipients (`shared_by_user_id` is `ON DELETE CASCADE`).
+- Releasing writes no revocation row, so a later install or update re-adds the share once the right is back.
+
+**Revoking.** The owner removes any share (blocks every path). A re-sharer may remove the shares they made (`GET /credentials/{id}/reshares`, `DELETE .../shares/{share_id}`); that revocation blocks re-adding only **through that re-sharer**. An owner revocation overwrites a re-sharer's. The revoke route answers 404 (not found or wrong credential) and 403 (neither owner nor the share's re-sharer).
+
+**Known limitation.** There is one revocation row per credential and user, so when a *second* re-sharer revokes a person who already has a revocation row from a first re-sharer, the second revocation is dropped and an install of the second re-sharer's package may share the credential again.
+
+**What users see.**
+- Owner, Sharing card: the **Allow re-use inside bundles** switch (confirm when people already hold re-shares), a Forward-glyph marker with tooltip on re-shared pills, and one extra sentence on the disable-sharing confirm; the usage lists show an origin badge (publisher) on other people's bundles and skills, without a link to them. The delete-credential dialog lists them the same way.
+- Recipient, shared credential view: a "Re-use in bundles" fact ("Allowed" or "Not allowed by <owner>") in the credential information card, and a **Shared through your bundles** card (≤ 5 rows, hover "Remove access", Show all sheet) that appears once they have re-shared it.
+- Publisher, Credential provisioning panel (agent's Bundle tab): "Embedded (shared)" is enabled only when the server says the publisher may provide it, with a muted reason otherwise, and a "Publishing will fail" warning when a stale explicit choice can no longer be published. The panel also shows before the first publish: choices are saved now and applied at the first publish.
 
 ### `provided_by` is frozen at publish — republish to change it
 
@@ -230,7 +263,7 @@ A nullable `source` column (`varchar(20)`) on the `credential_shares` table reco
 | Value | Meaning |
 |-------|---------|
 | `"direct"` | Created by the owner explicitly sharing with a specific user |
-| `"bundle_install"` | Created automatically when an installer installed a bundle that provides this credential (PBP flow) |
+| `"bundle_install"` | Created automatically when an installer installed a bundle that provides this credential (PBP flow). `shared_by` is the bundle's publisher: the owner, or a re-sharer |
 | `"skill_install"` | Created automatically when an installer added a catalog **skill** whose revision provides this credential |
 | `"skill_local_install"` | Created by `POST /skills/packages/{uuid}/revisions/{n}/provision-local` when a catalog skill is installed on a Desktop (no agent, no link). Category **automatic**; the one automatic source Desktop may copy. An existing `skill_install` share is promoted to it (the single exception to first-writer-wins); a `bundle_install` share is never touched |
 | `NULL` | Legacy row (pre-feature); read as `"direct"` everywhere |
@@ -287,6 +320,8 @@ Publisher sets allow_template_sharing=true + marks private fields
 ## Integration Points
 
 - [Agent Credentials](agent_credentials.md) - Shared and template-materialised credentials link to agents and sync to environments identically to owned credentials
+- [Agent REST API](../agent_api/agent_api.md#re-sharing-a-connection-through-a-bundle) - Connections are the only re-usable type; re-use is how a team admin hands a producer's connection to a team
+- [User Groups](../../application/user_groups/user_groups.md) - A group loss (share revoked, member removed, group deleted) also releases the re-shares the lost member made
 - [Agent Bundles & Installs](../agent_bundles/agent_bundles.md) - `required_credential_specs` in a bundle revision drives install-time credential handling for all three modes (`provided_by`: `"user"`, `"publisher"`, `"template"`); template specs carry `template_data` and `template_private_fields`
 - [User Workspaces](../../application/user_workspaces/user_workspaces.md) - Credentials exist within workspace context
 - [Desktop Credential Delivery](../../application/desktop_credentials/desktop_credentials.md) - A recipient's Desktop can only copy a shared credential once the owner has separately turned on local-use consent (`allow_local_use`); the switch is shown only for locally-compatible credential types
@@ -308,6 +343,8 @@ Rules:
 - Owned credentials report `group_share_count` next to `share_count`.
 
 ## Changelog
+
+- 2026-11-12: **Allow re-use inside bundles** (`allow_bundle_reuse`, agent_api connections): a recipient can provide a shared connection from their own bundle or skill; re-share provenance, release cascade, re-sharer revoke; a credential you do not own is never template-provided.
 
 - Credentials can be shared with user groups (`credential_group_share`); unlink narrows to users without any remaining path.
 

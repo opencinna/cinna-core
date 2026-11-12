@@ -1,6 +1,6 @@
 {
   "kit_version": "{{KIT_VERSION}}",
-  "contract_version": "1.23.0",
+  "contract_version": "1.24.0",
   "platform_url": "{{PLATFORM_URL}}",
   "kit_base_url": "{{KIT_BASE_URL}}",
   "start_url": "{{START_URL}}",
@@ -21,7 +21,8 @@
     "artifacts": "protocols/artifacts.schema.json",
     "dashboards": "protocols/dashboards.schema.json",
     "dashboards_bridge": "protocols/dashboards-bridge.js",
-    "dashboards_tools": "protocols/dashboards-tools.schema.json"
+    "dashboards_tools": "protocols/dashboards-tools.schema.json",
+    "api_requests_tools": "protocols/api-requests-tools.schema.json"
   },
   "platform_skills": {
     "cinna-tasks": "skills/cinna-tasks",

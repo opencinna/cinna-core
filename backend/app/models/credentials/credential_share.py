@@ -6,7 +6,7 @@ to other users, who can then use them in their own agents.
 """
 import uuid
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from sqlmodel import Field, Relationship, SQLModel
 from sqlalchemy import Index, UniqueConstraint, ForeignKeyConstraint
@@ -66,12 +66,21 @@ class CredentialShare(CredentialShareBase, table=True):
             name="credential_shares_shared_with_user_id_fkey",
             ondelete="CASCADE",
         ),
+        # A re-sharer's account going away takes the shares they made with it
+        # (the user-delete path releases them first so recipients are
+        # unlinked and re-synced). Owner-made shares go with the credential.
+        ForeignKeyConstraint(
+            ["shared_by_user_id"],
+            ["user.id"],
+            name="credential_shares_shared_by_user_id_fkey",
+            ondelete="CASCADE",
+        ),
     )
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     credential_id: uuid.UUID = Field(nullable=False)  # FK in __table_args__
     shared_with_user_id: uuid.UUID = Field(nullable=False)  # FK in __table_args__
-    shared_by_user_id: uuid.UUID = Field(foreign_key="user.id", nullable=False)
+    shared_by_user_id: uuid.UUID = Field(nullable=False)  # FK in __table_args__
     shared_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     # Relationships
@@ -144,6 +153,20 @@ class CredentialShareLocalSkillUsage(SQLModel):
     host_agent_name: str | None = None
 
 
+class ReshareVia(SQLModel):
+    """How a recipient got a credential through a re-sharer's package (D7).
+
+    Computed on read for share rows whose ``shared_by`` is not the owner: the
+    bundle or skill package published by ``user_id`` that the recipient
+    installed and that links the credential. ``package_name`` is ``None``
+    when the package can no longer be found.
+    """
+    user_id: uuid.UUID
+    display: str
+    package_kind: Literal["bundle", "skill"]
+    package_name: str | None = None
+
+
 class CredentialSharePublic(SQLModel):
     """Public response model for credential shares with resolved user info."""
     id: uuid.UUID
@@ -163,6 +186,9 @@ class CredentialSharePublic(SQLModel):
     agent_usages: list[CredentialShareAgentUsage] = []
     direct_agent_use_count: int = 0
     local_skill_usages: list[CredentialShareLocalSkillUsage] = []
+    # Filled when a recipient re-shared the credential through their own
+    # bundle or skill (``shared_by_user_id != owner``).
+    reshared_via: ReshareVia | None = None
 
 
 class CredentialShareCreate(SQLModel):
@@ -201,6 +227,10 @@ class SharedCredentialPublic(SQLModel):
     # The user groups through which the caller holds this credential (D12).
     # Empty for a direct-only share; a group-only row has ``source=None``.
     via_groups: list[UserGroupRef] = []
+    # The owner allows re-use inside bundles and the credential qualifies
+    # (sharing on, type re-usable, not restricted): the caller may embed it as
+    # publisher-provided in their own bundles and skills.
+    allow_bundle_reuse_effective: bool = False
 
 
 class SharedCredentialsPublic(SQLModel):

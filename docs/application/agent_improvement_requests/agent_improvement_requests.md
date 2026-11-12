@@ -55,8 +55,8 @@ Two entry points raise a request: the **Improve Agent** item in a session's `⋮
 ### 3. Recipient reviews and downloads
 
 1. The agent owner opens the agent's **Configuration tab**. The **Improvement Requests** card lists requests received on that agent, defaulting to the `New` filter with a live count. On a foreign (read-only, non-publisher) install the card renders only once a request actually exists — the fallback path where a bundle's publisher install is unreachable and the request lands on the consumer's own install instead (see Recipient resolution below) would otherwise be invisible to the only person who can act on it.
-2. Each row shows requester, comment (truncated), the install's bundle version at capture, date, and a status badge (`new` violet, `in_progress` blue, `completed` green, `declined` muted). The card's empty state teaches both entry points (`⋮` menu and `/session-improve`).
-3. Clicking a row opens the detail modal, titled after the thing rather than the person — **Improvement request**. It reads top-down as *what came in* then *what you decide about it*: a summary block (who submitted it, when, how many messages, and their comment, rendered as plain text and never markdown), then one action row holding **Context details**, **Download session archive**, and the status `Select`, then the `resolution_note` textarea. The frozen-context summary is a nested **Context at capture** dialog behind that button rather than an always-open list — it is reference material a recipient consults, not something they act on, and keeping it inline made the form read as a wall of settings. Status and note are still one draft committed by a single **Save** in the footer, next to a destructive **Delete** with confirmation; a successful save closes the modal, since setting the status is the last thing the recipient does with the request. The note's caption is deliberately precise about where it goes — *"Stored with the request. The person who submitted it can read it through the API and the CLI."* — since there is no requester-facing UI page in v1.
+2. The card header carries the "N new" count and a single **Filters** menu over status (default `New`); the list is capped at five rows with **Show all (N)** opening a side sheet that uses the same rows. Each row is one `ListRow`: a session request shows the requester, a capability request shows its title with "requester · consumer agent" beneath; a flag marks API capability requests (and a session request sharing a conversation with another row in the list), then "Submitted <relative time>". The status is one badge (`new` default, `in_progress` secondary, `completed`/`declined` outline). The empty state teaches both session entry points and, when the agent's REST API is enabled, mentions API capability requests.
+3. Clicking a row opens the detail dialog, which splits facts from the long document with two tabs. **Session requests**: *Details* (who submitted it, when, message count and their comment as plain text, then the action row with **Download session archive** and the status `Select`, then the `resolution_note`) and *Context* (the frozen runtime context at capture, formerly a nested dialog). **Capability requests**: *Details* (From, Consumer agent, Submitted, API version, the **Need** as plain text, then an action row with **Download request archive**, **Start building session** and the status `Select`, then the resolution note) and *Endpoint* (method + path, parameter and response-field tables, example request/response as plain text; the tab exists only when the request carries any of these). **Start building session** creates a building-mode session on the producer agent, moves a `new` request to `in_progress`, and opens the session with a pre-filled message pointing at the request; it is disabled while the triage draft has unsaved changes. All caller-authored text is shown as plain text, never markdown.
 4. Downloading the archive is audited: every cross-user download (recipient ≠ requester) writes an `IMPROVEMENT_ARCHIVE_DOWNLOADED` security event; a request the user raised on their own agent is not audited on download.
 5. Closing the loop sets `status="completed"` or `"declined"` with an optional note — the only reply channel this feature offers back to the requester.
 
@@ -131,16 +131,30 @@ The practical consequence: a secret the requester **typed into the conversation 
 
 There is no withdrawal path in v1. The only mutation surface after creation is the recipient's status/resolution-note update; the requester cannot edit, delete, or unshare a request they have submitted. The consent modal and the `/session-improve` confirmation both say this plainly before/at the point of submission.
 
+## Capability Requests (`kind = agent_api`)
+
+The same row, inbox, events and archive also carry a second kind of request: a **capability request** filed by a *caller of an agent's REST API* ([Agent REST API](../../agents/agent_api/agent_api.md#capability-requests)) who found the API lacks something. Instead of a frozen session it holds a typed payload: a title, the need, an optional proposed endpoint (method, path, parameters, response fields), example request/response and the API version the caller saw.
+
+- **Requester** is the identified API caller (the person behind the consumer agent or issued key). **Owner/recipient** is the producer agent's owner. The consumer agent, when the identity token names one the caller owns, is recorded as the source agent (attribution only).
+- **Same triage as a session request**: status `new` → `in_progress` → `completed` / `declined`, an owner resolution note visible to the requester, archive download, delete. The producer's building agent can also read and close them through the `api_requests_*` tools; the owner can hand one to a building session with **Start building session** in the detail dialog.
+- **Rate limits** (rolling 24 hours, counted in the database, soft under concurrency): 10 per caller per producer and 30 per caller overall; over the limit answers 429 with `Retry-After`. These are separate from the session limits (5 per session, 20 per user per day).
+- **Scrubbed**: every string of the caller-authored payload is run through the secret scrubber (the caller's bearer and identity token, and the consumer agent's credential secrets), not just transcript keys.
+- **No consent step**: the caller authored the text to be read by the producer's owner. There is no realtime event to the requester; they poll `capability_requests()` (SDK) or `GET .../_cinna/improvement-requests` for status.
+- **Archive** is flat (`README.md`, `request.md`, `metadata.json`, `context.json`); there is no `session/`, `prompts/` or `memory/`.
+
 ## Access Control
 
 | Action | Requester | Recipient (agent owner) | Anyone else |
 |---|---|---|---|
-| Preview eligibility / submit | own session only | — | 403 / 404 |
+| Preview eligibility / submit (session kind) | own session only | — | 403 / 404 |
+| File a capability request (`agent_api` kind) | the identified API caller, through the producer's API proxy | — | 401 anonymous / 429 over limit |
 | List own submitted requests | ✅ | — | — |
 | List requests on an agent | — | ✅ (owns agent) | 404 |
 | View one request's detail / download archive | ✅ | ✅ (download audited) | 404 |
 | Change status / resolution note | ❌ 403 | ✅ | 404 |
 | Delete | ❌ 403 | ✅ | 404 |
+
+For `agent_api` rows the requester is the API caller, so "List own submitted requests" and detail/archive apply to them too; their API-side view is the narrow `AgentApiCapabilityRequestPublic` (no owner-side data).
 
 Inaccessible request ids answer **404, not 403** — a 403 would confirm the id exists. The one deliberate exception is a requester attempting to *mutate* a row they are already known to be party to (they already know it exists), which answers 403.
 
@@ -152,6 +166,7 @@ Inaccessible request ids answer **404, not 403** — a 403 would confirm the id 
 - **[Agent Environments](../../agents/agent_environments/agent_environments.md)** — the frozen context records the environment name/version, instance, image tag + staleness, and critical state at capture time.
 - **[Account CLI Workspace](../cinna_cli_integration/account_cli_workspace.md#improvement-requests-cinna-improve)** — `/account/improvement-requests*` endpoints back `cinna improve list|show|download|status`; the shipped guide teaches the local coding agent the whole loop.
 - **[Realtime Events](../realtime_events/event_bus_system.md)** — `improvement_request_created` / `improvement_request_updated` are emitted to the **recipient's** user room so the Configuration-tab card updates live.
+- **[Agent REST API](../../agents/agent_api/agent_api.md#capability-requests)** — files `agent_api` requests through the reserved `/_cinna/improvement-requests` route; the env tools and SDK helpers (`file_capability_request`, `capability_requests`) sit on top of it.
 - **[Agent Credentials](../../agents/agent_credentials/agent_credentials.md)** — the secret scrubber reuses `CredentialsService.SENSITIVE_FIELDS`, the same per-type sensitive-field map credential redaction uses elsewhere.
 
 ## Not in v1
@@ -162,3 +177,7 @@ Inaccessible request ids answer **404, not 403** — a 403 would confirm the id 
 - **No container-log attachment** — deferred because environment logs are per-environment and would leak the requester's other sessions.
 - **No aggregate/roll-up view across a bundle's installs**, and no requester follow-up thread beyond the one-shot `resolution_note`.
 - **No direct file attachment** on the request itself.
+
+## Changelog
+
+- Added `kind` (`session` | `agent_api`): capability requests from callers of an agent's REST API land in the producer owner's inbox; card rows show a kind flag and the detail dialog gains an Endpoint tab and **Start building session**.

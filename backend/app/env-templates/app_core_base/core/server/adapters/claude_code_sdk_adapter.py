@@ -30,6 +30,7 @@ from ..sdk_utils import SessionEventLogger, format_message_for_debug
 from ..active_session_manager import active_session_manager
 from ..agent_env_service import AgentEnvService
 from .tool_name_registry import normalize_tool_name
+from ..tools.cinna_api_requests_protocol import serves_agent_api
 from ..tools.cinna_dashboards_protocol import verified_session_context
 
 logger = logging.getLogger(__name__)
@@ -64,19 +65,26 @@ def clear_current_sdk_session_id() -> None:
     logger.info("Cleared current SDK session ID")
 
 
-def cinna_toolsets_for_mode(mode: str, session_context: dict | None = None) -> tuple[str, ...]:
+def cinna_toolsets_for_mode(
+    mode: str,
+    session_context: dict | None = None,
+    has_agent_api: bool = False,
+) -> tuple[str, ...]:
     """Which `cinna` toolsets the Claude Code binding registers in ``mode``.
 
     ``session_context`` must be the HMAC-verified one (None when unverified):
     a conversation whose context names a ``dashboard_id`` (a chat opened from
-    a dashboard) also gets the dashboard tile tools.
+    a dashboard) also gets the dashboard tile tools. Building mode adds the
+    capability-request tools when the workspace serves a REST API
+    (``has_agent_api``: the caller checks ``agent_api/`` exists). Pure, so
+    tests can lift it.
     """
     if mode == "conversation":
         if session_context and session_context.get("dashboard_id"):
             return ("tasks", "artifacts", "dashboards")
         return ("tasks", "artifacts")
     if mode == "building":
-        return ("artifacts",)
+        return ("artifacts", "api_requests") if has_agent_api else ("artifacts",)
     return ()
 
 
@@ -329,9 +337,11 @@ class ClaudeCodeAdapter(BaseSDKAdapter):
                 # while building; a publish is private to the owner). Replaces the
                 # former `agent_task` server; its names stay pre-approved only.
                 # A conversation opened from a dashboard (verified
-                # session_context.dashboard_id) adds the tile tools.
+                # session_context.dashboard_id) adds the tile tools; building
+                # mode in an agent that serves a REST API adds api_requests_*.
                 cinna_toolsets = cinna_toolsets_for_mode(
                     mode, verified_session_context(session_state),
+                    has_agent_api=serves_agent_api(),
                 )
                 if cinna_toolsets:
                     try:

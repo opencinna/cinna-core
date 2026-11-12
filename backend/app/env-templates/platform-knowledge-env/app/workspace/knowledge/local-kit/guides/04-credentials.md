@@ -101,6 +101,26 @@ producer's owner gave the user), attached in Cinna Desktop and matched by its
 `agent_api_session("<slot>")` from `scripts/cinna_credentials.py`, which sends the
 key only to the producer.
 
+**When the API cannot do what the user needs, ask for it.** Every `agent_api`
+connection and issued key can file a *capability request* with the producer's
+owner, who sees it in their Improvement Requests and can have their agent extend
+the API:
+
+1. Draft it: a short `title`, the `need` in plain words, and if you can, a
+   `proposed_endpoint` (`method`, `path`, `params`, `response_fields`) plus an
+   `example_request` / `example_response`.
+2. **Show the user the draft and submit only after they confirm.** It goes to
+   another person.
+3. Submit with `spec_version_seen` set to the `info.version` of the spec you read.
+   In the cloud: `api = credentials.agent_api_session("<slot>")` (from
+   `core.cinna_api`), then `api.file_capability_request(title, need, ...)`.
+   Anywhere else: `POST <base_url>/_cinna/improvement-requests` with the same
+   bearer (a cloud entry also carries the URL as `improvement_requests_url`).
+   Limits: 10 a day per API, 30 a day overall; a 429 carries `Retry-After`.
+4. Later, `api.capability_requests()` (or `GET` the same URL) lists your requests
+   with `status` and the owner's `resolution_note`. When one is `completed`,
+   re-read the spec before writing code against the new capability.
+
 ## 3. Fill the values
 
 ```bash

@@ -170,7 +170,11 @@ export function AgentConfigTab({
             ``resolve_target`` falls back to self and the row lands on the
             consumer's own install. Gating that away on ``readOnly`` made those
             requests invisible to the only person who could act on them. */}
-        <ImprovementRequestsCard agentId={agent.id} hideWhenEmpty={readOnly} />
+        <ImprovementRequestsCard
+          agentId={agent.id}
+          hideWhenEmpty={readOnly}
+          agentApiEnabled={agent.agent_api_enabled ?? false}
+        />
       </div>
 
       {/* Modals */}
