@@ -141,10 +141,16 @@ def publisher_may_provide(
 
 
 def user_display(user: User | None) -> str:
-    """``full_name`` when set, else the email; ``"the owner"`` when unknown."""
+    """``full_name`` when set, else the email; ``"the owner"`` when unknown.
+
+    The name is whitespace-normalised (trimmed, inner runs collapsed): it is
+    interpolated into sentences, and a stored ``"Ada  Lovelace   "`` must not
+    leak its padding into the copy. A blank name falls back to the email.
+    """
     if user is None:
         return "the owner"
-    return user.full_name or user.email
+    name = " ".join((user.full_name or "").split())
+    return name or user.email
 
 
 def owner_display(session: Session, credential: Credential) -> str:

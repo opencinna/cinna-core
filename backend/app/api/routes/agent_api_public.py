@@ -36,16 +36,11 @@ from pydantic import ValidationError
 from app.api.deps import SessionDep
 from app.models import Agent, AgentApiToken, AgentApiTokenKind, User
 from app.models.improvement.agent_improvement_request import (
+    CAPABILITY_REQUEST_BODY_SHAPE,
     MAX_CAPABILITY_REQUEST_BODY_BYTES,
     AgentApiCapabilityRequestCreate,
     AgentApiCapabilityRequestPublic,
     AgentApiCapabilityRequestsPublic,
-)
-from app.services.agent_api.agent_api_service import (
-    AgentApiAuthError,
-    AgentApiError,
-    AgentApiPolicyError,
-    AgentApiService,
 )
 from app.services.agent_api.agent_api_grant_service import AgentApiGrantService
 from app.services.agent_api.agent_api_identity_service import (
@@ -54,6 +49,12 @@ from app.services.agent_api.agent_api_identity_service import (
     CALLER_USER_ID_HEADER,
     IDENTITY_HEADER,
     AgentApiIdentityService,
+)
+from app.services.agent_api.agent_api_service import (
+    AgentApiAuthError,
+    AgentApiError,
+    AgentApiPolicyError,
+    AgentApiService,
 )
 from app.services.agent_api.agent_api_token_service import AgentApiTokenService
 from app.services.environments.environment_service import EnvironmentService
@@ -273,9 +274,18 @@ async def consumer_create_capability_request(
     except ValidationError as e:
         raise HTTPException(
             status_code=422,
-            detail=jsonable_encoder(
-                e.errors(include_url=False, include_context=False, include_input=False)
-            ),
+            detail={
+                "message": (
+                    "Invalid capability request body. Unknown keys are rejected; "
+                    "send only the fields in `expected`."
+                ),
+                "errors": jsonable_encoder(
+                    e.errors(
+                        include_url=False, include_context=False, include_input=False
+                    )
+                ),
+                "expected": CAPABILITY_REQUEST_BODY_SHAPE,
+            },
         )
 
     try:

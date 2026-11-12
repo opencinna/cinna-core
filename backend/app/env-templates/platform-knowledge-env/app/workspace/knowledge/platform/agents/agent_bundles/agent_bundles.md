@@ -134,6 +134,8 @@ In all cases the same `POST /agents/{id}/apply-update` endpoint is called. The m
 
 `INSTALL_UPDATE_APPLIED` event fires; banners and strips clear; `installed_revision_id` advances.
 
+**Credentials are provisioned on update.** Applying an update (manual apply-update and the automatic-update sweep alike) re-runs credential provisioning for the new revision, the same way install does, *before* the environment is touched. The publisher trust check (including re-use of a shared agent API connection) and the owner's revocations are re-checked. Slots that are already answered are kept: a publisher credential, a filled-in placeholder, or a credential the installer linked of that type. A placeholder is upgraded to the publisher's credential when the publisher may now provide it; if the publisher can no longer provide a slot, the install gets a single `publisher_unavailable` placeholder and `last_update_status` becomes `degraded`. Specs new in the revision are provisioned; credentials the installer linked are never unlinked. If provisioning fails, the update is marked failed and the install stays on the old revision, so a retry is safe. Recovering after the publisher lost a share needs a **new revision**: apply-update is a no-op when the install is already on the latest one. **Known gap:** git-source (git pull) updates do not provision credentials yet.
+
 During apply-update, `Agent.router_trigger_prompt` is refreshed from the new revision's snapshot (alongside `example_prompts` via `_apply_revision_metadata`). Because those two columns are the sole reachability signal the App MCP / Server Channel classifier reads, that overwrite is the entire story — there is no separate route object whose refresh could lag behind or need reconciling against a manual edit.
 
 Schedules are also merged against the new revision using a behavioral signature. Behaviorally-unchanged schedules retain the user's enable/disable preference and execution history; changed, added, or removed schedules are synced from the publisher (see [Agent Schedulers](../agent_schedulers/agent_schedulers.md)).
@@ -296,3 +298,4 @@ Publisher's Install (Agent row)
 ## Changelog
 
 - 2026-11-12: publisher-provided credentials may be someone else's shared agent API connection when the owner allowed re-use inside bundles; the drift endpoint returns `live` provisioning values and serves never-published agents; templates are owner-only.
+- 2026-11-12: bundle updates (manual and automatic) re-run credential provisioning for the new revision before touching the environment; a consumer install that loses a publisher-provided credential through a released re-share or an owner revoke gets a placeholder for that slot. Git-source updates do not provision yet.

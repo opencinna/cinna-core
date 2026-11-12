@@ -214,3 +214,27 @@ def test_publisher_override_saved_before_first_publish_is_honoured_for_reusable_
     drain_tasks()
     specs = _specs(client, th, agent["id"])
     assert [sp["provided_by"] for sp in specs] == ["publisher"], specs
+
+
+def test_publish_rejection_names_the_owner_with_normalised_whitespace(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """S's full name carries stray spaces; the 400 copy names S cleanly."""
+    su = superuser_token_headers
+    s, sh = make_developer(client, su)
+    t, th = make_developer(client, su)
+    r = client.patch(f"{API}/users/me", headers=sh, json={"full_name": "  Ada   Lovelace    "})
+    assert r.status_code == 200, r.text
+    cred = _shared_connection(client, sh, t["email"])
+    agent = create_agent_via_api(client, th, name="SharedPub-Name-Agent")
+    drain_tasks()
+    assert _publish_raw(client, th, agent["id"]).status_code == 200
+    drain_tasks()
+    link_bundle_credential_to_agent(client, th, agent["id"], cred["id"])
+    _set_overrides(client, th, agent["id"], {cred["name"]: {"provided_by": "publisher"}})
+
+    r = _publish_raw(client, th, agent["id"])
+    assert r.status_code == 400, r.text
+    detail = r.json()["detail"]
+    assert "owned by Ada Lovelace and they" in detail, detail
+    assert "ask Ada Lovelace to allow" in detail, detail

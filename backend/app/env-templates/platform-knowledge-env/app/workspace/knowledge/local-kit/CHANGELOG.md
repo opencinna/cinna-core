@@ -16,6 +16,16 @@ folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
 
+## 1.24.1 — the capability request body, stated exactly
+
+Wording, plus a richer 422 `detail`. Every 1.x folder stays valid.
+
+- **`guides/04-credentials.md`** — the capability request body is spelled out
+  (keys, nesting, `example_request` / `example_response` are strings, unknown
+  keys are refused with 422, whose `detail` now carries `errors` and the
+  `expected` shape). In the cloud, `agent_api_session(...)` also takes the
+  credential id, which is how a platform-made connection (no slot) is reached.
+
 ## 1.24.0 — capability requests on agent_api connections
 
 Additive. Every 1.x folder stays valid: the manifest schema and the folder roles

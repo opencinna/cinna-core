@@ -20,6 +20,11 @@ from app.core.ssh_key_utils import (
     validate_key_pair,
 )
 from app.models import Credential, Agent, AgentApiTokenKind, AgentEnvironment, AgentCredentialLink, CredentialCreate, CredentialUpdate, CredentialType, User
+from app.models.improvement.agent_improvement_request import (
+    CAPABILITY_TITLE_MAX_CHARS,
+    CAPABILITY_TITLE_MIN_CHARS,
+    MAX_COMMENT_CHARS,
+)
 from app.models.credentials.credential_share import (
     SHARE_SOURCE_SKILL_LOCAL_INSTALL,
     CredentialShare,
@@ -951,19 +956,47 @@ class CredentialsService:
         ]
 
     @staticmethod
-    def _capability_requests_readme_lines() -> list[str]:
-        """The "Capability requests" paragraph of an agent_api README entry."""
+    def _capability_requests_readme_lines(entry_ref: str) -> list[str]:
+        """The "Capability requests" paragraph of an agent_api README entry.
+
+        ``entry_ref`` is what ``agent_api_session`` takes for this entry: its
+        slot (``service_uri``) or, for a connection without one, its id.
+        """
         return [
             "**Capability requests.** When this API cannot do what the user "
-            "needs, you can ask its owner to extend it. Draft the request "
-            "(title, need, optionally a proposed endpoint and examples), show "
-            "the draft to the user and submit only after they confirm: "
-            "`api.file_capability_request(title, need, ..., "
-            "spec_version_seen=<the spec's version>)` on the SDK session "
-            "(`credentials.agent_api_session('<slot>')`), or `POST` to the "
-            "entry's `improvement_requests_url`. Check progress later with "
-            "`api.capability_requests()`; once one is `completed`, re-read the "
-            "spec before using the new capability.",
+            "needs, you can ask its owner to extend it. Draft the request, show "
+            "the draft to the user and submit only after they confirm:",
+            "",
+            "```python",
+            "from core.cinna_api import credentials",
+            "",
+            f"api = credentials.agent_api_session('{entry_ref}')",
+            "api.file_capability_request(",
+            "    'Short title', 'What you need and why',",
+            "    proposed_endpoint={'method': 'GET', 'path': '/orders',",
+            "        'params': [{'name': 'status', 'in': 'query', 'type': 'string', 'description': '...'}],",
+            "        'response_fields': [{'name': 'total', 'type': 'number', 'description': '...'}]},",
+            "    example_request='GET /orders?status=open',",
+            "    example_response='{\"total\": 12}',",
+            "    spec_version_seen='<the spec info.version>',",
+            ")",
+            "api.capability_requests()  # yours, with status and resolution_note",
+            "```",
+            "",
+            "On an environment built before this helper the SDK call fails "
+            "with `credential_missing`: rebuild the environment, or POST to "
+            "`improvement_requests_url` as below.",
+            "",
+            "Raw HTTP: `POST` the same JSON body to the entry's "
+            "`improvement_requests_url` with this entry's headers. Body keys: "
+            f"`title` ({CAPABILITY_TITLE_MIN_CHARS}-{CAPABILITY_TITLE_MAX_CHARS} "
+            f"chars), `need` (≤{MAX_COMMENT_CHARS}), and optional "
+            "`proposed_endpoint` {`method`, `path`, `params`: "
+            "[{`name`, `in`, `type`, `description`}], `response_fields`: "
+            "[{`name`, `type`, `description`}]}, `example_request` and "
+            "`example_response` (strings, not objects), `spec_version_seen`. "
+            "Unknown keys are rejected (422). Once a request is `completed`, "
+            "re-read the spec before using the new capability.",
             "",
         ]
 
@@ -1546,7 +1579,7 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
                 lines.append(f"### Agent API Key: {cred_name}")
                 lines.append(f"**ID**: `{cred_id}`")
                 lines.append("")
-                slot = cred.get("service_uri") or "<slot>"
+                slot = cred.get("service_uri") or cred_id
                 lines.append(
                     "An API key issued to this agent's owner for another agent's "
                     "REST API. Only the `Authorization: Bearer` token is sent; the "
@@ -1570,7 +1603,7 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
                     "`Authorization: Bearer <token>` to its `base_url`."
                 )
                 lines.append("")
-                lines.extend(CredentialsService._capability_requests_readme_lines())
+                lines.extend(CredentialsService._capability_requests_readme_lines(slot))
             elif cred_type == "agent_api":
                 lines.append(f"### Agent API Connection: {cred_name}")
                 lines.append(f"**ID**: `{cred_id}`")
@@ -1605,8 +1638,11 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
                 lines.append("response = requests.get(f\"{api['base_url']}/some/endpoint\", headers=headers)")
                 lines.append("```")
                 lines.append("")
-                lines.extend(CredentialsService._capability_requests_readme_lines())
-                lines.append("")
+                lines.extend(
+                    CredentialsService._capability_requests_readme_lines(
+                        cred.get("service_uri") or cred_id
+                    )
+                )
             elif cred_type == "ssh_key":
                 lines.append(f"### SSH Key Credential: {cred_name}")
                 lines.append(f"**ID**: `{cred_id}`")
@@ -3209,6 +3245,22 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
         agent_ids = [link.agent_id for link in links]
         for link in links:
             session.delete(link)
+        session.flush()
+        # A bundle install that loses the credential its bundle provides as
+        # publisher gets a placeholder for that slot, as on an install where
+        # the publisher could not provide it — the agent shows "needs
+        # credential" instead of silently missing it. The next update
+        # swaps it back when the publisher may provide again.
+        from app.services.credentials.credential_provisioner import (
+            CredentialProvisioner,
+        )
+
+        for agent_id in set(agent_ids):
+            agent = session.get(Agent, agent_id)
+            if agent is not None:
+                CredentialProvisioner.placeholder_released_publisher_slots(
+                    session, agent=agent, credential_id=credential_id
+                )
         session.commit()
 
         logger.info(

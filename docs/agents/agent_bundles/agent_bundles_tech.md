@@ -354,6 +354,8 @@ Install flow (`_install_from_revision`):
 7. `_setup_install_credentials` called — branches on `provided_by` per spec; PBP specs link the publisher's row; PBU specs create placeholders or link installer selections
 8. `_materialise_schedules` called — creates `AgentSchedule` rows from `revision.schedules` via `schedule_sync.materialise`; best-effort (failure logs a warning and marks the install `last_update_status="degraded"` but does not abort the install). Created rows are ordinary `AgentSchedule` rows picked up by the background scheduler
 
+**Update flow credential step.** `apply_update` calls `InstallService._reprovision_update_credentials(...)` (which delegates to `CredentialProvisioner.reprovision_bundle_update`) **before** any environment stop or folder replacement. Both the manual endpoint and `sweep_automatic_updates` go through `apply_update`. A provisioning failure stamps `last_update_status="failed"`, leaves `installed_revision_id` unchanged and the environment untouched (retry-safe); a degraded report stamps `"degraded"`. Git-source (git pull) updates do not call it yet (known gap).
+
 Reachability follows automatically from step 1 — `_apply_revision_metadata` already restored `router_trigger_prompt` and `example_prompts` from the revision onto the `Agent` row before the environment was even created; there is no later step that creates or refreshes a route
 
 #### Automatic Update Convergence
@@ -406,6 +408,10 @@ The suspension-time hook in `environment_suspension_scheduler.py` only applies a
 
 - **Bundle policy** reproduces the historical `InstallService` loop exactly — placeholders named `"<name> (placeholder)"`, no slot stamping, user selections honoured, and a forbidden selection fails the install. A bundle's specs are the agent's *contract*, so a spec that cannot be satisfied as published is a real failure.
 - **Skill policy** never fails an install for a per-slot reason, and is idempotent: a credential that already carries the slot is linked before any placeholder is created, and `_ensure_link` is the single link-insert path. A skill is one capability among many, so an unfilled slot is a warning, not a block.
+
+**Update and release paths.**
+- `reprovision_bundle_update(...)` — re-provisioning for an installed agent moving to a new revision: re-checks `publisher_may_provide` and revocations; keeps answered slots (publisher credential, filled placeholder, user-linked credential of the type); upgrades a placeholder to the publisher credential when now allowed; otherwise one `publisher_unavailable` placeholder (report degraded); provisions new specs; never unlinks user-linked credentials.
+- `placeholder_released_publisher_slots(...)` — for a bundle install that just lost a publisher-provided credential (re-share released or owner revoke), creates the placeholder for that slot, mirroring the install-time degrade. Called from `CredentialsService.unlink_credential_from_revoked_recipients`; publisher working copies, skills and non-bundle agents are unaffected.
 
 Callers: `InstallService._setup_install_credentials` (bundles), `SkillCatalogService` install/upgrade and its preview endpoint (skills), and `llm_plugin_service` on skill uninstall via `release_skill_slots`. See [Agent Skills](../agent_skills/agent_skills_tech.md) for the slot declarations this consumes.
 

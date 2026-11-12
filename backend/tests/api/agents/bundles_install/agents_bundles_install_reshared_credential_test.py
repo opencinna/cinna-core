@@ -13,6 +13,10 @@ Scenarios:
   3. Revocations: a re-sharer's revocation blocks only that path; an owner
      revocation blocks every path; T installing their own bundle gets no
      self-share; U (re-share recipient) cannot re-share onward.
+  4. Updates (F2): a release leaves a placeholder on U's install; re-sharing,
+     republishing and applying the update restores C and drops the
+     placeholder, with no placeholders piling up across cycles; an owner
+     revocation of U still blocks the re-link on update.
 """
 import uuid
 
@@ -23,6 +27,7 @@ from tests.utils.agent import create_agent_via_api
 from tests.utils.agent_api_keys import make_developer, setup_producer
 from tests.utils.background_tasks import drain_tasks
 from tests.utils.bundle import (
+    apply_install_update,
     install_bundle,
     link_bundle_credential_to_agent,
     make_bundle_public,
@@ -46,6 +51,18 @@ def _shares(client, headers, cid) -> dict[str, dict]:
 
 def _linked(client, headers, agent_id) -> dict[str, dict]:
     return {c["id"]: c for c in get_agent_credentials(client, headers, agent_id)["data"]}
+
+
+def _placeholders(linked: dict[str, dict]) -> list[dict]:
+    return [c for c in linked.values() if c["is_placeholder"]]
+
+
+def _owned_placeholders(client, headers, owner_id) -> list[dict]:
+    r = client.get(f"{API}/credentials/", headers=headers)
+    assert r.status_code == 200, r.text
+    return [
+        c for c in r.json()["data"] if c["is_placeholder"] and c["owner_id"] == owner_id
+    ]
 
 
 def _uninstall(client, headers, agent_id) -> None:
@@ -406,4 +423,89 @@ def test_resharer_losing_group_path_releases_recipients_despite_another_reshare(
     remove_member(client, su, group["id"], t["id"])
     drain_tasks()
     assert cid not in _linked(client, uh, u_install["id"])
+    assert u["id"] not in _shares(client, sh, cid)
+
+
+def test_release_leaves_placeholder_and_update_restores_the_reshared_link(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """
+    1. U installs T's bundle and links C through T
+    2. S revokes T: C is unlinked from U's install and one placeholder takes
+       its slot (the agent shows "needs credential")
+    3. S shares with T again, T republishes, U applies the update: C is linked
+       again through T and the placeholder is gone (deleted, not orphaned)
+    4. A second revoke / re-share / republish / update cycle ends the same
+       way: never more than one placeholder
+    """
+    su = superuser_token_headers
+    s, sh, t, th, cid, t_agent, _ = _setup(client, su)
+    _reuse(client, sh, cid, True)
+    bundle_id = _publish_public(client, th, t_agent)
+    u, uh = make_developer(client, su)
+
+    # ── Phase 1 ──────────────────────────────────────────────────────
+    install = install_bundle(client, uh, bundle_id)
+    assert cid in _linked(client, uh, install["id"])
+    assert _placeholders(_linked(client, uh, install["id"])) == []
+
+    for cycle in range(2):
+        # ── Phase 2: owner revokes T ────────────────────────────────
+        t_share = _shares(client, sh, cid)[t["id"]]
+        r = client.delete(f"{API}/credentials/{cid}/shares/{t_share['id']}", headers=sh)
+        assert r.status_code == 200, r.text
+        drain_tasks()
+        linked = _linked(client, uh, install["id"])
+        assert cid not in linked, f"cycle {cycle}"
+        placeholders = _placeholders(linked)
+        assert len(placeholders) == 1, f"cycle {cycle}: {linked}"
+        assert placeholders[0]["name"].endswith("(placeholder)")
+
+        # ── Phase 3: re-share, republish, apply ─────────────────────
+        share_credential_via_api(client, sh, cid, t["email"])
+        # Losing the share also unlinked C from T's working copy.
+        link_bundle_credential_to_agent(client, th, t_agent, cid)
+        _publish_public(client, th, t_agent)
+        apply_install_update(client, uh, install["id"])
+        linked = _linked(client, uh, install["id"])
+        assert cid in linked, f"cycle {cycle}: {linked}"
+        assert _placeholders(linked) == [], f"cycle {cycle}: {linked}"
+        assert _shares(client, sh, cid)[u["id"]]["shared_by_user_id"] == t["id"]
+        assert _owned_placeholders(client, uh, u["id"]) == []
+
+
+def test_owner_revocation_still_blocks_relink_on_update(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """
+    1. U installs T's bundle and links C through T
+    2. S revokes U's share: C is unlinked and a placeholder takes the slot
+    3. T republishes; U applies the update: C stays unlinked (owner
+       revocation blocks every path) and the one placeholder stays
+    """
+    su = superuser_token_headers
+    s, sh, t, th, cid, t_agent, _ = _setup(client, su)
+    _reuse(client, sh, cid, True)
+    bundle_id = _publish_public(client, th, t_agent)
+    u, uh = make_developer(client, su)
+
+    # ── Phase 1 ──────────────────────────────────────────────────────
+    install = install_bundle(client, uh, bundle_id)
+    assert cid in _linked(client, uh, install["id"])
+
+    # ── Phase 2 ──────────────────────────────────────────────────────
+    u_share = _shares(client, sh, cid)[u["id"]]
+    r = client.delete(f"{API}/credentials/{cid}/shares/{u_share['id']}", headers=sh)
+    assert r.status_code == 200, r.text
+    drain_tasks()
+    linked = _linked(client, uh, install["id"])
+    assert cid not in linked
+    assert len(_placeholders(linked)) == 1
+
+    # ── Phase 3 ──────────────────────────────────────────────────────
+    _publish_public(client, th, t_agent)
+    apply_install_update(client, uh, install["id"])
+    linked = _linked(client, uh, install["id"])
+    assert cid not in linked
+    assert len(_placeholders(linked)) == 1, linked
     assert u["id"] not in _shares(client, sh, cid)

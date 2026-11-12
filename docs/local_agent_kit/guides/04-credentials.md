@@ -107,13 +107,20 @@ owner, who sees it in their Improvement Requests and can have their agent extend
 the API:
 
 1. Draft it: a short `title`, the `need` in plain words, and if you can, a
-   `proposed_endpoint` (`method`, `path`, `params`, `response_fields`) plus an
-   `example_request` / `example_response`.
+   `proposed_endpoint` plus an `example_request` / `example_response`.
+   The body is exactly these keys, and any other key is refused with 422:
+   `title` (3–200 chars), `need` (≤ 4000), and optional `proposed_endpoint`
+   `{method, path, params: [{name, in, type, description}], response_fields:
+   [{name, type, description}]}`, `example_request` and `example_response`
+   (**strings**, e.g. JSON text, not objects), `spec_version_seen`. A 422's
+   `detail` lists the `errors` and the `expected` shape.
 2. **Show the user the draft and submit only after they confirm.** It goes to
    another person.
 3. Submit with `spec_version_seen` set to the `info.version` of the spec you read.
-   In the cloud: `api = credentials.agent_api_session("<slot>")` (from
-   `core.cinna_api`), then `api.file_capability_request(title, need, ...)`.
+   In the cloud: `api = credentials.agent_api_session("<slot or credential id>")`
+   (from `core.cinna_api`; a connection made on the platform has no slot, so
+   pass its id from `credentials/README.md`), then
+   `api.file_capability_request(title, need, ...)`.
    Anywhere else: `POST <base_url>/_cinna/improvement-requests` with the same
    bearer (a cloud entry also carries the URL as `improvement_requests_url`).
    Limits: 10 a day per API, 30 a day overall; a 429 carries `Retry-After`.

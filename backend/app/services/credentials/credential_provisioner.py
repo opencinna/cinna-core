@@ -525,27 +525,304 @@ class CredentialProvisioner:
         for credential in candidates:
             if credential.id in claimed:
                 continue
-            link = session.get(
-                AgentCredentialLink,
-                {"agent_id": agent.id, "credential_id": credential.id},
-            )
-            if link is None:
-                continue
-            session.delete(link)
-            session.flush()
-            changed = True
-
-            still_linked = session.exec(
-                select(AgentCredentialLink).where(
-                    AgentCredentialLink.credential_id == credential.id
-                )
-            ).first()
-            if still_linked is None and credential.is_placeholder:
-                session.delete(credential)
-                session.flush()
+            if CredentialProvisioner._drop_placeholder_link(
+                session, agent_id=agent.id, credential=credential
+            ):
+                changed = True
         return changed
 
     # ── Bundle policy ────────────────────────────────────────────────────
+
+    @staticmethod
+    def reprovision_bundle_update(
+        session: Session,
+        *,
+        agent: Agent,
+        specs: list[ParsedCredentialSpec],
+        publisher: PublisherBoundary | None,
+    ) -> ProvisionReport:
+        """Re-run bundle provisioning for an update, without duplicating slots.
+
+        Install runs :meth:`provision` once on an agent with no links; an
+        update runs on an agent that already answers most specs. Per spec,
+        an answer is a linked credential whose id is the spec's
+        ``publisher_credential_id`` or whose name is the spec name or
+        ``"<name> (placeholder)"`` (the naming install uses); a user/template
+        spec answered by neither also accepts any linked credential of its
+        type that no other spec claims (an unrecorded install-form pick).
+
+        - publisher spec: kept when the publisher credential or a credential
+          the installer filled in is linked (by name, or an unclaimed filled
+          credential of the spec type). Otherwise the trust predicate is
+          re-run (§2.3): when the publisher may provide it now, it is shared
+          and linked and the spec's placeholder is dropped; when not, a
+          placeholder (``publisher_unavailable``) is created unless one is
+          linked already.
+        - user / template spec: kept when answered; otherwise provisioned as
+          on install (template or placeholder). A new spec in the revision
+          therefore gets its slot.
+
+        Nothing the installer linked themselves is unlinked. Flushes, never
+        commits.
+        """
+        report = ProvisionReport()
+        linked = CredentialProvisioner._linked_credentials(session, agent.id)
+        answers: dict[int, list[Credential]] = {}
+        for index, parsed in enumerate(specs):
+            answers[index] = [
+                credential
+                for credential in linked
+                if CredentialProvisioner._answers_bundle_spec(parsed, credential)
+            ]
+        claimed = {
+            credential.id for answered in answers.values() for credential in answered
+        }
+
+        def unclaimed_of_type(parsed: ParsedCredentialSpec) -> Credential | None:
+            return next(
+                (
+                    credential
+                    for credential in linked
+                    if credential.id not in claimed
+                    and not credential.is_placeholder
+                    and credential_type_value(credential) == parsed.type
+                ),
+                None,
+            )
+
+        unanswered: list[ParsedCredentialSpec] = []
+        for index, parsed in enumerate(specs):
+            answered = answers[index]
+            if (
+                parsed.provided_by == "publisher"
+                and parsed.publisher_credential_id is not None
+            ):
+                # A filled credential of the spec type that no spec claims by
+                # id or name is the installer's own answer (e.g. the degraded
+                # placeholder, filled in and renamed): keep it, link nothing.
+                if not answered and (own := unclaimed_of_type(parsed)) is not None:
+                    claimed.add(own.id)
+                    continue
+                CredentialProvisioner._reprovision_publisher_spec(
+                    session,
+                    agent=agent,
+                    parsed=parsed,
+                    answered=answered,
+                    publisher=publisher,
+                    report=report,
+                )
+                continue
+            if answered:
+                continue
+            pick = next(
+                (
+                    credential
+                    for credential in linked
+                    if credential.id not in claimed
+                    and credential_type_value(credential) == parsed.type
+                ),
+                None,
+            )
+            if pick is not None:
+                # Claimed, so a later publisher spec of the same type cannot
+                # take it as its own answer and leave its slot empty.
+                claimed.add(pick.id)
+                continue
+            unanswered.append(parsed)
+
+        if unanswered:
+            CredentialProvisioner._provision_bundle_specs(
+                session,
+                agent=agent,
+                specs=unanswered,
+                publisher=publisher,
+                policy=BUNDLE_INSTALL_POLICY,
+                user_selections=None,
+                report=report,
+            )
+        return report
+
+    @staticmethod
+    def _reprovision_publisher_spec(
+        session: Session,
+        *,
+        agent: Agent,
+        parsed: ParsedCredentialSpec,
+        answered: list[Credential],
+        publisher: PublisherBoundary | None,
+        report: ProvisionReport,
+    ) -> None:
+        """The publisher-spec half of :meth:`reprovision_bundle_update`."""
+        publisher_credential_id = parsed.publisher_credential_id
+        if publisher_credential_id is None or any(
+            credential.id == publisher_credential_id or not credential.is_placeholder
+            for credential in answered
+        ):
+            return
+        publisher_cred = CredentialProvisioner._usable_publisher_credential(
+            session,
+            agent=agent,
+            credential_id=publisher_credential_id,
+            spec_name=parsed.name,
+            publisher=publisher,
+            log=True,
+        )
+        if publisher_cred is not None:
+            CredentialProvisioner._share_and_link_publisher_credential(
+                session,
+                agent=agent,
+                publisher_cred=publisher_cred,
+                policy=BUNDLE_INSTALL_POLICY,
+                sharer_id=CredentialProvisioner._sharer_id(publisher_cred, publisher),
+            )
+            for placeholder in answered:
+                if placeholder.owner_id != agent.owner_id:
+                    continue
+                CredentialProvisioner._drop_placeholder_link(
+                    session, agent_id=agent.id, credential=placeholder
+                )
+            report.changed = True
+            report.items.append(
+                CredentialProvisioner._slot_item(
+                    parsed,
+                    slot=parsed.service_uri,
+                    outcome="linked_publisher",
+                    credential_id=publisher_cred.id,
+                )
+            )
+            return
+
+        report.degraded = True
+        if answered:
+            return
+        cred_type = CredentialProvisioner._slot_credential_type(parsed, log=True)
+        if cred_type is None:
+            return
+        placeholder = CredentialProvisioner._create_placeholder(
+            session,
+            agent=agent,
+            parsed=parsed,
+            cred_type=cred_type,
+            policy=BUNDLE_INSTALL_POLICY,
+        )
+        CredentialProvisioner._ensure_link(session, agent.id, placeholder.id)
+        report.changed = True
+        report.items.append(
+            CredentialProvisioner._slot_item(
+                parsed,
+                slot=parsed.service_uri,
+                outcome="publisher_unavailable",
+                credential_id=placeholder.id,
+            )
+        )
+
+    @staticmethod
+    def placeholder_released_publisher_slots(
+        session: Session, *, agent: Agent, credential_id: uuid.UUID
+    ) -> bool:
+        """Give a bundle install a placeholder for each publisher spec whose
+        credential was just unlinked from it by a revocation or release.
+
+        Mirrors the install-time ``publisher_unavailable`` degrade, so the
+        agent and its Credentials tab show the slot as needing a credential
+        instead of silently missing it. The next update re-runs the trust
+        predicate and swaps the placeholder for the publisher's credential
+        when it may be provided again. Skips a spec already answered by a
+        linked credential (no double placeholders). Agents that are not
+        bundle installs — and the publisher's own working copy, which
+        authors the spec — are untouched. Flushes, never commits; returns
+        whether a placeholder was linked.
+        """
+        if (
+            agent.bundle_uuid is None
+            or agent.installed_revision_id is None
+            or agent.is_publisher_install
+        ):
+            return False
+        revision = session.get(AgentBundleRevision, agent.installed_revision_id)
+        if revision is None:
+            return False
+        specs = [
+            parsed
+            for raw in revision.required_credential_specs or []
+            if (parsed := parse_credential_spec(raw)) is not None
+            and parsed.provided_by == "publisher"
+            and parsed.publisher_credential_id == credential_id
+        ]
+        if not specs:
+            return False
+        linked = CredentialProvisioner._linked_credentials(session, agent.id)
+        changed = False
+        for parsed in specs:
+            if any(
+                CredentialProvisioner._answers_bundle_spec(parsed, credential)
+                for credential in linked
+            ):
+                continue
+            cred_type = CredentialProvisioner._slot_credential_type(parsed, log=True)
+            if cred_type is None:
+                continue
+            placeholder = CredentialProvisioner._create_placeholder(
+                session,
+                agent=agent,
+                parsed=parsed,
+                cred_type=cred_type,
+                policy=BUNDLE_INSTALL_POLICY,
+            )
+            CredentialProvisioner._ensure_link(session, agent.id, placeholder.id)
+            linked.append(placeholder)
+            changed = True
+            logger.info(
+                "Bundle install %s lost publisher credential %s for spec '%s' — "
+                "linked placeholder %s",
+                agent.id,
+                credential_id,
+                parsed.name,
+                placeholder.id,
+            )
+        return changed
+
+    @staticmethod
+    def _answers_bundle_spec(
+        parsed: ParsedCredentialSpec, credential: Credential
+    ) -> bool:
+        """Whether a linked credential answers a bundle spec by id or name
+        (rules a and b of :func:`bundle_claimed_credential_ids`)."""
+        if (
+            parsed.publisher_credential_id is not None
+            and credential.id == parsed.publisher_credential_id
+        ):
+            return True
+        return credential.name in {parsed.name, f"{parsed.name} (placeholder)"}
+
+    @staticmethod
+    def _drop_placeholder_link(
+        session: Session, *, agent_id: uuid.UUID, credential: Credential
+    ) -> bool:
+        """Unlink a placeholder from an agent; delete it once nothing links it.
+
+        Only an unfilled placeholder is touched. Returns whether a link was
+        removed. Flushes, never commits.
+        """
+        if not credential.is_placeholder:
+            return False
+        link = session.get(
+            AgentCredentialLink,
+            {"agent_id": agent_id, "credential_id": credential.id},
+        )
+        if link is None:
+            return False
+        session.delete(link)
+        session.flush()
+        still_linked = session.exec(
+            select(AgentCredentialLink).where(
+                AgentCredentialLink.credential_id == credential.id
+            )
+        ).first()
+        if still_linked is None:
+            session.delete(credential)
+            session.flush()
+        return True
 
     @staticmethod
     def _provision_bundle_specs(

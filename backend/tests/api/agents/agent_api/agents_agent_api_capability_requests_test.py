@@ -10,7 +10,8 @@ Test scenarios:
      the caller's own GET, the owner's inbox (kind/title), closing note back to the
      caller, archive without ``session/``
   2. Issued (EXTERNAL) key: identity is the key's subject, a forged header is ignored
-  3. Validation: 413 oversize, 422 extra field / short title
+  3. Validation: 413 oversize, 422 extra field / short title / object example,
+     with a detail that lists the errors and the accepted body shape
   4. Rate limits: 10 per producer (429 + Retry-After), 30 per caller overall
   5. Secret scrubbing of caller-authored text
   6. Forged ``agent_id`` claim for another user's agent is not attributed
@@ -209,6 +210,23 @@ def test_invalid_payloads_are_refused(
 
     extra = client.post(requests_url(pid), headers=c["headers"], json=valid_body(bogus="x"))
     assert extra.status_code == 422
+    # A raw-HTTP caller gets the errors AND the accepted body shape.
+    detail = extra.json()["detail"]
+    assert "Unknown keys are rejected" in detail["message"]
+    assert any(err["loc"] == ["bogus"] for err in detail["errors"])
+    assert set(detail["expected"]) == {
+        "title", "need", "proposed_endpoint", "example_request",
+        "example_response", "spec_version_seen",
+    }
+    assert "response_fields" in detail["expected"]["proposed_endpoint"]
+    assert "not an object" in detail["expected"]["example_request"]
+
+    as_object = client.post(
+        requests_url(pid), headers=c["headers"],
+        json=valid_body(example_request={"q": 1}),
+    )
+    assert as_object.status_code == 422
+    assert any(err["loc"] == ["example_request"] for err in as_object.json()["detail"]["errors"])
 
     short = client.post(requests_url(pid), headers=c["headers"], json=valid_body(title="ab"))
     assert short.status_code == 422

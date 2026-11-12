@@ -263,10 +263,68 @@ class TestAgentApiSessionConstruction:
         with pytest.raises(ValueError, match="not 'agent_api'"):
             credentials_module.credentials.agent_api_session("billing")
 
-    def test_missing_slot_raises_credential_missing(self, tmp_path, monkeypatch):
+    def test_missing_slot_raises_credential_missing_naming_the_id_form(
+        self, tmp_path, monkeypatch
+    ):
         _write_credentials(tmp_path, monkeypatch, [])
-        with pytest.raises(credentials_module.CredentialMissing):
+        with pytest.raises(credentials_module.CredentialMissing) as missing:
             credentials_module.credentials.agent_api_session("erp-public-api")
+        assert missing.value.reason == "not_linked"
+        assert "agent_api_session('<credential id>')" in str(missing.value)
+        clone = pickle.loads(pickle.dumps(missing.value))
+        assert str(clone) == str(missing.value)
+
+    def test_slotless_connection_is_reached_by_credential_id(self, tmp_path, monkeypatch):
+        entries = [
+            {
+                "id": "conn-uuid", "type": "agent_api", "service_uri": None,
+                "is_placeholder": False,
+                "credential_data": {"base_url": "https://x/api", "token": "t-conn"},
+            },
+        ]
+        _write_credentials(tmp_path, monkeypatch, entries)
+        session = credentials_module.credentials.agent_api_session("conn-uuid")
+        assert session.base_url == "https://x/api"
+        assert session.headers["Authorization"] == "Bearer t-conn"
+        # The slot-only accessors keep their contract: an id is not a slot.
+        assert credentials_module.credentials.by_slot("conn-uuid") is None
+        with pytest.raises(credentials_module.CredentialMissing):
+            credentials_module.credentials.require_slot("conn-uuid")
+
+    def test_slot_match_wins_over_id_match(self, tmp_path, monkeypatch):
+        entries = [
+            {
+                "id": "erp", "type": "agent_api", "service_uri": None,
+                "is_placeholder": False,
+                "credential_data": {"base_url": "https://by-id", "token": "t-id"},
+            },
+            {
+                "id": "2", "type": "agent_api", "service_uri": "erp",
+                "is_placeholder": False,
+                "credential_data": {"base_url": "https://by-slot", "token": "t-slot"},
+            },
+        ]
+        _write_credentials(tmp_path, monkeypatch, entries)
+        session = credentials_module.credentials.agent_api_session("erp")
+        assert session.base_url == "https://by-slot"
+
+    def test_id_lookup_keeps_unavailable_and_type_checks(self, tmp_path, monkeypatch):
+        entries = [
+            {
+                "id": "paused", "type": "agent_api", "is_placeholder": False,
+                "unavailable_reason": "key_paused", "credential_data": {},
+            },
+            {"id": "other", "type": "api_token", "is_placeholder": False},
+            {"id": "owner_identity", "type": OWNER_IDENTITY_TYPE, "credential_data": {}},
+        ]
+        _write_credentials(tmp_path, monkeypatch, entries)
+        with pytest.raises(credentials_module.CredentialMissing) as missing:
+            credentials_module.credentials.agent_api_session("paused")
+        assert missing.value.reason == "key_paused"
+        with pytest.raises(ValueError, match="not 'agent_api'"):
+            credentials_module.credentials.agent_api_session("other")
+        with pytest.raises(credentials_module.CredentialMissing):
+            credentials_module.credentials.agent_api_session("owner_identity")
 
 
 # ---------------------------------------------------------------------------

@@ -256,6 +256,21 @@ def set_update_mode(
     return r.json()
 
 
+def apply_install_update(
+    client: TestClient,
+    headers: dict[str, str],
+    agent_id: str,
+) -> dict:
+    """Apply the bundle's latest revision via POST /agents/{id}/apply-update.
+
+    Drains tasks (the update may re-sync credentials) and returns the agent.
+    """
+    r = client.post(f"{API}/agents/{agent_id}/apply-update", headers=headers)
+    assert r.status_code == 200, r.text
+    drain_tasks()
+    return r.json()
+
+
 # ── Bundle-auto-update sweep bookkeeping — documented DB seams ────────────
 #
 # InstallService.sweep_automatic_updates (bundle_auto_update_and_install_ux

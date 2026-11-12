@@ -82,16 +82,25 @@ class CredentialMissing(Exception):
     for an issued ``agent_api`` key the platform synced without its token,
     ``"key_revoked"``, ``"key_expired"`` or ``"key_paused"`` — then
     ``key_status`` carries the detailed status (e.g. ``"revoked_by_issuer"``).
-    ``str(exc)`` is stable and written for a person: relay it verbatim.
+    ``accepts_id`` marks a lookup that also accepted a credential id (see
+    :meth:`_Credentials.agent_api_session`); the ``not_linked`` message then
+    says so. ``str(exc)`` is stable and written for a person: relay it verbatim.
     """
 
-    def __init__(self, slot: str, reason: str, key_status: str | None = None):
+    def __init__(
+        self,
+        slot: str,
+        reason: str,
+        key_status: str | None = None,
+        accepts_id: bool = False,
+    ):
         # ``args`` must be the constructor arguments so the exception
         # round-trips through pickle; ``__str__`` builds the message.
-        super().__init__(slot, reason, key_status)
+        super().__init__(slot, reason, key_status, accepts_id)
         self.slot = slot
         self.reason = reason
         self.key_status = key_status
+        self.accepts_id = accepts_id
 
     def __str__(self) -> str:
         if self.reason in _UNAVAILABLE_REASON_WORDS:
@@ -114,11 +123,18 @@ class CredentialMissing(Exception):
                 "linked but not filled in yet. Fix: open the agent's Credentials "
                 "tab and complete it."
             )
-        return (
+        message = (
             f"credential_missing: no credential for slot '{self.slot}' is linked "
             "to this agent. Fix: open the agent's Credentials tab and link a "
             f"credential whose service URI (slot) is '{self.slot}'."
         )
+        if self.accepts_id:
+            message += (
+                " An agent_api connection without a slot is reached by its "
+                "credential id instead: agent_api_session('<credential id>'), "
+                "with the id from credentials/README.md."
+            )
+        return message
 
 
 _REFRESH_ERROR_MESSAGES = {
@@ -187,6 +203,11 @@ def _response_detail(response: Any) -> str:
         detail = response.json().get("detail")
     except Exception:  # noqa: BLE001 — not JSON / not an object
         detail = None
+    expected = None
+    if isinstance(detail, dict) and isinstance(detail.get("errors"), list):
+        # The 422 shape: {"message", "errors": [...], "expected": {...}}.
+        expected = detail.get("expected")
+        detail = detail["errors"]
     if isinstance(detail, list):
         parts = []
         for item in detail:
@@ -194,6 +215,8 @@ def _response_detail(response: Any) -> str:
                 loc = ".".join(str(p) for p in item.get("loc") or ())
                 parts.append(f"{loc}: {item.get('msg')}" if loc else str(item.get("msg")))
         detail = "; ".join(parts)
+    if detail and expected:
+        detail = f"{detail}. Expected body: {json.dumps(expected)}"
     return str(detail) if detail else f"HTTP {response.status_code}"
 
 
@@ -567,7 +590,10 @@ class _Credentials:
     def agent_api_session(self, slot: str) -> Any:
         """
         Return an ``AgentApiSession`` (a ``requests.Session``) for the
-        ``agent_api`` credential in ``slot`` (a connection or an issued key):
+        ``agent_api`` credential in ``slot`` (a connection or an issued key).
+        ``slot`` may also be the credential's ``id``: a slot match wins, and
+        the id is the way to reach a connection that has no slot (no
+        ``service_uri``). The session carries
         ``Authorization: Bearer <token>`` plus the caller-identity header when
         the platform provided one (an issued key's identity is bound to the key;
         the producer ignores the header for it), and ``.base_url`` /
@@ -580,10 +606,11 @@ class _Credentials:
         ``ValueError`` when the slot holds a credential of another type.
         """
         entries = self._load()
-        entry = self._require_slot_in(entries, slot)
+        entry = self._find_slot(entries, slot) or self._find_by_id(entries, slot)
+        self._raise_if_unusable(entry, slot, accepts_id=True)
         if entry.get("type") != _AGENT_API_TYPE:
             raise ValueError(
-                f"The credential for slot '{slot}' is of type "
+                f"The credential for '{slot}' is of type "
                 f"'{entry.get('type')}', not '{_AGENT_API_TYPE}'."
             )
 
@@ -628,18 +655,35 @@ class _Credentials:
                 return cred
         return unavailable or placeholder
 
+    @staticmethod
+    def _find_by_id(entries: list[dict], credential_id: str) -> dict | None:
+        """The real (non-synthetic) entry whose ``id`` is ``credential_id``."""
+        for cred in entries:
+            if cred.get("type") in _SYNTHETIC_TYPES:
+                continue
+            if cred.get("id") == credential_id:
+                return cred
+        return None
+
     @classmethod
     def _require_slot_in(cls, entries: list[dict], slot: str) -> dict:
         entry = cls._find_slot(entries, slot)
+        cls._raise_if_unusable(entry, slot)
+        return entry
+
+    @staticmethod
+    def _raise_if_unusable(
+        entry: dict | None, slot: str, accepts_id: bool = False
+    ) -> None:
+        """Raise :class:`CredentialMissing` unless ``entry`` is filled and available."""
         if entry is None:
-            raise CredentialMissing(slot, "not_linked")
+            raise CredentialMissing(slot, "not_linked", accepts_id=accepts_id)
         if entry.get("is_placeholder") is True:
             raise CredentialMissing(slot, "not_configured")
         if entry.get("unavailable_reason"):
             raise CredentialMissing(
                 slot, str(entry["unavailable_reason"]), entry.get("key_status")
             )
-        return entry
 
 
 class _PlatformUnavailable(Exception):

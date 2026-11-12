@@ -139,6 +139,7 @@ The same row, inbox, events and archive also carry a second kind of request: a *
 - **Same triage as a session request**: status `new` → `in_progress` → `completed` / `declined`, an owner resolution note visible to the requester, archive download, delete. The producer's building agent can also read and close them through the `api_requests_*` tools; the owner can hand one to a building session with **Start building session** in the detail dialog.
 - **Rate limits** (rolling 24 hours, counted in the database, soft under concurrency): 10 per caller per producer and 30 per caller overall; over the limit answers 429 with `Retry-After`. These are separate from the session limits (5 per session, 20 per user per day).
 - **Scrubbed**: every string of the caller-authored payload is run through the secret scrubber (the caller's bearer and identity token, and the consumer agent's credential secrets), not just transcript keys.
+- **Actionable validation errors**: a malformed body is refused with 422 whose `detail` is `{message, errors, expected}` (the expected body shape included), so a caller can correct and retry.
 - **No consent step**: the caller authored the text to be read by the producer's owner. There is no realtime event to the requester; they poll `capability_requests()` (SDK) or `GET .../_cinna/improvement-requests` for status.
 - **Archive** is flat (`README.md`, `request.md`, `metadata.json`, `context.json`); there is no `session/`, `prompts/` or `memory/`.
 

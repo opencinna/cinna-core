@@ -152,6 +152,8 @@ Scenario: S owns an agent API connection C and shares it with team admin T. With
 - Turning **sharing off clears** `allow_bundle_reuse`; turning sharing back on does not restore it.
 - Deleting a re-sharer's account releases their recipients (`shared_by_user_id` is `ON DELETE CASCADE`).
 - Releasing writes no revocation row, so a later install or update re-adds the share once the right is back.
+- A consumer **bundle install** that loses a publisher-provided credential this way (released re-share or an owner revoke) gets a placeholder for that slot, like an install-time degrade, instead of silently having nothing. Publisher working copies, skills and non-bundle agents are unaffected.
+- **Bundle updates re-provision.** Applying a bundle update (manual or automatic) re-checks the trust predicate and revocations for the new revision: answered slots are kept, a placeholder is upgraded when the publisher may now provide it, otherwise one `publisher_unavailable` placeholder and the update reports `degraded`. Recovery after a lost share needs a new revision (apply-update is a no-op on the latest one). Git-source updates do not provision yet. See [Agent Bundles](../agent_bundles/agent_bundles.md#applying-an-update-install-owner).
 
 **Revoking.** The owner removes any share (blocks every path). A re-sharer may remove the shares they made (`GET /credentials/{id}/reshares`, `DELETE .../shares/{share_id}`); that revocation blocks re-adding only **through that re-sharer**. An owner revocation overwrites a re-sharer's. The revoke route answers 404 (not found or wrong credential) and 403 (neither owner nor the share's re-sharer).
 
@@ -350,3 +352,4 @@ Rules:
 
 - Owner removal of a share is recorded in `credential_share_revocation`; a skill-installer share persists across skill versions; share and deletion-impact payloads list agent and local-skill usages; delete is Tier 2 for active local skill installs.
 - `/credentials` list moved from a card grid to a searchable, paged table with a counted segmented section control; editing happens on the credential page (`/credential/$id`).
+- 2026-11-12: bundle updates re-run credential provisioning; a released re-share or owner revoke leaves a bundle install with a placeholder for the lost slot.

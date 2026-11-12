@@ -296,6 +296,14 @@ class ImprovementRequestUpdate(SQLModel):
 # ── Agent-API capability requests (plan §4.1) ────────────────────────
 
 MAX_CAPABILITY_REQUEST_BODY_BYTES = 64 * 1024
+CAPABILITY_TITLE_MIN_CHARS = 3
+CAPABILITY_TITLE_MAX_CHARS = 200
+CAPABILITY_METHOD_MAX_CHARS = 10
+CAPABILITY_PATH_MAX_CHARS = 300
+CAPABILITY_MAX_PARAMS = 30
+CAPABILITY_MAX_RESPONSE_FIELDS = 50
+CAPABILITY_EXAMPLE_MAX_CHARS = 8000
+CAPABILITY_SPEC_VERSION_MAX_CHARS = 50
 
 
 class _StrictModel(BaseModel):
@@ -321,23 +329,62 @@ class CapabilityRequestResponseField(_StrictModel):
 
 
 class CapabilityRequestProposedEndpoint(_StrictModel):
-    method: str | None = PydanticField(default=None, max_length=10)
-    path: str | None = PydanticField(default=None, max_length=300)
-    params: list[CapabilityRequestParam] | None = PydanticField(default=None, max_length=30)
+    method: str | None = PydanticField(default=None, max_length=CAPABILITY_METHOD_MAX_CHARS)
+    path: str | None = PydanticField(default=None, max_length=CAPABILITY_PATH_MAX_CHARS)
+    params: list[CapabilityRequestParam] | None = PydanticField(
+        default=None, max_length=CAPABILITY_MAX_PARAMS
+    )
     response_fields: list[CapabilityRequestResponseField] | None = PydanticField(
-        default=None, max_length=50
+        default=None, max_length=CAPABILITY_MAX_RESPONSE_FIELDS
     )
 
 
 class AgentApiCapabilityRequestCreate(_StrictModel):
     """A consumer's request for a capability the producer API does not have."""
 
-    title: str = PydanticField(min_length=3, max_length=200)
+    title: str = PydanticField(
+        min_length=CAPABILITY_TITLE_MIN_CHARS, max_length=CAPABILITY_TITLE_MAX_CHARS
+    )
     need: str = PydanticField(min_length=1, max_length=MAX_COMMENT_CHARS)
     proposed_endpoint: CapabilityRequestProposedEndpoint | None = None
-    example_request: str | None = PydanticField(default=None, max_length=8000)
-    example_response: str | None = PydanticField(default=None, max_length=8000)
-    spec_version_seen: str | None = PydanticField(default=None, max_length=50)
+    example_request: str | None = PydanticField(
+        default=None, max_length=CAPABILITY_EXAMPLE_MAX_CHARS
+    )
+    example_response: str | None = PydanticField(
+        default=None, max_length=CAPABILITY_EXAMPLE_MAX_CHARS
+    )
+    spec_version_seen: str | None = PydanticField(
+        default=None, max_length=CAPABILITY_SPEC_VERSION_MAX_CHARS
+    )
+
+
+# The accepted body, summarised for a raw-HTTP caller whose POST failed
+# validation (the 422 ``detail.expected``). Keep in step with the models above.
+_EXAMPLE_SHAPE = (
+    f"string <={CAPABILITY_EXAMPLE_MAX_CHARS}, optional "
+    "(a string, e.g. JSON text; not an object)"
+)
+CAPABILITY_REQUEST_BODY_SHAPE: dict = {
+    "title": (
+        f"string, {CAPABILITY_TITLE_MIN_CHARS}-{CAPABILITY_TITLE_MAX_CHARS} chars, "
+        "required"
+    ),
+    "need": f"string, 1-{MAX_COMMENT_CHARS} chars, required",
+    "proposed_endpoint": (
+        f"optional object or null: {{method: string <={CAPABILITY_METHOD_MAX_CHARS}, "
+        f"path: string <={CAPABILITY_PATH_MAX_CHARS}, "
+        "params: [{name, in: path|query|header|body, type, description}] "
+        f"<={CAPABILITY_MAX_PARAMS}, response_fields: [{{name, type, description}}] "
+        f"<={CAPABILITY_MAX_RESPONSE_FIELDS}}}; every key optional except each "
+        "item's name"
+    ),
+    "example_request": _EXAMPLE_SHAPE,
+    "example_response": _EXAMPLE_SHAPE,
+    "spec_version_seen": (
+        f"string <={CAPABILITY_SPEC_VERSION_MAX_CHARS}, optional "
+        "(the spec's info.version)"
+    ),
+}
 
 
 class AgentApiCapabilityRequestPublic(SQLModel):

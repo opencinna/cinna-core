@@ -61,6 +61,7 @@ from app.services.credentials.credential_provisioner import (
     BUNDLE_INSTALL_POLICY,
     CredentialProvisioner,
     ProvisioningSelectionError,
+    ProvisionReport,
     PublisherBoundary,
 )
 from app.services.environments.sdk_constants import DEFAULT_SDK
@@ -1011,6 +1012,16 @@ class InstallService:
 
         was_running = env is not None and env.status == "running"
         try:
+            # Re-run credential provisioning for the new revision first (§2.3:
+            # the trust predicate is re-evaluated on every update). It reads
+            # and writes DB state only, so a failure here leaves the env
+            # running and its files untouched, and ``installed_revision_id``
+            # on the old revision so the update is retried whole. The
+            # bookkeeping commit below covers the writes; re-running is
+            # idempotent if a later step fails.
+            credentials_report = InstallService._reprovision_update_credentials(
+                session, install=install, bundle=bundle, revision=revision
+            )
             if was_running:
                 try:
                     await lifecycle.stop_environment(session, env)
@@ -1059,12 +1070,32 @@ class InstallService:
             install.refiner_prompt_updated_at = prompt_now
             install.installed_revision_id = revision.id
             install.last_sync_at = datetime.now(UTC)
-            install.last_update_status = "synced"
+            install.last_update_status = (
+                "degraded" if credentials_report.degraded else "synced"
+            )
             install.pending_update = False
             install.pending_update_at = None
             session.add(install)
             session.commit()
             session.refresh(install)
+
+            # A running env is restarted below and picks the links up on
+            # start; otherwise push them to any running env now.
+            if credentials_report.changed and not was_running:
+                try:
+                    from app.services.credentials.credentials_service import (
+                        CredentialsService,
+                    )
+
+                    await CredentialsService.sync_credentials_to_agent_environments(
+                        session=session, agent_id=install.id
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to sync credentials for install %s after "
+                        "apply-update: %s",
+                        install.id, e,
+                    )
 
             # Merge the install's schedules against the new revision.
             # Behaviorally-unchanged schedules keep the user's enable/disable
@@ -1142,6 +1173,62 @@ class InstallService:
             except Exception:
                 pass
             raise
+
+    @staticmethod
+    def _reprovision_update_credentials(
+        session: Session,
+        *,
+        install: Agent,
+        bundle: AgentBundle,
+        revision: AgentBundleRevision,
+    ) -> ProvisionReport:
+        """Provision the new revision's credential specs onto ``install``.
+
+        Same publisher boundary and policy as install
+        (:meth:`_setup_install_credentials`), but idempotent: answered slots
+        stay, a placeholder is swapped for the publisher's credential when
+        it may be provided again, new specs get their slot (see
+        :meth:`CredentialProvisioner.reprovision_bundle_update`). Flushes;
+        the caller commits. On error the session is rolled back and the
+        error re-raised so the update is marked failed.
+        """
+        if install.is_publisher_install:
+            # The publisher's working copy authors the specs; nothing to provision.
+            return ProvisionReport()
+        specs = [
+            parsed
+            for parsed in (
+                parse_credential_spec(raw_spec)
+                for raw_spec in revision.required_credential_specs or []
+            )
+            if parsed is not None
+        ]
+        try:
+            report = CredentialProvisioner.reprovision_bundle_update(
+                session,
+                agent=install,
+                specs=specs,
+                publisher=PublisherBoundary(bundle.publisher_user_id),
+            )
+        except Exception:
+            session.rollback()
+            logger.exception(
+                "Failed to provision credentials for install %s on apply-update "
+                "to revision %s",
+                install.id,
+                revision.id,
+            )
+            raise
+        if report.changed or report.degraded:
+            logger.info(
+                "Install %s credentials re-provisioned for revision %s: "
+                "outcomes=%s degraded=%s",
+                install.id,
+                revision.revision_number,
+                [item.outcome for item in report.items],
+                report.degraded,
+            )
+        return report
 
     # ── Automatic update convergence ──────────────────────────────
 

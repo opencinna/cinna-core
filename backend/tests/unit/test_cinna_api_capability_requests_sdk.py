@@ -76,6 +76,20 @@ def test_422_list_detail_is_flattened(monkeypatch):
         s.file_capability_request("A title", "A need")
 
 
+def test_422_structured_detail_lists_errors_and_expected_shape(monkeypatch):
+    detail = {
+        "message": "Invalid capability request body.",
+        "errors": [{"loc": ["bogus"], "msg": "Extra inputs are not permitted"}],
+        "expected": {"title": "string, 3-200 chars, required"},
+    }
+    s, _ = _session(monkeypatch, _Resp(422, {"detail": detail}))
+    with pytest.raises(ValueError) as ei:
+        s.file_capability_request("A title", "A need")
+    message = str(ei.value)
+    assert "bogus: Extra inputs are not permitted" in message
+    assert "Expected body:" in message and "3-200 chars" in message
+
+
 def test_429_surfaces_retry_after(monkeypatch):
     s, _ = _session(monkeypatch, _Resp(429, {"detail": "limit"}, {"Retry-After": "120"}))
     with pytest.raises(credentials_module.CapabilityRequestRateLimited) as ei:

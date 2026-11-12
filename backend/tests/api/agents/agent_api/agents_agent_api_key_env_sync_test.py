@@ -315,11 +315,15 @@ def test_active_key_and_connection_carry_improvement_requests_url_and_readme_par
         json={"consumer_agent_id": consumer["id"], "credential_label": "conn"},
     )
     assert r.status_code == 200, r.text
-    creds = _capture(lambda: _touch(client, su, r.json()["credential_id"]))
-    (conn,) = _agent_api_entries(creds)
+    conn_id = r.json()["credential_id"]
+    conn_full = _capture_full(lambda: _touch(client, su, conn_id))
+    (conn,) = _agent_api_entries(conn_full["credentials_json"])
     conn_url = conn["credential_data"]["improvement_requests_url"]
     assert urlsplit(conn_url).netloc == internal
     assert conn_url.endswith(expected_path)
+    # A connection has no slot: the README names the SDK entry by its id.
+    assert not conn.get("service_uri")
+    assert f"credentials.agent_api_session('{conn_id}')" in conn_full["credentials_readme"]
 
 
 def test_unavailable_key_has_no_improvement_requests_url(
