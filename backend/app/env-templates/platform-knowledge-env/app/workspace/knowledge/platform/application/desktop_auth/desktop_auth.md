@@ -36,7 +36,7 @@ Cinna Mobile uses the **same flow** through a parallel route namespace mounted a
 ### Connecting Cinna Desktop (first time — lazy registration)
 
 1. User opens Cinna Desktop, enters instance URL or selects "Cloud"
-2. Desktop fetches `/.well-known/cinna-desktop` to validate the instance and get metadata (`authorization_endpoint`, `token_endpoint`, `userinfo_endpoint` — RFC 8414), plus the optional `local_dev` block when this instance advertises the cinna-cli account-workspace bootstrap (see [Desktop One-Click Onboarding](../desktop_onboarding/desktop_onboarding.md))
+2. Desktop fetches `/.well-known/cinna-desktop` to validate the instance and get metadata (`authorization_endpoint`, `token_endpoint`, `userinfo_endpoint` — RFC 8414), plus the optional `local_dev` block when this instance advertises the cinna-cli account-workspace bootstrap (see [Desktop One-Click Onboarding](../desktop_onboarding/desktop_onboarding.md)) and the optional `brand_theme` entry while the admin has a [brand theme](../brand_themes/brand_themes.md) published, and the optional `voice_transcription` entry (also on `/.well-known/cinna-app`) while the [voice transcription relay](../voice_transcription/voice_transcription.md) is on and usable
 3. Desktop generates PKCE verifier and challenge, opens the browser to `/api/v1/desktop-auth/authorize?device_name=...&code_challenge=...&state=...&redirect_uri=...`
 4. The backend (public endpoint, no auth required) stores a pending consent request keyed by a random nonce, then redirects the browser to `{FRONTEND_HOST}/desktop-auth/consent?request={nonce}`
 5. The SPA consent page loads, fetches display metadata (`GET /requests/{nonce}`), and shows the user a card: "Allow **{device_name}** to sign in as **{email}**?"

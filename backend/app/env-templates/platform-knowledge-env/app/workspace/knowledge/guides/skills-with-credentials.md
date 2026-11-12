@@ -216,7 +216,11 @@ Each declared slot is resolved against the credential the publishing agent links
 for it: `publisher` (your credential, sharing on — installers use it),
 `template` (template sharing on, no secret left — installers get a copy to
 fill), or `user` (anything else — installers bring their own). `user` is a
-normal outcome. The web Share dialog shows the resolution per slot before you
+normal outcome. The credential does not have to be yours: an `agent_api`
+connection shared with you whose owner turned on **Allow re-use inside bundles**
+can be `publisher` in your own catalog skill too (installers get it through your
+skill; it is released if you lose your own access). Any other credential you do
+not own resolves to `user`. The web Share dialog shows the resolution per slot before you
 publish.
 
 For a bundle, publish a new bundle version from the publisher install instead.

@@ -29,6 +29,18 @@ Auto-generated from OpenAPI spec. Tag: `credentials`
 
 ---
 
+## GET `/api/v1/credentials/{credential_id}/reshares`
+**Get Credential Reshares**
+
+> Not available via `cinna api` (excluded_path).
+
+**Path parameters:**
+- `credential_id`: uuid
+
+**Response:** `CredentialSharesPublic`
+
+---
+
 ## DELETE `/api/v1/credentials/{credential_id}/shares/{share_id}`
 **Revoke Credential Share**
 
@@ -132,6 +144,7 @@ Auto-generated from OpenAPI spec. Tag: `credentials`
   - `allow_local_use`: boolean
   - `allow_sharing`: boolean
   - `allow_template_sharing`: boolean
+  - `allow_bundle_reuse`: boolean
   - `service_uri`: string | null
   - `mcp_mode_conversation`: boolean
   - `mcp_mode_building`: boolean
@@ -172,6 +185,7 @@ Auto-generated from OpenAPI spec. Tag: `credentials`
   - `allow_local_use`: boolean | null
   - `allow_sharing`: boolean | null
   - `allow_template_sharing`: boolean | null
+  - `allow_bundle_reuse`: boolean | null
   - `template_private_fields`: array | null
   - `service_uri`: string | null
   - `mcp_mode_conversation`: boolean | null

@@ -157,6 +157,7 @@ Auto-generated from OpenAPI spec. Tag: `installs`
   - `allow_local_use`: boolean | null
   - `allow_sharing`: boolean | null
   - `allow_template_sharing`: boolean | null
+  - `allow_bundle_reuse`: boolean | null
   - `template_private_fields`: array | null
   - `service_uri`: string | null
   - `mcp_mode_conversation`: boolean | null

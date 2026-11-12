@@ -53,6 +53,9 @@ Auto-generated from OpenAPI spec. Tag: `server-config`
   - `addons_custom_mcp`: boolean | null
   - `addons_plugin_hooks`: boolean | null
   - `addons_stdio_mcp`: boolean | null
+  - `voice_transcription_enabled`: boolean | null
+  - `voice_transcription_provider_id`: string | null
+  - `voice_transcription_monthly_minutes_per_user`: integer | null
 
 **Response:** `ServerConfig`
 

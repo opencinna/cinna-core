@@ -1,7 +1,8 @@
 ---
 feature: agent_api
 domain: agents
-one_liner: "Lets a producer agent expose a capability-narrowed REST API from its own code, so other agents or outside callers can use it as a normal credentialed API without touching its underlying secrets."
+one_liner: "Lets a producer agent expose a capability-narrowed REST API from its own code, so other agents or outside callers can use it as a normal credentialed API, and ask its owner for capabilities it lacks."
+affects: [agent_improvement_requests]
 docs:
   tech: agent_api_tech.md
   spec viewer: spec_viewer.md
@@ -228,6 +229,8 @@ All four hold at the `consumer_proxy` chokepoint and *are* the security model:
 3. **Producer reachable only via the proxy.** If a container could reach the producer's API directly it could forge `X-Cinna-Caller-*`. This invariant already holds (consumers only ever get the internal proxy origin in `credentials.json`).
 4. **Missing identity ⇒ anonymous, never an error.** (The anonymous-by-default contract above.)
 
+The identity token also carries an optional `agent_id` claim naming the calling install (minted into the synthetic `owner_identity_token` credentials entry). It is **attribution only**: the backend trusts it only when that agent exists and `agent.owner_id == sub`, otherwise it is ignored; a malformed claim is dropped without invalidating the token, and it is not forwarded to the producer. Tokens minted before the claim existed carry none and keep working. Its one consumer today is [capability requests](#capability-requests), which record it as the consumer agent.
+
 The identity token is a narrow, audience-restricted JWT (`aud="agent_api_caller"`, HS256/`SECRET_KEY`, verified backend-only) — useless as a general backend credential, so a leak is bounded to "I am owner-E" assertions on agent-api calls, and capability is still gated by the live grant.
 
 ---
@@ -265,6 +268,19 @@ Revocation is unchanged and has two granularities: revoke one installer's `Crede
 
 ---
 
+## Capability requests
+
+When a consumer finds the API cannot do what the user needs, it can ask the producer's owner to extend it. The request lands in the owner's [improvement-request inbox](../../application/agent_improvement_requests/agent_improvement_requests.md#capability-requests-kind--agent_api) (kind `agent_api`) and is worked on by the producer's building agent.
+
+- **Reserved routes.** `POST /api/v1/agent-api/{agent_id}/_cinna/improvement-requests` files one (title, need, optional proposed endpoint, example request/response, `spec_version_seen`); `GET` on the same path lists the caller's own requests with their status and resolution note. The whole `_cinna/` prefix is platform-owned: other paths and wrong methods answer 404/405 after token validation, **never reach the producer and never wake its environment**, and are not subject to `policy.yaml`. A producer route under `/_cinna/` is shadowed.
+- **Identity required.** Callers acting as a person only: an issued key's bound subject, or a connection with a verified identity token. An anonymous caller gets 401. The identity token's `agent_id` claim, when valid, records the consumer agent.
+- **Limits.** Body up to 64 KiB (413), strict field validation (422), and per caller 10 requests per producer and 30 overall over a rolling 24 hours (429 + `Retry-After`; a soft limit, concurrent requests can overshoot slightly).
+- **Consumer side.** The SDK session returned by `credentials.agent_api_session(slot)` gains `file_capability_request(title, need, ...)` and `capability_requests()`; `CapabilityRequestRateLimited` (a `ValueError` with `retry_after`) is raised on 429. The `agent_api` entry of `credentials.json` carries a derived `improvement_requests_url`, and the generated credentials README tells the agent to draft the request, show it to the user and submit only after confirmation. Once a request is `completed` the consumer re-reads the spec before using the new capability.
+- **Producer side.** In building mode, on an agent with an `agent_api/` workspace folder, the `cinna` MCP server offers `api_requests_list`, `api_requests_get` and `api_requests_update_status`; the building agent follows the REST API building guide, then closes the request. The owner can also start such a session from the request's detail dialog (**Start building session**).
+- **Rebuild needed.** The SDK helpers, tools and URL field live in `/app/core`, so existing environments must be rebuilt to get them.
+
+---
+
 ## Cross-User Sharing via `CredentialShare`
 
 `agent_api` credentials support all three sharing modes (user / publisher / template) by riding the existing `CredentialShare` pipeline. Because the thing shared is the **narrowed proxy** (`{base_url, token}`) and not the upstream secret, cross-user sharing is safe by construction:
@@ -274,6 +290,10 @@ Revocation is unchanged and has two granularities: revoke one installer's `Crede
 - Recipient links it to their agent; it syncs into their container.
 - Revoking access: revoke the `CredentialShare` (cuts that recipient) **or** delete the connection credential (deletes the token → cuts everyone using it).
 
+
+### Re-sharing a connection through a bundle
+
+An owner of a shared connection can also allow the people it is shared with to embed it, as publisher-provided, in bundles and skills **they** publish (**Allow re-use inside bundles**, connections only, requires sharing; see [Credential Sharing](../agent_credentials/credential_sharing.md#re-use-inside-bundles-re-sharing)). Installers of such a package then get the connection through the re-sharer's package while the credential stays owned, and revocable, by its owner. Re-sharing is one level only (owner, re-sharer, installer), and restricted issued keys (external keys) are never re-usable.
 
 **Steering for producer owners (connections only).** `agent_api` connections stay shareable because they are anonymous and narrowed. But sharing a connection is *not* how an owner gives a person access to their producer with an identity and scopes. When the viewer of an `agent_api` connection's Sharing card **owns the producer**, the card points to the producer's API access surface ("Give API access") instead, where an issued key (owned by the recipient, never shareable) plus a scope grant is the right mechanism. Issued keys themselves are never shareable.
 
@@ -424,7 +444,7 @@ A producer's owner viewing an `agent_api` connection sees a pointer to "Give API
 
 - **[A2A Access Tokens](../../application/a2a_integration/a2a_access_tokens/a2a_access_tokens.md)** — `agent_api_token` mirrors the A2A token security model (opaque value, SHA256 hash at rest, prefix, `last_used`). Unlike A2A tokens, `agent_api` tokens are not JWTs, never expire, and are not created or revoked directly — they live and die with their connection credential.
 
-- **[Agent Credentials / Whitelist / Sharing](../agent_credentials/agent_credentials.md)** — new `AGENT_API` credential type rides the entire pipeline: credential sync to containers, whitelist (`base_url`, `spec_url`, `token`, `label`, `producer_agent_id` allowed), redaction (`token` appears as `***REDACTED***` in `README.md`), and `CredentialShare` for cross-user access. The caller-identity feature adds a second synthetic credentials.json entry (`owner_identity_token`) alongside `current_user` — see [Current User Context](../agent_credentials/agent_credentials.md#current-user-context).
+- **[Agent Credentials / Whitelist / Sharing](../agent_credentials/agent_credentials.md)** — new `AGENT_API` credential type rides the entire pipeline: credential sync to containers, whitelist (`base_url`, `spec_url`, `token`, `label`, `producer_agent_id`, `improvement_requests_url` allowed), redaction (`token` appears as `***REDACTED***` in `README.md`), and `CredentialShare` for cross-user access. The caller-identity feature adds a second synthetic credentials.json entry (`owner_identity_token`) alongside `current_user` — see [Current User Context](../agent_credentials/agent_credentials.md#current-user-context).
 
 - **[Agent Environment Core](../agent_environment_core/agent_environment_core.md)** — new `cinna_api` SDK package, supervised uvicorn child, and env-core HTTP routes live in the container. The lazy child supervision pattern mirrors the OpenCode child supervision (`opencode_sdk_adapter.py`).
 
@@ -451,6 +471,8 @@ Accepted trade-offs with this model:
 
 **Per-install token isolation** (minting a distinct token per installer, enabling per-install rate limits and independent revocation) remains future work.
 
+A bundle's publisher need not own the connection: a recipient it was shared with may provide it when the owner allowed re-use inside bundles (the "Publishing will fail" / `blocked_reason` states of the Credential provisioning panel explain a refusal).
+
 For bundles that need per-user authority on top of the shared connection, pair the PBP connection credential with a PBU per-user `api_token` second credential stamped with a `service_uri` slot id. The install-time matcher auto-suggests the correct pre-shared per-user token even when its name differs from the spec. See [Credential Sharing — `service_uri` Slot ID](../agent_credentials/credential_sharing.md#service_uri-slot-id-and-the-per-user-token-pattern) for the full two-credential pattern and ordering constraint.
 
 ### Caller-identity `/introspect` endpoint — Deferred
@@ -474,6 +496,8 @@ Plan item 10 proposed an optional producer-facing `/introspect` endpoint (an OAu
 
 - **2026-10-07 — Issued keys.** "External Keys / Acts as" replaced by **Issued keys**: recipient-owned credential, soft revoke, seven-value status vocabulary, recipient rotation with a 5-minute grace, env sync only to the recipient's own agents (token-less with `unavailable_reason` when not active), opt-in Desktop delivery, default slot `<producer-slug>-api`, per-person API access surface, steering on connection sharing.
 
+- **2026-11-12 — Capability requests and bundle re-use.** Callers of a producer's API can file capability requests through the reserved `/_cinna/improvement-requests` route (limits, SDK helpers, producer env tools); the identity token gained an attribution-only `agent_id` claim; a shared connection can be re-used in recipients' bundles (see Credential Sharing).
+
 ---
 
-*Last updated: 2026-10-07*
+*Last updated: 2026-11-12*

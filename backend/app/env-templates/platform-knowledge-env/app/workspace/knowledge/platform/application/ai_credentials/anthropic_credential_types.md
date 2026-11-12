@@ -54,9 +54,9 @@ Accept Anthropic credentials with automatic detection, appropriate environment v
 
 1. User opens Settings > AI Credentials
 2. Credentials with expiry dates show their state on the row:
-   - Expired (< 0 days): red "Expired" badge
-   - Expiring soon (≤ 60 days): "Expires in N days" badge
-   - Later (> 60 days): no badge, "Expires <date>" in the row's secondary text
+   - Expired (< 0 days): red status dot (tooltip "Expired")
+   - Expiring soon (≤ 60 days): amber status dot ("Expires in N days" tooltip)
+   - Later (> 60 days): no dot, "Expires <date>" in the row's secondary text
 3. Hover shows tooltip with exact date and days remaining; expired or ≤ 30-day credentials sort right after the default one on the card
 
 ### Updating API Key to OAuth Token (discouraged)
@@ -97,7 +97,7 @@ Container started → Agent SDK reads the populated env var
 - **AI Credentials Service** - Detection on create/update for expiry auto-set. See [AI Credentials](ai_credentials.md)
 - **Environment Lifecycle** - Detection during `.env` file generation for correct env var
 - **Frontend Dialog** - API-key hint in the Add wizard, OAuth-token warning (`AnthropicOAuthTokenWarning`) in the Add wizard and edit dialog, auto-fill expiry on OAuth token input, setup guide modal
-- **Credentials List** - Expiry badge display with color coding; `is_oauth_token` field drives UI disabling in AI Functions credential picker
+- **Credentials List** - Expiry status dot (red/amber); `is_oauth_token` field drives UI disabling in AI Functions credential picker
 - **AI Functions SDK Routing** - OAuth tokens rejected for use with AI utility functions. See [AI Functions SDK Routing](ai_functions_sdk_routing.md)
 - **Model Discovery** - OAuth tokens are skipped by the discovery cron (`sk-ant-oat*` prefix detected, `"oauth_token_unsupported"` recorded). Model health for these environments uses static fallback only. See [Model Freshness Tech](../../agents/agent_environments/model_freshness_tech.md)
 

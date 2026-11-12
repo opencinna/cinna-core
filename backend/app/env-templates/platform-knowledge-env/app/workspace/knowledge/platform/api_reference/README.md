@@ -24,7 +24,8 @@ Routes marked *Not available via `cinna api`* are refused by the account CLI esc
 | Admin Routing | [admin_routing.md](./admin_routing.md) | 6 |
 | Admin User Groups | [admin_user_groups.md](./admin_user_groups.md) | 13 |
 | Agent Api | [agent_api.md](./agent_api.md) | 18 |
-| Agent Api Public | [agent_api_public.md](./agent_api_public.md) | 1 |
+| Agent Api Public | [agent_api_public.md](./agent_api_public.md) | 3 |
+| Agent Api Requests | [agent_api_requests.md](./agent_api_requests.md) | 3 |
 | Agent Artifacts | [agent_artifacts.md](./agent_artifacts.md) | 1 |
 | Agent Credentials | [agent_credentials.md](./agent_credentials.md) | 1 |
 | Agent Dashboards | [agent_dashboards.md](./agent_dashboards.md) | 2 |
@@ -39,10 +40,11 @@ Routes marked *Not available via `cinna api`* are refused by the account CLI esc
 | App Data | [app_data.md](./app_data.md) | 3 |
 | Artifact Links | [artifact_links.md](./artifact_links.md) | 2 |
 | Artifacts | [artifacts.md](./artifacts.md) | 14 |
+| Brand Theme | [brand_theme.md](./brand_theme.md) | 8 |
 | Bundles | [bundles.md](./bundles.md) | 9 |
 | Catalog | [catalog.md](./catalog.md) | 14 |
 | Cli | [cli.md](./cli.md) | 69 |
-| Credentials | [credentials.md](./credentials.md) | 26 |
+| Credentials | [credentials.md](./credentials.md) | 27 |
 | Desktop Auth | [desktop_auth.md](./desktop_auth.md) | 9 |
 | Desktop Download | [desktop_download.md](./desktop_download.md) | 1 |
 | Environments | [environments.md](./environments.md) | 17 |
@@ -78,6 +80,7 @@ Routes marked *Not available via `cinna api`* are refused by the account CLI esc
 | User Groups | [user_groups.md](./user_groups.md) | 1 |
 | User Workspaces | [user_workspaces.md](./user_workspaces.md) | 5 |
 | Users | [users.md](./users.md) | 27 |
+| Voice Transcription | [voice_transcription.md](./voice_transcription.md) | 4 |
 | Webapp | [webapp.md](./webapp.md) | 4 |
 | Webapp Chat | [webapp_chat.md](./webapp_chat.md) | 6 |
 | Webapp Interface Config | [webapp_interface_config.md](./webapp_interface_config.md) | 2 |
