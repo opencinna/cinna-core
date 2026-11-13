@@ -227,6 +227,121 @@ def test_create_reuses_the_pending_credential_of_the_same_type(
     assert fresh.json()["credential_id"] != cid
 
 
+def _create_uri(client, dh, service_uri, type_="gmail_oauth"):
+    with google_oauth_configured():
+        return client.post(OAUTH_URL, headers=dh, json={"type": type_, "service_uri": service_uri})
+
+
+def test_create_without_service_uri_echoes_null_and_lists_it(client: TestClient) -> None:
+    _, uh = create_random_user_with_headers(client)
+    dh, _ = desktop_session(client, uh)
+
+    absent = _create(client, dh, "gmail_oauth")
+    assert absent.status_code == 201, absent.text
+    body = absent.json()
+    assert set(body) >= {"credential_id", "authorization_url", "expires_at", "service_uri"}
+    assert body["service_uri"] is None
+    assert _item(client, dh, body["credential_id"])["service_uri"] is None
+
+
+def test_create_with_service_uri_echoes_and_lists_it(client: TestClient) -> None:
+    _, uh = create_random_user_with_headers(client)
+    dh, _ = desktop_session(client, uh)
+
+    r = _create_uri(client, dh, "gmail")
+    assert r.status_code == 201, r.text
+    assert r.json()["service_uri"] == "gmail"
+    cid = r.json()["credential_id"]
+    assert _item(client, dh, cid)["service_uri"] == "gmail"
+    listed = client.get(f"{API}/credentials/", headers=uh).json()["data"]
+    assert next(c for c in listed if c["id"] == cid)["service_uri"] == "gmail"
+
+
+def test_service_uri_is_stripped_and_blank_becomes_null(client: TestClient) -> None:
+    _, uh = create_random_user_with_headers(client)
+    dh, _ = desktop_session(client, uh)
+
+    padded = _create_uri(client, dh, "  gmail  ")
+    assert padded.status_code == 201, padded.text
+    assert padded.json()["service_uri"] == "gmail"
+    # Stripped value matches the pending record for reuse
+    again = _create_uri(client, dh, "gmail")
+    assert again.json()["credential_id"] == padded.json()["credential_id"]
+
+    _, uh2 = create_random_user_with_headers(client)
+    dh2, _ = desktop_session(client, uh2)
+    blank = _create_uri(client, dh2, "   ")
+    assert blank.status_code == 201, blank.text
+    assert blank.json()["service_uri"] is None
+    assert _item(client, dh2, blank.json()["credential_id"])["service_uri"] is None
+    # Blank behaves as null: reuses the null pending record
+    plain = _create(client, dh2, "gmail_oauth")
+    assert plain.json()["credential_id"] == blank.json()["credential_id"]
+
+
+def test_pending_reuse_requires_equal_service_uri(client: TestClient) -> None:
+    """
+    1. Same type + same service_uri while pending returns the same credential
+    2. null vs "gmail" (both directions) and "gmail" vs "calendar" create new ones
+    3. Each pending record is still reused by its own service_uri
+    """
+    _, uh = create_random_user_with_headers(client)
+    dh, _ = desktop_session(client, uh)
+
+    gmail = _create_uri(client, dh, "gmail")
+    assert gmail.status_code == 201, gmail.text
+    gid = gmail.json()["credential_id"]
+    same = _create_uri(client, dh, "gmail")
+    assert same.json()["credential_id"] == gid
+    assert same.json()["service_uri"] == "gmail"
+
+    plain = _create(client, dh, "gmail_oauth")
+    assert plain.status_code == 201, plain.text
+    nid = plain.json()["credential_id"]
+    assert nid != gid
+    assert plain.json()["service_uri"] is None
+
+    calendar = _create_uri(client, dh, "calendar")
+    cal_id = calendar.json()["credential_id"]
+    assert cal_id not in (gid, nid)
+    assert calendar.json()["service_uri"] == "calendar"
+
+    # null record was not adopted by a later "gmail" ask, and stays null
+    assert _item(client, dh, nid)["service_uri"] is None
+    assert _create_uri(client, dh, "gmail").json()["credential_id"] == gid
+    assert _create(client, dh, "gmail_oauth").json()["credential_id"] == nid
+    assert _create_uri(client, dh, "calendar").json()["credential_id"] == cal_id
+
+
+def test_null_pending_record_is_not_adopted_by_a_service_uri_request(
+    client: TestClient,
+) -> None:
+    _, uh = create_random_user_with_headers(client)
+    dh, _ = desktop_session(client, uh)
+
+    plain = _create(client, dh, "gmail_oauth")
+    asked = _create_uri(client, dh, "gmail")
+    assert asked.json()["credential_id"] != plain.json()["credential_id"]
+    assert _item(client, dh, plain.json()["credential_id"])["service_uri"] is None
+
+
+def test_reauthorize_response_carries_service_uri(client: TestClient) -> None:
+    _, uh = create_random_user_with_headers(client)
+    dh, _ = desktop_session(client, uh)
+
+    r = _create_uri(client, dh, "gmail")
+    cid = r.json()["credential_id"]
+    with google_oauth_configured():
+        re = client.post(f"{DESKTOP_CREDENTIALS_URL}/{cid}/oauth/authorize", headers=dh)
+    assert re.status_code == 200, re.text
+    assert re.json()["service_uri"] == "gmail"
+
+    plain = _create(client, dh, "gmail_oauth_readonly").json()["credential_id"]
+    with google_oauth_configured():
+        re2 = client.post(f"{DESKTOP_CREDENTIALS_URL}/{plain}/oauth/authorize", headers=dh)
+    assert re2.json()["service_uri"] is None
+
+
 def test_create_refusals_non_google_type_and_unconfigured_google(client: TestClient) -> None:
     _, uh = create_random_user_with_headers(client)
     dh, _ = desktop_session(client, uh)

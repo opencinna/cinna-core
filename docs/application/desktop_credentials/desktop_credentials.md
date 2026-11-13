@@ -158,7 +158,7 @@ on a local agent, without Core ever handing out the refresh token.
 
 - **Create / reconnect / token.** `POST /api/v1/external/credentials/oauth` (201) creates an owned
   credential of a Google type (Default workspace, `allow_local_use=true`) and returns
-  `{credential_id, authorization_url, expires_at}`; `POST /api/v1/external/credentials/{id}/oauth/authorize`
+  `{credential_id, authorization_url, expires_at, service_uri}`; `POST /api/v1/external/credentials/{id}/oauth/authorize`
   starts a new authorization for one the caller **owns**; `POST /api/v1/external/credentials/{id}/access-token`
   returns a Google access token valid for `min_ttl` seconds. All three need a live, interactive,
   non-CLI-exchanged Desktop client. Errors carry `detail = {"code", "message"}`: `unsupported_type`
@@ -171,7 +171,13 @@ on a local agent, without Core ever handing out the refresh token.
 - **Create reuses a pending credential.** If the caller already owns a never-authorized credential
   of the same type (Default workspace, local use allowed, not a placeholder, no token stored), create
   returns a new authorization for it instead of adding another empty one, and applies a new `name`
-  if given. When several match, the most recently updated wins. There is no lock, so two truly
+  if given. When several match, the most recently updated wins.
+- **Optional `service_uri`.** Create accepts an optional `service_uri` (stripped; empty or whitespace
+  becomes none) so a credential made from Desktop's Finish setup "Authorize" button can fill a strict
+  slot matched by (type, `service_uri`). Reuse only adopts a pending credential whose `service_uri`
+  matches exactly (none matches only none); a pending credential without one is never re-slotted, since
+  an earlier slot-less request may still be polling it. Both create and re-authorize echo the record's
+  `service_uri` in the response; Desktop reads its presence to know the Core honours the field. There is no lock, so two truly
   concurrent creates can still produce two credentials.
 - **Local use is on by default for these.** A credential created from Desktop gets
   `allow_local_use=true`. This is a deliberate product choice: the user is creating it precisely to
@@ -254,6 +260,8 @@ Cinna Desktop (interactive session)
   for a refused credential.
 
 ## Changelog
+
+- Desktop OAuth create accepts an optional `service_uri` and echoes it; pending reuse requires an exact `service_uri` match.
 
 - A credential shared with a user group counts as a direct share for local copy (needs `allow_local_use`; a copied value is not recalled when the member leaves the group). See [User Groups](../user_groups/user_groups.md).
 

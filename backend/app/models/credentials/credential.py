@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional
 from sqlmodel import Field, Relationship, SQLModel, Column, Text
 from sqlalchemy import Index, ForeignKeyConstraint, text
 from sqlalchemy.dialects.postgresql import JSON as PG_JSON
@@ -36,6 +36,18 @@ class CredentialType(str, Enum):
     # collected into a per-mode MCP-server manifest and injected directly into the
     # SDK runtime config (see collect_mcp_provider_manifest).
     MCP_PROVIDER = "mcp_provider"
+
+
+def normalize_service_uri(value: Any) -> Any:
+    """Strip a ``service_uri`` (slot id); empty or whitespace-only becomes None.
+
+    The column is free-form text: the slot matchers compare it by equality, so
+    the only rule is that surrounding whitespace never counts and an empty
+    value means "no slot".
+    """
+    if isinstance(value, str):
+        return value.strip() or None
+    return value
 
 
 # Shared properties for credentials

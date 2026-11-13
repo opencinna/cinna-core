@@ -13,7 +13,7 @@ from typing import Any, Literal
 from pydantic import field_validator
 from sqlmodel import Field, SQLModel
 
-from app.models.credentials.credential import CredentialType
+from app.models.credentials.credential import CredentialType, normalize_service_uri
 
 DesktopCredentialRelation = Literal["owned", "shared"]
 DesktopOAuthStatus = Literal["pending_authorization", "ready", "reauth_required"]
@@ -129,6 +129,15 @@ class DesktopOAuthCredentialCreate(SQLModel):
     type: CredentialType
     # Defaults to the type's display name ("Gmail", "Google Drive (read-only)", ...).
     name: str | None = Field(default=None, min_length=1, max_length=255)
+    # The slot the credential fills (``Credential.service_uri``). Absent, empty
+    # or whitespace-only means none. A pending record is reused only when its
+    # service_uri equals this one (null matches only null).
+    service_uri: str | None = None
+
+    @field_validator("service_uri", mode="before")
+    @classmethod
+    def _normalize_service_uri(cls, value: Any) -> Any:
+        return normalize_service_uri(value)
 
     @field_validator("name", mode="before")
     @classmethod
@@ -146,3 +155,6 @@ class DesktopOAuthAuthorizeResponse(SQLModel):
     authorization_url: str
     # Epoch seconds when the authorization state expires (the poll window).
     expires_at: int
+    # The record's service_uri after create/reuse (null when it has none).
+    # Its presence tells the client the server honours ``service_uri``.
+    service_uri: str | None = None

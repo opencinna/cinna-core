@@ -22084,6 +22084,17 @@ export const DesktopOAuthAuthorizeResponseSchema = {
         expires_at: {
             type: 'integer',
             title: 'Expires At'
+        },
+        service_uri: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Service Uri'
         }
     },
     type: 'object',
@@ -22172,6 +22183,17 @@ export const DesktopOAuthCredentialCreateSchema = {
                 }
             ],
             title: 'Name'
+        },
+        service_uri: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Service Uri'
         }
     },
     type: 'object',
@@ -32717,8 +32739,9 @@ export const PublishSettingsUpdateSchema = {
     title: 'PublishSettingsUpdate',
     description: `Body of \`\`PATCH /agents/{agent_id}/publish-settings\`\`.
 
-Only the publisher install (\`\`is_publisher_install=True\`\`) can hold
-publish settings. Fields are partial — omitting a top-level key
+Only an agent that can publish holds publish settings: the publisher
+install, or a never-published agent (\`\`bundle_uuid\`\` None) whose first
+publish reads them. A foreign install is rejected with 400. Fields are partial — omitting a top-level key
 preserves the existing value; sending it (even as empty) replaces it.
 
 - \`\`credential_overrides\`\`: per-spec \`\`provided_by\`\` map. Keys must

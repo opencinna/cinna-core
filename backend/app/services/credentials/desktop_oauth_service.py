@@ -130,7 +130,7 @@ class DesktopOAuthService:
         _require_oauth_configured()
 
         credential = DesktopOAuthService._find_pending_credential(
-            session, user.id, body.type
+            session, user.id, body.type, body.service_uri
         )
         created = credential is None
         if credential is None:
@@ -140,6 +140,7 @@ class DesktopOAuthService:
                     type=body.type,
                     name=body.name or default_credential_name(body.type),
                     allow_local_use=True,
+                    service_uri=body.service_uri,
                     user_workspace_id=None,
                     credential_data={},
                 ),
@@ -156,21 +157,32 @@ class DesktopOAuthService:
 
     @staticmethod
     def _find_pending_credential(
-        session: Session, owner_id: uuid.UUID, credential_type: CredentialType
+        session: Session,
+        owner_id: uuid.UUID,
+        credential_type: CredentialType,
+        service_uri: str | None,
     ) -> Credential | None:
         """The caller's never-authorized credential a desktop create would make.
 
-        Same owner and type, Default workspace, local use allowed, not a
+        Same owner, type and ``service_uri`` (null matches only null, so a
+        pending record never hands a slot-less credential to a slot request or
+        the reverse), Default workspace, local use allowed, not a
         placeholder, and no token stored yet (``pending_authorization``), so an
         abandoned consent does not leave a new empty credential behind each
         retry. When several match, the most recently updated wins (ties by id),
         so repeated creates keep returning the same one.
         """
+        slot_matches = (
+            Credential.service_uri.is_(None)  # type: ignore[union-attr]
+            if service_uri is None
+            else Credential.service_uri == service_uri
+        )
         candidates = session.exec(
             select(Credential)
             .where(
                 Credential.owner_id == owner_id,
                 Credential.type == credential_type,
+                slot_matches,
                 Credential.user_workspace_id.is_(None),  # type: ignore[union-attr]
                 Credential.allow_local_use.is_(True),  # type: ignore[attr-defined]
                 Credential.is_placeholder.is_(False),  # type: ignore[attr-defined]
@@ -243,6 +255,7 @@ class DesktopOAuthService:
             credential_id=credential.id,
             authorization_url=flow["authorization_url"],
             expires_at=flow["expires_at"],
+            service_uri=credential.service_uri,
         )
 
     @staticmethod

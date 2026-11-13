@@ -128,8 +128,11 @@
 All use `_desktop_client_id` (403 unless `kind == "desktop"`; `ensure_not_cli_exchanged_session`) and
 `_http_error` (coded `DesktopCredentialError` -> `detail={"code","message"}`).
 
-- `POST /api/v1/external/credentials/oauth` (201) — body `DesktopOAuthCredentialCreate {type, name?}`
-  -> `DesktopOAuthAuthorizeResponse {credential_id, authorization_url, expires_at}`. 422
+- `POST /api/v1/external/credentials/oauth` (201) — body `DesktopOAuthCredentialCreate {type, name?, service_uri?}`
+  (`service_uri` normalised by `normalize_service_uri` in `credential.py`: strip, empty -> null; desktop
+  model only, ordinary credential create/update unchanged)
+  -> `DesktopOAuthAuthorizeResponse {credential_id, authorization_url, expires_at, service_uri}`
+  (the record's value after create/reuse; `/{id}/oauth/authorize` returns it too). 422
   `unsupported_type`, 503 `oauth_not_configured`.
 - `POST /api/v1/external/credentials/{credential_id}/oauth/authorize` — owner only; 404
   `credential_not_found`, 422, 503.
@@ -143,7 +146,8 @@ All use `_desktop_client_id` (403 unless `kind == "desktop"`; `ensure_not_cli_ex
 
 `DesktopOAuthService` (`desktop_oauth_service.py`): `create_oauth_credential`,
 `_find_pending_credential` (same owner/type, `user_workspace_id IS NULL`, `allow_local_use`, not
-placeholder, decrypted `oauth_status == pending_authorization`; ordered `updated_at desc, id desc`;
+placeholder, `service_uri` equal to the requested one (null matches only null), decrypted
+`oauth_status == pending_authorization`; ordered `updated_at desc, id desc`;
 no lock), `reauthorize_oauth_credential`, `_authorize` (calls `OAuthCredentialsService.initiate_oauth_flow(...,
 origin="desktop")`, logs `CREDENTIAL_OAUTH_AUTHORIZE_LOCAL`), `access_token` (rule =
 `local_access_refusal`, token via `OAuthRefreshService.issue_access_token`, audits
