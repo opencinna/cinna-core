@@ -32,7 +32,7 @@
 - `frontend/src/components/Credentials/CredentialForms/ApiTokenCredentialForm.tsx` - API token template form
 - `frontend/src/components/Credentials/CredentialForms/OAuthCredentialForm.tsx` - OAuth flow handler
 - `frontend/src/components/Credentials/CredentialFields/OAuthCredentialFields.tsx` - Unified OAuth UI for all 8 OAuth types (grant button, metadata display)
-- `frontend/src/routes/credentials/oauth/callback.tsx` - OAuth callback handler route
+- `frontend/src/routes/credentials/oauth/callback.tsx` - OAuth callback handler route (desktop branch hands back via `cinna://oauth-done`, see [Desktop Credentials](../../application/desktop_credentials/desktop_credentials_tech.md))
 
 ### Tests
 - `backend/tests/api/credentials/test_credentials.py` - Credential CRUD tests

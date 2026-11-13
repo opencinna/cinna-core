@@ -14,6 +14,7 @@
     "test:acp:ui": "node --test tests/acpConnectors.test.mjs",
     "test:artifacts:e2e": "node --test tests/e2e/artifacts.e2e.mjs",
     "test:desktop-download:ui": "node --test tests/desktopDownloadSection.test.mjs",
+    "test:oauth-callback:ui": "node --test tests/oauthCallback.test.mjs",
     "test:skill-links:ui": "node --test tests/skillLink.test.mjs",
     "test:brand-theme:ui": "node --test tests/brandTheme.test.mjs",
     "test:brand-theme:admin:ui": "node --test tests/brandThemeAdmin.test.mjs"

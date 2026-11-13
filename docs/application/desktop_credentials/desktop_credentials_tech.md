@@ -44,6 +44,11 @@
 - `frontend/src/routes/credentials/oauth/callback.tsx` — callback page; picks the desktop vs web
   terminal view from the response `origin` or the `desktop.` state prefix (so Google `?error=` still
   works), shows `owner_email_masked`.
+  Desktop branch only: on success a ref-guarded one-shot `window.location` navigation to
+  `cinna://oauth-done?credential_id=${encodeURIComponent(id)}`, plus an `<a href>` "Open Cinna Desktop"
+  button to the same link (user-gesture fallback); on failure no auto-navigation, the button targets
+  `cinna://oauth-done?status=error`. Test: `frontend/tests/oauthCallback.test.mjs`
+  (`npm run test:oauth-callback:ui`, Vite + Playwright harness).
 - `frontend/src/components/Credentials/CredentialSharing.tsx` — the "Allow use on recipients'
   computers" `Switch`, gated on `allowSharing && isLocallyDeliverableCredentialType(credential.type)`;
   its mutation calls `CredentialsService.updateCredential({ requestBody: { allow_local_use } })`.

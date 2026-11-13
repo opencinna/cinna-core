@@ -4,6 +4,7 @@ import { Check, Loader2, X } from "lucide-react"
 import { type ReactNode, useEffect, useRef } from "react"
 import { z } from "zod"
 import { CredentialsService } from "@/client"
+import { Button } from "@/components/ui/button"
 import { getErrorMessage } from "@/utils"
 
 // Schema for query parameters
@@ -24,7 +25,12 @@ export const Route = createFileRoute("/credentials/oauth/callback")({
  * backend is never called. On success the response's `origin` is
  * authoritative. A desktop flow runs in the system browser: the tab cannot
  * close itself and there is no web session to redirect into, so the page is
- * the end state.
+ * the end state. It hands the user back to the app through the `cinna://`
+ * deep link: once automatically on success, and as an "Open Cinna Desktop"
+ * link on every terminal desktop view (a click is a user gesture for
+ * browsers that block a scripted custom-scheme navigation). The link carries
+ * nothing secret; the desktop only treats it as a nudge to come to the front
+ * and re-read its credential list.
  *
  * The generated client sends the signed-in user's token when there is one;
  * the backend then refuses a state started by a different Cinna account.
@@ -32,6 +38,11 @@ export const Route = createFileRoute("/credentials/oauth/callback")({
  */
 const DESKTOP_STATE_PREFIX = "desktop."
 const RETURN_TO_DESKTOP = "Return to Cinna Desktop and try again."
+
+const DESKTOP_DONE_LINK = "cinna://oauth-done"
+const desktopSuccessLink = (credentialId: string) =>
+  `${DESKTOP_DONE_LINK}?credential_id=${encodeURIComponent(credentialId)}`
+const DESKTOP_ERROR_LINK = `${DESKTOP_DONE_LINK}?status=error`
 
 function googleErrorMessage(code: string): string {
   return code === "access_denied"
@@ -137,6 +148,21 @@ function OAuthCallback() {
     }
   }, [])
 
+  // Hand the browser back to the desktop once, on success only. A failure
+  // leaves the user on the page to read why; its link is a click away.
+  const desktopSuccess =
+    callbackMutation.isSuccess &&
+    (callbackMutation.data.origin === "desktop" || stateIsDesktop)
+  const successLink = desktopSuccess
+    ? desktopSuccessLink(callbackMutation.data.credential_id)
+    : null
+  const openedDesktopRef = useRef(false)
+  useEffect(() => {
+    if (!successLink || openedDesktopRef.current) return
+    openedDesktopRef.current = true
+    window.location.href = successLink
+  }, [successLink])
+
   const webFollowUp = window.opener
     ? "You can close this window now."
     : "Redirecting..."
@@ -149,6 +175,7 @@ function OAuthCallback() {
       <FailureBlock
         title="Authorization cancelled"
         lines={[googleErrorMessage(search.error), RETURN_TO_DESKTOP]}
+        desktopLink={DESKTOP_ERROR_LINK}
       />
     ) : (
       <FailureBlock
@@ -163,6 +190,7 @@ function OAuthCallback() {
         <FailureBlock
           title="Authorization failed"
           lines={["The authorization link is incomplete.", RETURN_TO_DESKTOP]}
+          desktopLink={DESKTOP_ERROR_LINK}
         />
       )
     }
@@ -177,14 +205,13 @@ function OAuthCallback() {
       </>
     )
   } else if (callbackMutation.isSuccess) {
-    const { data } = callbackMutation
-    const desktop = data.origin === "desktop" || stateIsDesktop
-    const account = data.owner_email_masked ?? null
-    content = desktop ? (
+    const account = callbackMutation.data.owner_email_masked ?? null
+    content = successLink ? (
       <SuccessBlock
         title="Connected"
         account={account}
-        line="You can return to Cinna Desktop and close this tab."
+        line="You can close this tab."
+        desktopLink={successLink}
       />
     ) : (
       <SuccessBlock
@@ -199,6 +226,7 @@ function OAuthCallback() {
       <FailureBlock
         title="Authorization failed"
         lines={[message, stateIsDesktop ? RETURN_TO_DESKTOP : webFollowUp]}
+        desktopLink={stateIsDesktop ? DESKTOP_ERROR_LINK : undefined}
       />
     )
   }
@@ -219,10 +247,12 @@ function SuccessBlock({
   title,
   line,
   account,
+  desktopLink,
 }: {
   title: string
   line: string
   account: string | null
+  desktopLink?: string
 }) {
   return (
     <>
@@ -236,12 +266,21 @@ function SuccessBlock({
           <span className="font-medium">{account}</span>
         </p>
       )}
+      {desktopLink && <OpenDesktopLink href={desktopLink} />}
       <p className="text-sm text-muted-foreground">{line}</p>
     </>
   )
 }
 
-function FailureBlock({ title, lines }: { title: string; lines: string[] }) {
+function FailureBlock({
+  title,
+  lines,
+  desktopLink,
+}: {
+  title: string
+  lines: string[]
+  desktopLink?: string
+}) {
   return (
     <>
       <div className="h-8 w-8 rounded-full bg-destructive/15 flex items-center justify-center mx-auto">
@@ -253,6 +292,15 @@ function FailureBlock({ title, lines }: { title: string; lines: string[] }) {
           {line}
         </p>
       ))}
+      {desktopLink && <OpenDesktopLink href={desktopLink} />}
     </>
+  )
+}
+
+function OpenDesktopLink({ href }: { href: string }) {
+  return (
+    <Button asChild>
+      <a href={href}>Open Cinna Desktop</a>
+    </Button>
   )
 }

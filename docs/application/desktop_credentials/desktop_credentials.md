@@ -179,6 +179,13 @@ on a local agent, without Core ever handing out the refresh token.
   an earlier slot-less request may still be polling it. Both create and re-authorize echo the record's
   `service_uri` in the response; Desktop reads its presence to know the Core honours the field. There is no lock, so two truly
   concurrent creates can still produce two credentials.
+- **Browser hands back to Desktop.** On the desktop branch of the callback page, success navigates
+  once to `cinna://oauth-done?credential_id=<id>` (URL-encoded) and still shows "Connected", an
+  "Open Cinna Desktop" button (a plain link, so a click works where browsers block a scripted
+  custom-scheme jump) and "You can close this tab." Failure or cancel (Google `?error=`, incomplete
+  link, callback error) never navigates automatically; the same button points at
+  `cinna://oauth-done?status=error` beside the existing failure text. The link carries nothing secret:
+  Desktop only comes to the front and re-reads the credential list from Core. Web branch unchanged.
 - **Local use is on by default for these.** A credential created from Desktop gets
   `allow_local_use=true`. This is a deliberate product choice: the user is creating it precisely to
   use it on their computer. The consequence is that it pre-consents local copy for anyone the
@@ -261,6 +268,7 @@ Cinna Desktop (interactive session)
 
 ## Changelog
 
+- The OAuth callback page's desktop branch opens `cinna://oauth-done` (credential id on success, `status=error` otherwise) with an Open Cinna Desktop button.
 - Desktop OAuth create accepts an optional `service_uri` and echoes it; pending reuse requires an exact `service_uri` match.
 
 - A credential shared with a user group counts as a direct share for local copy (needs `allow_local_use`; a copied value is not recalled when the member leaves the group). See [User Groups](../user_groups/user_groups.md).
