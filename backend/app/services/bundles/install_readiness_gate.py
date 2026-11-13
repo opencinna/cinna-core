@@ -27,10 +27,13 @@ The install links the installer's own AI credential in its place and runs, so
 nothing is missing and the gate stays out of the way — see the note at the
 unshareable branch in ``_scan_publisher_ai``.
 
-The gate is purely a read-side helper. It DOES NOT mutate state, write
-events, or persist anything. Callers are responsible for: persisting a
-synthesised system-message reply, emitting WS events, and short-circuiting
-their channel-specific message dispatch.
+The gate's verdict (``check`` / ``missing_for``) is read-only: it DOES NOT
+mutate state, write events, or persist anything. Callers of ``check`` are
+responsible for: persisting a synthesised system-message reply, emitting WS
+events, and short-circuiting their channel-specific message dispatch.
+:meth:`InstallReadinessGate.emit_setup_completed_if_ready` is the one helper
+here that emits an event (``INSTALL_SETUP_COMPLETED``, best-effort) after a
+caller has filled a credential.
 
 See ``docs/drafts/install-experience-redesign_plan.md`` §6 (gate shape)
 and §9 (security) for the full spec.
@@ -120,6 +123,37 @@ class InstallReadinessGate:
             setup_url=setup_url,
             user_message=user_message,
         )
+
+    @staticmethod
+    async def emit_setup_completed_if_ready(
+        session: Session, install: Agent, credential_id: uuid.UUID
+    ) -> None:
+        """Emit ``INSTALL_SETUP_COMPLETED`` when ``install`` is now ready.
+
+        Called after a credential linked to the install was filled, so the
+        install page can hide its setup banner without polling. Best-effort:
+        failures are logged, never raised.
+        """
+        try:
+            result = InstallReadinessGate.check(session, install)
+            if result.status == "ready":
+                from app.models.events.event import EventType
+                from app.services.events.event_service import event_service
+
+                await event_service.emit_event(
+                    event_type=EventType.INSTALL_SETUP_COMPLETED,
+                    model_id=install.id,
+                    user_id=install.owner_id,
+                    meta={
+                        "agent_id": str(install.id),
+                        "credential_id": str(credential_id),
+                    },
+                )
+        except Exception as e:  # pragma: no cover — diagnostic-only path
+            logger.warning(
+                "Failed to emit INSTALL_SETUP_COMPLETED for install %s: %s",
+                install.id, e,
+            )
 
     @staticmethod
     def missing_for(session: Session, install: Agent) -> list[GateMissingItem]:

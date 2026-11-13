@@ -1,23 +1,45 @@
+import logging
 import uuid
-from typing import Any, Literal
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from sqlmodel import select
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from app.api.deps import CurrentUser, OptionalCurrentUser, SessionDep
-from app.models import Credential
+from app.core.app_schemes import is_mobile_return_scheme
+from app.models import Agent, Credential
+from app.models.credentials.credential_oauth_state import CredentialOAuthOrigin
+from app.services.bundles.install_readiness_gate import InstallReadinessGate
 from app.services.credentials.oauth_credentials_service import OAuthCredentialsService
 from app.services.credentials.credentials_service import CredentialsService
 
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 
 # Request/Response models for OAuth endpoints
+class OAuthAuthorizeRequest(BaseModel):
+    # Cinna Mobile app scheme the callback page hands the browser back to
+    # (``cinna-mobile`` or ``cinna-mobile-<suffix>``). Its presence marks a
+    # mobile-started flow.
+    return_scheme: str = Field(max_length=64)
+
+    @field_validator("return_scheme")
+    @classmethod
+    def _validate_return_scheme(cls, v: str) -> str:
+        if not is_mobile_return_scheme(v):
+            raise ValueError("return_scheme must be a Cinna Mobile app scheme")
+        return v
+
+
 class OAuthAuthorizeResponse(BaseModel):
     authorization_url: str
     state: str
+    # Expiry of the pending state, epoch seconds.
+    expires_at: int | None = None
 
 
 class OAuthCallbackRequest(BaseModel):
@@ -29,7 +51,7 @@ class OAuthCallbackResponse(BaseModel):
     credential_id: uuid.UUID
     message: str
     # Where the flow was started; the SPA picks its terminal view from it.
-    origin: Literal["web", "desktop"] = "web"
+    origin: CredentialOAuthOrigin = "web"
     # Masked email of the Cinna account that owns the credential
     # ("ev•••@example.com"), so a user who completed someone else's
     # authorization link notices the account is not theirs.
@@ -56,12 +78,15 @@ def oauth_authorize(
     session: SessionDep,
     current_user: CurrentUser,
     credential_id: uuid.UUID,
+    body: OAuthAuthorizeRequest | None = None,
 ) -> Any:
     """
     Initiate OAuth flow for a credential.
 
     Returns authorization URL and state token for OAuth flow.
-    Only the credential owner can initiate OAuth.
+    Only the credential owner can initiate OAuth. With a body carrying
+    ``return_scheme`` (Cinna Mobile), the flow is mobile-started and the
+    callback page returns the browser to that app scheme.
     """
     # Verify credential exists and user owns it
     # Credentials are always private - only owner can access
@@ -73,14 +98,24 @@ def oauth_authorize(
 
     try:
         # Initiate OAuth flow using service
-        result = OAuthCredentialsService.initiate_oauth_flow(
-            session=session,
-            credential_id=credential_id,
-            user_id=current_user.id
-        )
+        if body is not None:
+            result = OAuthCredentialsService.initiate_oauth_flow(
+                session=session,
+                credential_id=credential_id,
+                user_id=current_user.id,
+                origin="mobile",
+                return_scheme=body.return_scheme,
+            )
+        else:
+            result = OAuthCredentialsService.initiate_oauth_flow(
+                session=session,
+                credential_id=credential_id,
+                user_id=current_user.id
+            )
         return OAuthAuthorizeResponse(
             authorization_url=result["authorization_url"],
-            state=result["state"]
+            state=result["state"],
+            expires_at=result.get("expires_at"),
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -119,6 +154,9 @@ async def oauth_callback(
             credential_id=credential.id
         )
 
+        if result.placeholder_cleared:
+            await _emit_setup_completed_for_installs(session, credential)
+
         return OAuthCallbackResponse(
             credential_id=credential.id,
             message="OAuth authorization successful",
@@ -129,6 +167,35 @@ async def oauth_callback(
         raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"OAuth callback failed: {str(e)}")
+
+
+async def _emit_setup_completed_for_installs(
+    session: SessionDep, credential: Credential
+) -> None:
+    """Notify each of the owner's bundle installs linked to ``credential`` that is now ready.
+
+    Mirrors the setup-credential fill path. The gate helper swallows its own
+    errors, so a stored grant never turns into a failed callback.
+    """
+    try:
+        agent_ids = CredentialsService.get_affected_agents(session, credential.id)
+        for agent_id in agent_ids:
+            agent = session.get(Agent, agent_id)
+            # Only bundle installs have a setup banner; plain agents are skipped.
+            if (
+                agent is None
+                or agent.owner_id != credential.owner_id
+                or agent.bundle_uuid is None
+            ):
+                continue
+            await InstallReadinessGate.emit_setup_completed_if_ready(
+                session, agent, credential.id
+            )
+    except Exception as e:  # pragma: no cover — diagnostic-only path
+        logger.warning(
+            "Failed to emit setup-completed after OAuth for credential %s: %s",
+            credential.id, e,
+        )
 
 
 @router.get("/{credential_id}/oauth/metadata", response_model=OAuthMetadataResponse)

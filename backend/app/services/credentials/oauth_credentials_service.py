@@ -20,6 +20,7 @@ from fastapi import HTTPException
 
 from app.core.config import settings
 from app.core import security
+from app.core.app_schemes import is_mobile_return_scheme
 from app.models import Credential, User
 from app.models.credentials.credential_oauth_state import (
     CredentialOAuthOrigin,
@@ -56,6 +57,10 @@ OAUTH_STATE_TTL_SECONDS = 600
 # Prefix of a state started from Cinna Desktop. The SPA callback page reads it
 # to pick its terminal view even when Google redirects back with ``?error=``.
 DESKTOP_STATE_PREFIX = "desktop."
+# Prefix of a state started from Cinna Mobile: ``mobile.<scheme>.<token>``. The
+# SPA reads the app's return scheme from it; the whole string is hashed, so the
+# scheme cannot be swapped without invalidating the state.
+MOBILE_STATE_PREFIX = "mobile."
 
 
 def _hash_state(state: str) -> str:
@@ -74,6 +79,8 @@ class OAuthCallbackResult:
     credential: Credential
     origin: CredentialOAuthOrigin
     owner_email_masked: str | None
+    # True when this callback filled a placeholder credential (flag cleared).
+    placeholder_cleared: bool = False
 
 
 def mask_email(email: str | None) -> str | None:
@@ -182,19 +189,22 @@ class OAuthCredentialsService:
         credential_id: uuid.UUID,
         user_id: uuid.UUID,
         origin: CredentialOAuthOrigin = "web",
+        return_scheme: str | None = None,
     ) -> dict[str, Any]:
         """
         Initiate OAuth flow for a credential.
 
         Stores a single-use state (hashed) in ``credential_oauth_state`` and
         builds the Google authorization URL. Desktop-started states carry the
-        ``DESKTOP_STATE_PREFIX``.
+        ``DESKTOP_STATE_PREFIX``; mobile-started states are
+        ``mobile.<return_scheme>.<token>``.
 
         Args:
             session: Database session
             credential_id: Credential ID to authorize
             user_id: User ID initiating the flow (for ownership verification)
-            origin: "web" (credential settings page) or "desktop"
+            origin: "web" (credential settings page), "desktop" or "mobile"
+            return_scheme: Cinna Mobile app scheme; required for "mobile"
 
         Returns:
             ``{"authorization_url", "state", "expires_at"}`` (``expires_at`` =
@@ -202,8 +212,12 @@ class OAuthCredentialsService:
 
         Raises:
             HTTPException: If Google OAuth is not configured
-            ValueError: If credential type is not OAuth-compatible
+            ValueError: If credential type is not OAuth-compatible, or the
+                mobile return scheme is invalid
         """
+        if origin == "mobile" and not is_mobile_return_scheme(return_scheme):
+            raise ValueError("Invalid return scheme")
+
         if not settings.google_oauth_enabled:
             raise HTTPException(
                 status_code=501,
@@ -229,6 +243,9 @@ class OAuthCredentialsService:
         state = secrets.token_urlsafe(32)
         if origin == "desktop":
             state = DESKTOP_STATE_PREFIX + state
+        elif origin == "mobile":
+            # token_urlsafe never contains ".", so the SPA parse is unambiguous.
+            state = f"{MOBILE_STATE_PREFIX}{return_scheme}.{state}"
         now = datetime.now(timezone.utc)
         expires_at = now + timedelta(seconds=OAUTH_STATE_TTL_SECONDS)
 
@@ -299,7 +316,7 @@ class OAuthCredentialsService:
         return ConsumedOAuthState(
             credential_id=credential_id,
             user_id=user_id,
-            origin="desktop" if origin == "desktop" else "web",
+            origin=origin if origin in ("desktop", "mobile") else "web",
         )
 
     @staticmethod
@@ -433,6 +450,20 @@ class OAuthCredentialsService:
             # Encrypt and store credential data
             encrypted_data = security.encrypt_field(json.dumps(credential_data))
             credential.encrypted_data = encrypted_data
+
+            # Filling a placeholder: clear the flag in the same commit as the
+            # tokens, exactly like the regular credential update does.
+            from app.services.credentials.credentials_service import (
+                CredentialsService,
+            )
+
+            placeholder_cleared = False
+            if credential.is_placeholder and CredentialsService.check_credential_completeness(
+                credential.type.value, credential_data
+            ) == "complete":
+                credential.is_placeholder = False
+                placeholder_cleared = True
+
             session.add(credential)
             session.commit()
             session.refresh(credential)
@@ -444,6 +475,7 @@ class OAuthCredentialsService:
                 credential=credential,
                 origin=consumed.origin,
                 owner_email_masked=mask_email(owner.email if owner else None),
+                placeholder_cleared=placeholder_cleared,
             )
 
         except HTTPException:

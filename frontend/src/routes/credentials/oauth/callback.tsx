@@ -32,6 +32,14 @@ export const Route = createFileRoute("/credentials/oauth/callback")({
  * nothing secret; the desktop only treats it as a nudge to come to the front
  * and re-read its credential list.
  *
+ * Mobile-initiated authorizations carry `mobile.<scheme>.<token>`, where the
+ * scheme is the app's return scheme. It is read from the state (Google's
+ * `?error=` path never reaches the backend) and honoured only when it fully
+ * matches `cinna-mobile(-<suffix>)*`; anything else falls back to the plain
+ * web view, so the page never navigates to an arbitrary scheme. The views
+ * mirror the desktop ones: one automatic hand-back on success, and a
+ * "Return to Cinna" link on every terminal mobile view.
+ *
  * The generated client sends the signed-in user's token when there is one;
  * the backend then refuses a state started by a different Cinna account.
  * Success shows the owning account either way.
@@ -43,6 +51,25 @@ const DESKTOP_DONE_LINK = "cinna://oauth-done"
 const desktopSuccessLink = (credentialId: string) =>
   `${DESKTOP_DONE_LINK}?credential_id=${encodeURIComponent(credentialId)}`
 const DESKTOP_ERROR_LINK = `${DESKTOP_DONE_LINK}?status=error`
+
+const MOBILE_STATE_PREFIX = "mobile."
+const MOBILE_SCHEME_RE = /^cinna-mobile(-[a-z0-9]+)*$/
+const RETURN_TO_MOBILE = "Return to the Cinna app and try again."
+const MOBILE_LINK_LABEL = "Return to Cinna"
+
+/** The app's return scheme from a `mobile.<scheme>.<token>` state, or null. */
+function mobileReturnScheme(state?: string): string | null {
+  if (!state?.startsWith(MOBILE_STATE_PREFIX)) return null
+  const rest = state.slice(MOBILE_STATE_PREFIX.length)
+  const end = rest.indexOf(".")
+  if (end <= 0) return null
+  const scheme = rest.slice(0, end)
+  return MOBILE_SCHEME_RE.test(scheme) ? scheme : null
+}
+const mobileSuccessLink = (scheme: string, credentialId: string) =>
+  `${scheme}://oauth-done?credential_id=${encodeURIComponent(credentialId)}`
+const mobileErrorLink = (scheme: string) =>
+  `${scheme}://oauth-done?status=error`
 
 function googleErrorMessage(code: string): string {
   return code === "access_denied"
@@ -65,6 +92,7 @@ function OAuthCallback() {
   const navigate = useNavigate()
   const search = Route.useSearch()
   const stateIsDesktop = search.state?.startsWith(DESKTOP_STATE_PREFIX) ?? false
+  const mobileScheme = stateIsDesktop ? null : mobileReturnScheme(search.state)
   const hasParams = Boolean(search.code && search.state)
 
   const callbackMutation = useMutation({
@@ -76,7 +104,7 @@ function OAuthCallback() {
         },
       }),
     onSuccess: (data) => {
-      if (data.origin === "desktop" || stateIsDesktop) return
+      if (data.origin === "desktop" || stateIsDesktop || mobileScheme) return
       if (window.opener) {
         postToOpener(
           { type: "oauth_success", credentialId: data.credential_id },
@@ -87,7 +115,7 @@ function OAuthCallback() {
       }
     },
     onError: (error: Error) => {
-      if (stateIsDesktop) return
+      if (stateIsDesktop || mobileScheme) return
       if (window.opener) {
         postToOpener({ type: "oauth_error", error: error.message }, 2000)
       } else {
@@ -108,7 +136,7 @@ function OAuthCallback() {
     // Check for OAuth error from Google
     if (search.error) {
       console.error("OAuth error from Google:", search.error)
-      if (stateIsDesktop) return
+      if (stateIsDesktop || mobileScheme) return
       if (window.opener) {
         postToOpener(
           {
@@ -134,7 +162,7 @@ function OAuthCallback() {
 
     // Missing required parameters
     console.error("Missing code or state parameter")
-    if (stateIsDesktop) return
+    if (stateIsDesktop || mobileScheme) return
     if (window.opener) {
       postToOpener(
         {
@@ -148,14 +176,16 @@ function OAuthCallback() {
     }
   }, [])
 
-  // Hand the browser back to the desktop once, on success only. A failure
+  // Hand the browser back to the app once, on success only. A failure
   // leaves the user on the page to read why; its link is a click away.
   const desktopSuccess =
     callbackMutation.isSuccess &&
     (callbackMutation.data.origin === "desktop" || stateIsDesktop)
   const successLink = desktopSuccess
     ? desktopSuccessLink(callbackMutation.data.credential_id)
-    : null
+    : callbackMutation.isSuccess && mobileScheme
+      ? mobileSuccessLink(mobileScheme, callbackMutation.data.credential_id)
+      : null
   const openedDesktopRef = useRef(false)
   useEffect(() => {
     if (!successLink || openedDesktopRef.current) return
@@ -177,6 +207,13 @@ function OAuthCallback() {
         lines={[googleErrorMessage(search.error), RETURN_TO_DESKTOP]}
         desktopLink={DESKTOP_ERROR_LINK}
       />
+    ) : mobileScheme ? (
+      <FailureBlock
+        title="Authorization cancelled"
+        lines={[googleErrorMessage(search.error), RETURN_TO_MOBILE]}
+        desktopLink={mobileErrorLink(mobileScheme)}
+        linkLabel={MOBILE_LINK_LABEL}
+      />
     ) : (
       <FailureBlock
         title="Authorization cancelled"
@@ -193,6 +230,15 @@ function OAuthCallback() {
           desktopLink={DESKTOP_ERROR_LINK}
         />
       )
+    } else if (mobileScheme) {
+      content = (
+        <FailureBlock
+          title="Authorization failed"
+          lines={["The authorization link is incomplete.", RETURN_TO_MOBILE]}
+          desktopLink={mobileErrorLink(mobileScheme)}
+          linkLabel={MOBILE_LINK_LABEL}
+        />
+      )
     }
   } else if (callbackMutation.isPending) {
     content = (
@@ -206,23 +252,39 @@ function OAuthCallback() {
     )
   } else if (callbackMutation.isSuccess) {
     const account = callbackMutation.data.owner_email_masked ?? null
-    content = successLink ? (
-      <SuccessBlock
-        title="Connected"
-        account={account}
-        line="You can close this tab."
-        desktopLink={successLink}
-      />
-    ) : (
-      <SuccessBlock
-        title="Authorization successful!"
-        account={account}
-        line={webFollowUp}
-      />
-    )
+    content =
+      desktopSuccess && successLink ? (
+        <SuccessBlock
+          title="Connected"
+          account={account}
+          line="You can close this tab."
+          desktopLink={successLink}
+        />
+      ) : successLink ? (
+        <SuccessBlock
+          title="Connected"
+          account={account}
+          line="You can return to the Cinna app."
+          desktopLink={successLink}
+          linkLabel={MOBILE_LINK_LABEL}
+        />
+      ) : (
+        <SuccessBlock
+          title="Authorization successful!"
+          account={account}
+          line={webFollowUp}
+        />
+      )
   } else if (callbackMutation.isError) {
     const message = getErrorMessage(callbackMutation.error, "An error occurred")
-    content = (
+    content = mobileScheme ? (
+      <FailureBlock
+        title="Authorization failed"
+        lines={[message, RETURN_TO_MOBILE]}
+        desktopLink={mobileErrorLink(mobileScheme)}
+        linkLabel={MOBILE_LINK_LABEL}
+      />
+    ) : (
       <FailureBlock
         title="Authorization failed"
         lines={[message, stateIsDesktop ? RETURN_TO_DESKTOP : webFollowUp]}
@@ -248,11 +310,13 @@ function SuccessBlock({
   line,
   account,
   desktopLink,
+  linkLabel,
 }: {
   title: string
   line: string
   account: string | null
   desktopLink?: string
+  linkLabel?: string
 }) {
   return (
     <>
@@ -266,7 +330,7 @@ function SuccessBlock({
           <span className="font-medium">{account}</span>
         </p>
       )}
-      {desktopLink && <OpenDesktopLink href={desktopLink} />}
+      {desktopLink && <OpenDesktopLink href={desktopLink} label={linkLabel} />}
       <p className="text-sm text-muted-foreground">{line}</p>
     </>
   )
@@ -276,10 +340,12 @@ function FailureBlock({
   title,
   lines,
   desktopLink,
+  linkLabel,
 }: {
   title: string
   lines: string[]
   desktopLink?: string
+  linkLabel?: string
 }) {
   return (
     <>
@@ -292,15 +358,21 @@ function FailureBlock({
           {line}
         </p>
       ))}
-      {desktopLink && <OpenDesktopLink href={desktopLink} />}
+      {desktopLink && <OpenDesktopLink href={desktopLink} label={linkLabel} />}
     </>
   )
 }
 
-function OpenDesktopLink({ href }: { href: string }) {
+function OpenDesktopLink({
+  href,
+  label = "Open Cinna Desktop",
+}: {
+  href: string
+  label?: string
+}) {
   return (
     <Button asChild>
-      <a href={href}>Open Cinna Desktop</a>
+      <a href={href}>{label}</a>
     </Button>
   )
 }

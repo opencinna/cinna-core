@@ -38,7 +38,6 @@ from app.models.credentials.credential import (
     CredentialUpdate,
 )
 from app.models.credentials.link_models import AgentCredentialLink
-from app.models.events.event import EventType
 from app.services.agents.agent_service import AgentService
 from app.services.bundles.bundle_permissions_service import (
     BundlePermissionsService,
@@ -589,25 +588,9 @@ async def update_setup_credential(
     # Re-run the gate. If we just made the install ready, emit a WS
     # notice so the install detail page can hide its setup banner
     # without polling. Best-effort — failures are logged, not raised.
-    try:
-        result = InstallReadinessGate.check(session, install)
-        if result.status == "ready":
-            from app.services.events.event_service import event_service
-
-            await event_service.emit_event(
-                event_type=EventType.INSTALL_SETUP_COMPLETED,
-                model_id=install.id,
-                user_id=install.owner_id,
-                meta={
-                    "agent_id": str(install.id),
-                    "credential_id": str(credential_id),
-                },
-            )
-    except Exception as e:  # pragma: no cover — diagnostic-only path
-        logger.warning(
-            "Failed to emit INSTALL_SETUP_COMPLETED for install %s: %s",
-            install.id, e,
-        )
+    await InstallReadinessGate.emit_setup_completed_if_ready(
+        session, install, credential_id
+    )
 
     # Build the same CredentialPublic payload the credentials PUT route
     # returns so frontend code can reuse the existing type.

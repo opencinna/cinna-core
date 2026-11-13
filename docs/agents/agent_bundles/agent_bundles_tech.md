@@ -735,7 +735,7 @@ Detail in [Credential Sharing — Technical Details](../agent_credentials/creden
 | `INSTALL_UPDATE_APPLIED` | server → install owner | `{agent_id, bundle_id, revision_number}` | Clears banner, refreshes env |
 | `INSTALL_UPDATE_FAILED` | server → install owner | `{agent_id, bundle_id, error}` | Shows error state on banner |
 | `INSTALL_SETUP_REQUIRED` | server → install owner | `model_id = install id; meta: {agent_id, setup_url, status, missing_count}` | Emitted by any channel when the gate blocks. `SetupNeededBanner` invalidates `["agent", id, "setup-status"]` query on receipt (Phase 4) |
-| `INSTALL_SETUP_COMPLETED` | server → install owner | `model_id = install id; meta: {agent_id, credential_id}` | Emitted by `PUT /agents/{id}/setup-credentials/{cred_id}` when the gate passes after the save. `SetupNeededBanner` invalidates setup-status query; the banner hides without a page refresh (Phase 4) |
+| `INSTALL_SETUP_COMPLETED` | server → install owner | `model_id = install id; meta: {agent_id, credential_id}` | Emitted via `InstallReadinessGate.emit_setup_completed_if_ready(session, install, credential_id)` (best-effort) when the gate passes after a fill; callers: `PUT /agents/{id}/setup-credentials/{cred_id}` and the OAuth callback route when it clears a placeholder. `SetupNeededBanner` invalidates setup-status query; the banner hides without a page refresh (Phase 4) |
 | `PUBLISHER_CREDENTIAL_BROKEN` | server → install owner | `model_id = install id; meta: {agent_id, setup_url, missing_count}` | Emitted alongside `INSTALL_SETUP_REQUIRED` when the webhook gate detects `publisher_broken` status. `SetupNeededBanner` also handles this event (Phase 4) |
 
 ## React Query Keys

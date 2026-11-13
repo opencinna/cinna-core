@@ -42,7 +42,7 @@ after(async () => {
 
 /**
  * Opens the callback page at `query`, with the callback POST answered by
- * `callback` ({status, body}). Every `cinna://` navigation the page starts is
+ * `callback` ({status, body}). Every `cinna://` / `cinna-mobile*://` navigation the page starts is
  * recorded (and goes nowhere: the scheme has no handler in the test browser).
  */
 async function openCallback(t, query, callback) {
@@ -58,7 +58,7 @@ async function openCallback(t, query, callback) {
   await cdp.send("Page.enable")
   const deepLinks = []
   cdp.on("Page.frameRequestedNavigation", ({ url }) => {
-    if (url.startsWith("cinna:")) deepLinks.push(url)
+    if (/^cinna(-mobile(-[a-z0-9]+)*)?:/.test(url)) deepLinks.push(url)
   })
 
   const posts = []
@@ -158,5 +158,82 @@ test("web success neither opens the app nor offers the link", async (t) => {
   await expect.poll(() => posts.length).toBe(1)
   await page.waitForTimeout(500)
   assert.deepEqual(deepLinks, [])
+  await expect(openDesktop(page)).toHaveCount(0)
+})
+
+const MOBILE_SUCCESS_LINK = `cinna-mobile-dev://oauth-done?credential_id=${CREDENTIAL_ID}`
+const MOBILE_ERROR_LINK = "cinna-mobile-dev://oauth-done?status=error"
+const returnToCinna = (page) =>
+  page.getByRole("link", { name: "Return to Cinna" })
+
+test("mobile success opens the app once and offers the link", async (t) => {
+  const { page, deepLinks, posts } = await openCallback(
+    t,
+    "code=abc&state=mobile.cinna-mobile-dev.tok",
+    {
+      status: 200,
+      body: {
+        success: true,
+        credential_id: CREDENTIAL_ID,
+        origin: "mobile",
+        owner_email_masked: "j***@example.com",
+      },
+    },
+  )
+  await expect(page.getByText("Connected", { exact: true })).toBeVisible()
+  await expect(returnToCinna(page)).toHaveAttribute("href", MOBILE_SUCCESS_LINK)
+  await expect(
+    page.getByText("You can return to the Cinna app.", { exact: true }),
+  ).toBeVisible()
+  await expect(openDesktop(page)).toHaveCount(0)
+  await expect.poll(() => deepLinks).toEqual([MOBILE_SUCCESS_LINK])
+  await page.waitForTimeout(500)
+  assert.equal(posts.length, 1)
+  assert.deepEqual(deepLinks, [MOBILE_SUCCESS_LINK])
+})
+
+test("mobile Google cancellation offers the error link without navigating", async (t) => {
+  const { page, deepLinks, posts } = await openCallback(
+    t,
+    "error=access_denied&state=mobile.cinna-mobile-dev.tok",
+    { status: 500, body: {} },
+  )
+  await expect(page.getByText("Authorization cancelled")).toBeVisible()
+  await expect(page.getByText("Google access was not granted.")).toBeVisible()
+  await expect(returnToCinna(page)).toHaveAttribute("href", MOBILE_ERROR_LINK)
+  await page.waitForTimeout(500)
+  assert.deepEqual(deepLinks, [])
+  assert.equal(posts.length, 0)
+})
+
+test("a failed mobile callback offers the error link without navigating", async (t) => {
+  const { page, deepLinks } = await openCallback(
+    t,
+    "code=abc&state=mobile.cinna-mobile-dev.tok",
+    { status: 400, body: { detail: "Invalid or expired state" } },
+  )
+  await expect(page.getByText("Authorization failed")).toBeVisible()
+  await expect(page.getByText("Invalid or expired state")).toBeVisible()
+  await expect(
+    page.getByText("Return to the Cinna app and try again."),
+  ).toBeVisible()
+  await expect(returnToCinna(page)).toHaveAttribute("href", MOBILE_ERROR_LINK)
+  await page.waitForTimeout(500)
+  assert.deepEqual(deepLinks, [])
+})
+
+test("a mobile state with a foreign scheme falls back to the web view", async (t) => {
+  const { page, deepLinks, posts } = await openCallback(
+    t,
+    "code=abc&state=mobile.evil.tok",
+    {
+      status: 200,
+      body: { success: true, credential_id: CREDENTIAL_ID, origin: "mobile" },
+    },
+  )
+  await expect.poll(() => posts.length).toBe(1)
+  await page.waitForTimeout(500)
+  assert.deepEqual(deepLinks, [])
+  await expect(returnToCinna(page)).toHaveCount(0)
   await expect(openDesktop(page)).toHaveCount(0)
 })

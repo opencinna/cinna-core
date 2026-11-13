@@ -1189,3 +1189,127 @@ def test_gate_reports_unshared_for_shareable_credential_without_share(
         "A credential the policy still allows sharing must say 'unshared', "
         "not 'unshareable' — the two reasons must not collapse."
     )
+
+
+# ── Scenario S — OAuth callback clears the install placeholder ───────────────
+
+
+def _setup_oauth_placeholder_install(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db: Session,
+) -> tuple[dict, dict[str, str], str]:
+    """Publish a bundle with a non-shareable gmail_oauth credential; a foreign
+    user installs. Returns (install, installer_headers, placeholder_credential_id).
+    """
+    publisher_agent = create_agent_via_api(
+        client, superuser_token_headers, name="IR-S-Publisher"
+    )
+    r = client.post(
+        f"{API}/credentials/",
+        headers=superuser_token_headers,
+        json={
+            "name": "ir-s-oauth-cred",
+            "type": "gmail_oauth",
+            "notes": "OAuth placeholder test",
+            "allow_sharing": False,
+            "credential_data": {
+                "access_token": "pub-access",
+                "refresh_token": "pub-refresh",
+            },
+        },
+    )
+    assert r.status_code == 200, r.text
+    cred = r.json()
+    _link_credential_to_agent(
+        client, superuser_token_headers, publisher_agent["id"], cred["id"]
+    )
+    fresh_pub = _publish(client, superuser_token_headers, publisher_agent["id"])
+    _make_public(client, superuser_token_headers, fresh_pub["bundle_uuid"])
+
+    _, installer_headers = _make_user_and_headers(client)
+    install = _install(client, installer_headers, fresh_pub["bundle_id"])
+    db.expire_all()
+    _, placeholder = _get_placeholder_link(db, uuid.UUID(install["id"]))
+    return install, installer_headers, str(placeholder.id)
+
+
+@pytest.mark.parametrize("body", [None, {"return_scheme": "cinna-mobile-dev"}])
+def test_oauth_callback_clears_install_placeholder(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db: Session,
+    body: dict | None,
+) -> None:
+    """S. Authorize (web or mobile) + callback on the installer's placeholder
+    gmail_oauth credential: setup-status goes needs_setup -> ready."""
+    from tests.utils.oauth_credential import (
+        complete_oauth_callback,
+        google_oauth_configured,
+        state_from_url,
+    )
+
+    install, installer_headers, cred_id = _setup_oauth_placeholder_install(
+        client, superuser_token_headers, db
+    )
+    status_url = f"{API}/agents/{install['id']}/setup-status"
+
+    before = client.get(status_url, headers=installer_headers)
+    assert before.status_code == 200, before.text
+    assert before.json()["status"] == "needs_setup"
+    assert any(m["reason"] == "placeholder_empty" for m in before.json()["missing"])
+
+    with google_oauth_configured():
+        kwargs = {"json": body} if body is not None else {}
+        auth = client.post(
+            f"{API}/credentials/{cred_id}/oauth/authorize",
+            headers=installer_headers,
+            **kwargs,
+        )
+    assert auth.status_code == 200, auth.text
+    state = state_from_url(auth.json()["authorization_url"])
+
+    cb = complete_oauth_callback(client, state, headers=installer_headers)
+    assert cb.status_code == 200, cb.text
+    assert cb.json()["origin"] == ("mobile" if body else "web")
+
+    after = client.get(status_url, headers=installer_headers)
+    assert after.status_code == 200, after.text
+    assert after.json()["status"] == "ready", after.json()
+    assert after.json()["missing"] == []
+    cred = client.get(f"{API}/credentials/{cred_id}", headers=installer_headers)
+    assert cred.json()["is_placeholder"] is False
+
+
+def test_failed_oauth_exchange_leaves_install_needs_setup(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    db: Session,
+) -> None:
+    """S2. A failed code exchange leaves the placeholder and needs_setup."""
+    from tests.utils.oauth_credential import EXCHANGE_CODE, google_oauth_configured, state_from_url
+
+    install, installer_headers, cred_id = _setup_oauth_placeholder_install(
+        client, superuser_token_headers, db
+    )
+    with google_oauth_configured():
+        auth = client.post(
+            f"{API}/credentials/{cred_id}/oauth/authorize", headers=installer_headers
+        )
+    state = state_from_url(auth.json()["authorization_url"])
+
+    with (
+        google_oauth_configured(),
+        patch(EXCHANGE_CODE, new=AsyncMock(side_effect=RuntimeError("boom"))),
+    ):
+        r = client.post(
+            f"{API}/credentials/oauth/callback",
+            json={"code": "c", "state": state},
+            headers=installer_headers,
+        )
+    assert r.status_code == 400, r.text
+
+    after = client.get(
+        f"{API}/agents/{install['id']}/setup-status", headers=installer_headers
+    )
+    assert after.json()["status"] == "needs_setup"

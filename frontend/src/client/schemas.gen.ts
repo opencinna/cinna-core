@@ -31444,6 +31444,19 @@ export const NotificationSettingsPublicSchema = {
     title: 'NotificationSettingsPublic'
 } as const;
 
+export const OAuthAuthorizeRequestSchema = {
+    properties: {
+        return_scheme: {
+            type: 'string',
+            maxLength: 64,
+            title: 'Return Scheme'
+        }
+    },
+    type: 'object',
+    required: ['return_scheme'],
+    title: 'OAuthAuthorizeRequest'
+} as const;
+
 export const OAuthAuthorizeResponseSchema = {
     properties: {
         authorization_url: {
@@ -31453,6 +31466,17 @@ export const OAuthAuthorizeResponseSchema = {
         state: {
             type: 'string',
             title: 'State'
+        },
+        expires_at: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Expires At'
         }
     },
     type: 'object',
@@ -31489,7 +31513,7 @@ export const OAuthCallbackResponseSchema = {
         },
         origin: {
             type: 'string',
-            enum: ['web', 'desktop'],
+            enum: ['web', 'desktop', 'mobile'],
             title: 'Origin',
             default: 'web'
         },

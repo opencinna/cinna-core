@@ -7448,9 +7448,14 @@ export type NotificationSettingsPublic = {
     data: Array<NotificationSettingItem>;
 };
 
+export type OAuthAuthorizeRequest = {
+    return_scheme: string;
+};
+
 export type OAuthAuthorizeResponse = {
     authorization_url: string;
     state: string;
+    expires_at?: (number | null);
 };
 
 export type OAuthCallbackRequest = {
@@ -7461,11 +7466,11 @@ export type OAuthCallbackRequest = {
 export type OAuthCallbackResponse = {
     credential_id: string;
     message: string;
-    origin?: 'web' | 'desktop';
+    origin?: 'web' | 'desktop' | 'mobile';
     owner_email_masked?: (string | null);
 };
 
-export type origin = 'web' | 'desktop';
+export type origin = 'web' | 'desktop' | 'mobile';
 
 /**
  * Availability of the OAuth providers on this instance.
@@ -9749,6 +9754,8 @@ export type UserDashboardCreate = {
     description?: (string | null);
     origin?: 'web' | 'desktop';
 };
+
+export type origin2 = 'web' | 'desktop';
 
 export type UserDashboardPublic = {
     id: string;
@@ -12851,6 +12858,7 @@ export type CredentialsVerifyOdooCredentialResponse = (OdooVerifyResponse);
 
 export type CredentialsOauthAuthorizeData = {
     credentialId: string;
+    requestBody?: (OAuthAuthorizeRequest | null);
 };
 
 export type CredentialsOauthAuthorizeResponse = (OAuthAuthorizeResponse);

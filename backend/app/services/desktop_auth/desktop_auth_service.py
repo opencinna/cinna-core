@@ -17,6 +17,7 @@ from uuid import UUID, uuid4
 from fastapi import HTTPException
 from sqlmodel import Session, select
 
+from app.core.app_schemes import MOBILE_APP_SCHEME_PATTERN
 from app.core.config import settings
 from app.core.security import create_access_token
 from app.models.desktop_auth.desktop_auth_code import DesktopAuthCode
@@ -49,7 +50,7 @@ _LOCALHOST_RE = re.compile(r"^http://(localhost|127\.0\.0\.1):(\d+)(/.*)?$")
 # Mobile app's own scheme. The production build uses `cinna-mobile`; dev/preview/
 # staging builds get a hyphenated suffix (e.g. `cinna-mobile-dev`). Fixed + tied
 # to the installed app, so safe everywhere.
-_APP_SCHEME_RE = re.compile(r"^cinna-mobile(-[a-z0-9]+)*://[^\s]*$")
+_APP_SCHEME_RE = re.compile(rf"^{MOBILE_APP_SCHEME_PATTERN}://[^\s]*$")
 
 # iOS native redirect (RFC 8252 §7.1, private-use URI scheme): Apple's standard
 # is to use the app's bundle identifier as the custom URL scheme. The production

@@ -1,6 +1,6 @@
 """Pending Google OAuth authorization states for credentials (table only).
 
-One row per started authorization (web or Desktop). The raw state never
+One row per started authorization (web, Desktop or Mobile). The raw state never
 touches the database: ``state_hash`` is ``sha256(state).hexdigest()``. A row is
 consumed (deleted) exactly once by the callback; expired rows are purged
 opportunistically when a new flow starts. Never exposed through the API.
@@ -13,7 +13,7 @@ from typing import Literal
 import sqlalchemy as sa
 from sqlmodel import Field, SQLModel
 
-CredentialOAuthOrigin = Literal["web", "desktop"]
+CredentialOAuthOrigin = Literal["web", "desktop", "mobile"]
 
 
 class CredentialOAuthState(SQLModel, table=True):
@@ -27,7 +27,7 @@ class CredentialOAuthState(SQLModel, table=True):
     user_id: uuid.UUID = Field(
         foreign_key="user.id", nullable=False, ondelete="CASCADE"
     )
-    # "web" | "desktop" (CredentialOAuthOrigin); plain string, no PG enum.
+    # "web" | "desktop" | "mobile" (CredentialOAuthOrigin); plain string, no PG enum.
     origin: str = Field(max_length=16)
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(UTC),

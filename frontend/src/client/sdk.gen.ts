@@ -9923,9 +9923,12 @@ export class CredentialsService {
      * Initiate OAuth flow for a credential.
      *
      * Returns authorization URL and state token for OAuth flow.
-     * Only the credential owner can initiate OAuth.
+     * Only the credential owner can initiate OAuth. With a body carrying
+     * ``return_scheme`` (Cinna Mobile), the flow is mobile-started and the
+     * callback page returns the browser to that app scheme.
      * @param data The data for the request.
      * @param data.credentialId
+     * @param data.requestBody
      * @returns OAuthAuthorizeResponse Successful Response
      * @throws ApiError
      */
@@ -9936,6 +9939,8 @@ export class CredentialsService {
             path: {
                 credential_id: data.credentialId
             },
+            body: data.requestBody,
+            mediaType: 'application/json',
             errors: {
                 422: 'Validation Error'
             }

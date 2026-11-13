@@ -42,7 +42,7 @@
   The `Record` shape means a new backend `CredentialType` fails the frontend typecheck here until
   someone decides whether it is locally deliverable.
 - `frontend/src/routes/credentials/oauth/callback.tsx` — callback page; picks the desktop vs web
-  terminal view from the response `origin` or the `desktop.` state prefix (so Google `?error=` still
+  (or mobile, `mobile.<scheme>.` prefix, see OAuth Credentials) terminal view from the response `origin` or the `desktop.` state prefix (so Google `?error=` still
   works), shows `owner_email_masked`.
   Desktop branch only: on success a ref-guarded one-shot `window.location` navigation to
   `cinna://oauth-done?credential_id=${encodeURIComponent(id)}`, plus an `<a href>` "Open Cinna Desktop"

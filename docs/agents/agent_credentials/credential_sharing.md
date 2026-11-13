@@ -56,7 +56,7 @@ Template sharing is designed for bundle publishers who want to pre-configure par
 3. The installer is directed to `/agent/{id}/setup-credentials` — the setup page surfaces the credential via `GET /agents/{agent_id}/setup-credentials`, which returns `SetupCredentialSummary` items including:
    - `template_private_fields` — the list of fields to fill
    - `template_prefilled_data` — the non-private values already present, shown as read-only context
-4. When the installer fills in the private fields via `PUT /agents/{agent_id}/setup-credentials/{credential_id}`, `CredentialsService.update_credential` runs a completeness check: if all required fields for the credential type now pass, `is_placeholder` is flipped to `False`. The runtime gate then re-runs; if the install is ready, `INSTALL_SETUP_COMPLETED` fires over WebSocket and the setup banner clears
+4. When the installer fills in the private fields via `PUT /agents/{agent_id}/setup-credentials/{credential_id}`, `CredentialsService.update_credential` runs a completeness check: if all required fields for the credential type now pass, `is_placeholder` is flipped to `False` (the same flip happens when the owner completes Google authorization for an OAuth placeholder in `handle_oauth_callback`). The runtime gate then re-runs; if the install is ready, `INSTALL_SETUP_COMPLETED` fires over WebSocket and the setup banner clears
 
 **If the installer already owns a suitable credential:**
 
