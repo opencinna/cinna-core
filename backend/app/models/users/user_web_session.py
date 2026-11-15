@@ -8,6 +8,7 @@ sessions must not appear there.
 
 No ``Public`` variants: no API exposes these rows. Only SHA-256 hashes of the
 refresh token and the CSRF token are stored, never the plaintext.
+``WebSessionToken`` is the response of ``POST /login/session/refresh``.
 """
 import uuid
 from datetime import UTC, datetime
@@ -55,3 +56,15 @@ class UserWebRefreshToken(SQLModel, table=True):
     expires_at: datetime = Field(sa_type=DateTime(timezone=True))
     rotated_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
     created_at: datetime = Field(default_factory=_now, sa_type=DateTime(timezone=True))
+
+
+class WebSessionToken(SQLModel):
+    """Response of ``POST /login/session/refresh``: a fresh access token.
+
+    The rotated refresh token travels only in the ``cinna_refresh`` cookie.
+    """
+
+    access_token: str
+    token_type: str = "bearer"
+    # Access-token lifetime in seconds (``ACCESS_TOKEN_EXPIRE_MINUTES * 60``).
+    expires_in: int

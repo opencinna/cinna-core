@@ -52,6 +52,13 @@ def test_ws_refuses_missing_bad_and_scoped_tokens_before_accept(
             == 1008
         ), token_type
 
+    # ── A stale session version (``sv``) is refused too ──────────────
+    stale = mint_platform_token(user_id, extra_claims={"sv": 2})
+    assert (
+        expect_ws_rejected(client, STREAM_URL, {"Authorization": f"Bearer {stale}"})
+        == 1008
+    )
+
     # ── Nobody got a ledger row: the sessions never started ───────────
     # (a good token is accepted: proves the refusals above were about auth)
     with speech_ws(client, good) as ws:

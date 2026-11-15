@@ -23,7 +23,6 @@ from app.models import (
     SecurityEvent,
     User,
     UserTrustedDevice,
-    UserWebSession,
 )
 from app.models.events import security_event as security_event_constants
 
@@ -102,18 +101,15 @@ class UserSessionService:
         from app.services.desktop_auth.desktop_auth_service import (
             DesktopAuthService,
         )
+        from app.services.users.web_session_service import WebSessionService
 
         now = datetime.now(UTC)
         user.session_version = (user.session_version or 0) + 1
         session.add(user)
 
-        web_stmt = update(UserWebSession).where(
-            UserWebSession.user_id == user.id,
-            UserWebSession.revoked_at.is_(None),  # type: ignore[union-attr]
+        WebSessionService.revoke_all_for_user(
+            session, user.id, except_id=keep_web_session_id
         )
-        if keep_web_session_id is not None:
-            web_stmt = web_stmt.where(UserWebSession.id != keep_web_session_id)
-        session.execute(web_stmt.values(revoked_at=now))
 
         DesktopAuthService.revoke_all_clients_for_user(
             session, user.id, except_client_pk=keep_desktop_client_pk

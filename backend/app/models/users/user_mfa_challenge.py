@@ -116,6 +116,10 @@ class LoginToken(SQLModel):
     # Adding an optional field keeps the ``LoginResponse`` discriminated
     # union backward-compatible.
     trusted_device_token: str | None = None
+    # Plaintext CSRF token of the browser cookie session this login created
+    # (``X-Cinna-Web-Session: 1``). The SPA sends it back as ``X-CSRF-Token``
+    # on ``/login/session/*``. ``None`` for bearer-only logins (no cookie).
+    csrf_token: str | None = None
 
 
 class MfaStatus(SQLModel):

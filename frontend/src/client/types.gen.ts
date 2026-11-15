@@ -6687,6 +6687,7 @@ export type LoginToken = {
     access_token: string;
     token_type?: string;
     trusted_device_token?: (string | null);
+    csrf_token?: (string | null);
 };
 
 export type MailServerConfigCreate = {
@@ -10251,6 +10252,17 @@ export type WebappShareAuthRequest = {
     security_code?: (string | null);
 };
 
+/**
+ * Response of ``POST /login/session/refresh``: a fresh access token.
+ *
+ * The rotated refresh token travels only in the ``cinna_refresh`` cookie.
+ */
+export type WebSessionToken = {
+    access_token: string;
+    token_type?: string;
+    expires_in: number;
+};
+
 export type WipeRequest = {
     collections?: (Array<(string)> | null);
 };
@@ -13699,6 +13711,7 @@ export type InvitationsLookupInvitationResponse = (InvitationLookupPublic);
 
 export type InvitationsAcceptInvitationData = {
     requestBody: AcceptInvitationRequest;
+    xCinnaWebSession?: (string | null);
 };
 
 export type InvitationsAcceptInvitationResponse = ((LoginToken | MfaChallenge));
@@ -13984,6 +13997,7 @@ export type LlmPluginsUpgradeAgentPluginResponse = (PluginSyncResponse);
 
 export type LoginLoginAccessTokenData = {
     formData: Body_login_login_access_token;
+    xCinnaWebSession?: (string | null);
     xTrustedDevice?: (string | null);
 };
 
@@ -13997,9 +14011,24 @@ export type LoginLoginMfaPasskeyOptionsResponse = (PasskeyAuthOptionsResponse);
 
 export type LoginLoginMfaVerifyData = {
     requestBody: MfaVerifyRequest;
+    xCinnaWebSession?: (string | null);
 };
 
 export type LoginLoginMfaVerifyResponse = (LoginToken);
+
+export type LoginSessionRefreshData = {
+    xCsrfToken?: (string | null);
+};
+
+export type LoginSessionRefreshResponse = (WebSessionToken);
+
+export type LoginSessionLogoutData = {
+    xCsrfToken?: (string | null);
+};
+
+export type LoginSessionLogoutResponse = (void);
+
+export type LoginSessionRevokeAllResponse = (void);
 
 export type LoginTestTokenResponse = (UserPublic);
 
@@ -14398,6 +14427,7 @@ export type OauthGoogleAuthorizeResponse = ({
 
 export type OauthGoogleCallbackData = {
     requestBody: GoogleCallbackRequest;
+    xCinnaWebSession?: (string | null);
 };
 
 export type OauthGoogleCallbackResponse = ((LoginToken | MfaChallenge));

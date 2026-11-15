@@ -110,6 +110,11 @@ def test_connect_with_a_malformed_or_expired_token_is_rejected(
     assert socket_is_accepted(client, {"token": ""}) is False
     expired = mint_platform_token(user["id"], expires_delta=timedelta(minutes=-5))
     assert socket_is_accepted(client, {"token": expired}) is False
+    # Stale or missing session version (``sv``): ended by a password change etc.
+    stale = mint_platform_token(user["id"], extra_claims={"sv": 2})
+    assert socket_is_accepted(client, {"token": stale}) is False
+    legacy = mint_platform_token(user["id"], extra_claims={"sv": None})
+    assert socket_is_accepted(client, {"token": legacy}) is False
 
 
 def test_connect_with_a_well_signed_token_carrying_a_nonsense_sub_is_rejected(

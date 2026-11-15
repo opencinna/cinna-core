@@ -24,7 +24,7 @@ Endpoints (mirror of ``/desktop-auth``):
 The /.well-known/cinna-app discovery endpoint is registered at the app level in
 main.py (not under /api/v1).
 """
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 
 from app.api.deps import (
@@ -33,6 +33,7 @@ from app.api.deps import (
     SessionDep,
     ensure_not_cli_exchanged_session,
 )
+from app.api.routes._login_throttle_http import native_token_throttle
 from app.api.routes.desktop_auth import (
     ConsentRequest,
     ConsentResponse,
@@ -114,6 +115,7 @@ def authorize(
     # If client_id is provided, verify it exists and is not revoked
     if client_id:
         from sqlmodel import select
+
         from app.models.desktop_auth.desktop_oauth_client import DesktopOAuthClient
         stmt = select(DesktopOAuthClient).where(
             DesktopOAuthClient.client_id == client_id,
@@ -199,7 +201,12 @@ def app_consent(
 # ── Token endpoint ─────────────────────────────────────────────────────────
 
 
-@router.post("/token", response_model=TokenResponse)
+@router.post(
+    "/token",
+    response_model=TokenResponse,
+    # C4 per-source throttle; resolves before ``SessionDep``.
+    dependencies=[Depends(native_token_throttle)],
+)
 async def token_endpoint(
     request: Request,
     session: SessionDep,

@@ -49,19 +49,18 @@ Resending an invitation is superuser-only and lives in ``routes/users.py``.
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
 from app.api.deps import SessionDep
+from app.api.routes._web_session_http import WebSessionOptIn, issue_login_token
 from app.core.config import settings
 from app.models import (
     AcceptInvitationRequest,
     InvitationLookupPublic,
     InvitationLookupRequest,
     LoginResponse,
-    LoginToken,
 )
 from app.services.common.rate_limiter import RateLimiter, anonymous_caller_key
-from app.services.users.auth_service import AuthService
 from app.services.users.invitation_service import (
     InvitationInvalidError,
     InvitationService,
@@ -131,7 +130,11 @@ def lookup_invitation(
     dependencies=[Depends(_invitation_rate_limit)],
 )
 async def accept_invitation(
-    session: SessionDep, body: AcceptInvitationRequest
+    request: Request,
+    response: Response,
+    session: SessionDep,
+    body: AcceptInvitationRequest,
+    opt_in: WebSessionOptIn,
 ) -> Any:
     """Redeem an invitation by setting a password, and sign the person in.
 
@@ -159,4 +162,4 @@ async def accept_invitation(
         # The single mapping. One exception type, one status, one body — see
         # the module docstring on why a second branch here is an oracle.
         raise HTTPException(status_code=400, detail=str(exc))
-    return LoginToken(access_token=AuthService.create_user_access_token(user))
+    return issue_login_token(session, user, request, response, opt_in=opt_in)

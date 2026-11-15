@@ -53,6 +53,7 @@ from .users.user_trusted_device import (
 from .users.user_web_session import (
     UserWebSession,
     UserWebRefreshToken,
+    WebSessionToken,
 )
 from .users.user_invitation import (
     UserInvitation,
@@ -1240,6 +1241,7 @@ __all__ = [
     "UserTrustedDevice",
     "UserWebSession",
     "UserWebRefreshToken",
+    "WebSessionToken",
     "TrustedDevicePublic",
     # Invitations (zero-touch onboarding phase 3)
     "UserInvitation",

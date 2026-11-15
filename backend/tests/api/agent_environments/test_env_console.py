@@ -182,6 +182,12 @@ def test_console_ws_auth_rejects(
             client, f"{ws_url}?token={expired_token}", _WS_CLOSE_AUTH
         )
 
+        # ── Phase 4b: Stale session version (``sv``) → 1008 ─────────────
+        stale_token = mint_platform_token(superuser_id, extra_claims={"sv": 99})
+        _assert_ws_close_code(
+            client, f"{ws_url}?token={stale_token}", _WS_CLOSE_AUTH
+        )
+
         # ── Phase 5: Non-owner (other user, valid token) → 1008 ─────────
         other_user, other_headers = create_random_user_with_headers(client)
         promote_to_developer(client, superuser_token_headers, other_user["id"])

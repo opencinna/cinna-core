@@ -1,15 +1,34 @@
 import logging
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import (
+    APIRouter,
+    Depends,
+    Header,
+    HTTPException,
+    Request,
+    Response,
+    status,
+)
 from fastapi.responses import HTMLResponse
 from fastapi.security import OAuth2PasswordRequestForm
 
-logger = logging.getLogger(__name__)
-
 from app.api.deps import CurrentUser, SessionDep, get_current_active_superuser
+from app.api.routes._login_throttle_http import throttled_http
 from app.api.routes._mfa_errors import translate_mfa_error
 from app.api.routes._user_public import user_to_public
+from app.api.routes._web_session_http import (
+    CSRF_HEADER,
+    REFRESH_COOKIE_NAME,
+    WebSessionOptIn,
+    clear_refresh_cookie,
+    csrf_failed_http,
+    issue_login_token,
+    require_allowed_origin,
+    session_expired_response,
+    set_refresh_cookie,
+)
+from app.core.config import settings
 from app.models import (
     ConfirmEmailRequest,
     LoginResponse,
@@ -22,6 +41,7 @@ from app.models import (
     PasskeyAuthOptionsResponse,
     User,
     UserPublic,
+    WebSessionToken,
 )
 from app.services.users.access_policy_service import (
     REASON_PASSWORD_AUTH_DISABLED,
@@ -31,12 +51,24 @@ from app.services.users.access_policy_service import (
 from app.services.users.auth_service import AuthService
 from app.services.users.email_confirmation_service import EmailConfirmationService
 from app.services.users.invitation_service import InvitationService
+from app.services.users.login_throttle_service import LoginThrottle, LoginThrottled
 from app.services.users.mfa_service import FIRST_FACTOR_PASSWORD, MfaService
 from app.services.users.user_service import UserService
+from app.services.users.user_session_service import (
+    REASON_SIGN_OUT_EVERYWHERE,
+    UserSessionService,
+)
+from app.services.users.web_session_service import (
+    ERROR_CSRF_FAILED,
+    WebSessionError,
+    WebSessionService,
+)
 from app.utils import (
     generate_password_reset_token,
     generate_reset_password_email,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["login"])
 
@@ -49,8 +81,11 @@ _translate_mfa_error = translate_mfa_error
 
 @router.post("/login/access-token", response_model=LoginResponse)
 def login_access_token(
+    request: Request,
+    response: Response,
     session: SessionDep,
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
+    opt_in: WebSessionOptIn,
     trusted_device_token: Annotated[
         str | None, Header(alias="X-Trusted-Device")
     ] = None,
@@ -71,12 +106,22 @@ def login_access_token(
     The optional ``X-Trusted-Device`` header carries the opaque
     trusted-device token minted at a prior ``/login/mfa/verify``.  Absent
     or forged → normal challenge path (no error, no oracle).
+
+    ``X-Cinna-Web-Session: 1`` opts into a browser cookie session (see
+    ``_web_session_http.issue_login_token``). The C4 throttle runs before the
+    password is checked: 429 ``rate_limited`` with ``Retry-After``.
     """
+    try:
+        LoginThrottle.check_password_attempt(request, form_data.username)
+    except LoginThrottled as exc:
+        raise throttled_http(exc.retry_after)
     user = UserService.authenticate(
         session=session, email=form_data.username, password=form_data.password
     )
     if not user:
+        LoginThrottle.record_failure(request, form_data.username)
         raise HTTPException(status_code=400, detail="Incorrect email or password")
+    LoginThrottle.record_success(request, form_data.username)
     if not user.is_active:
         raise HTTPException(status_code=400, detail="Inactive user")
 
@@ -96,8 +141,8 @@ def login_access_token(
         if MfaService.consume_trusted_device(
             session=session, user=user, token=trusted_device_token
         ):
-            return LoginToken(
-                access_token=AuthService.create_user_access_token(user)
+            return issue_login_token(
+                session, user, request, response, opt_in=opt_in
             )
         challenge = MfaService.issue_challenge(
             session=session, user=user, first_factor=FIRST_FACTOR_PASSWORD
@@ -110,7 +155,7 @@ def login_access_token(
             ),
         )
 
-    return LoginToken(access_token=AuthService.create_user_access_token(user))
+    return issue_login_token(session, user, request, response, opt_in=opt_in)
 
 
 @router.post(
@@ -142,7 +187,11 @@ def login_mfa_passkey_options(
 
 @router.post("/login/mfa/verify", response_model=LoginToken)
 def login_mfa_verify(
-    request: Request, session: SessionDep, body: MfaVerifyRequest
+    request: Request,
+    response: Response,
+    session: SessionDep,
+    body: MfaVerifyRequest,
+    opt_in: WebSessionOptIn,
 ) -> Any:
     """Verify a second-factor proof and issue the final access token.
 
@@ -218,10 +267,113 @@ def login_mfa_verify(
     if not user.is_active:
         raise HTTPException(status_code=400, detail="Inactive user")
 
-    return LoginToken(
-        access_token=AuthService.create_user_access_token(user),
+    return issue_login_token(
+        session,
+        user,
+        request,
+        response,
+        opt_in=opt_in,
         trusted_device_token=trusted_device_token,
     )
+
+
+# The refresh cookie is read from ``request.cookies`` rather than declared as a
+# ``Cookie`` parameter: it is HttpOnly, so it has no place in the generated
+# client's signature.
+CsrfHeader = Annotated[str | None, Header(alias=CSRF_HEADER)]
+
+
+@router.post(
+    "/login/session/refresh",
+    response_model=WebSessionToken,
+    responses={
+        401: {"description": "session_expired (the cookie is cleared)"},
+        403: {"description": "csrf_failed"},
+    },
+)
+def session_refresh(
+    request: Request,
+    response: Response,
+    session: SessionDep,
+    csrf_token: CsrfHeader = None,
+) -> Any:
+    """Exchange the ``cinna_refresh`` cookie for a fresh access token.
+
+    Requires the cookie, ``X-CSRF-Token`` (the login's ``csrf_token``) and,
+    when present, an allowed ``Origin``. Rotates the refresh token and sets
+    the successor cookie; inside the reuse-grace window (a concurrent tab or
+    a lost response) it answers 200 without ``Set-Cookie``. The access token
+    carries the user's current ``sv``, so this is also how a kept session
+    recovers after a password change.
+    """
+    require_allowed_origin(request)
+    try:
+        result = WebSessionService.rotate(
+            session, request.cookies.get(REFRESH_COOKIE_NAME), csrf_token=csrf_token
+        )
+    except WebSessionError as exc:
+        if exc.code == ERROR_CSRF_FAILED:
+            raise csrf_failed_http()
+        return session_expired_response()
+    if result.new_refresh_raw is not None:
+        set_refresh_cookie(response, result.new_refresh_raw)
+    return WebSessionToken(
+        access_token=AuthService.create_user_access_token(
+            result.user, web_session_id=result.web_session.id
+        ),
+        expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    )
+
+
+@router.post(
+    "/login/session/logout",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses={403: {"description": "csrf_failed (only with a cookie)"}},
+)
+def session_logout(
+    request: Request,
+    session: SessionDep,
+    csrf_token: CsrfHeader = None,
+) -> Response:
+    """End this browser's cookie session and clear the cookie.
+
+    Idempotent: no cookie, or a cookie of an already-ended session, is
+    still 204. The access token in the SPA's memory stays valid until it
+    expires; the SPA drops it.
+    """
+    response = Response(status_code=status.HTTP_204_NO_CONTENT)
+    refresh_cookie = request.cookies.get(REFRESH_COOKIE_NAME)
+    if refresh_cookie:
+        require_allowed_origin(request)
+        web_session = WebSessionService.find_live_session(session, refresh_cookie)
+        if web_session is not None:
+            if not WebSessionService.verify_csrf(web_session, csrf_token):
+                raise csrf_failed_http()
+            WebSessionService.revoke(session, web_session.id)
+    clear_refresh_cookie(response)
+    return response
+
+
+@router.post(
+    "/login/session/revoke-all", status_code=status.HTTP_204_NO_CONTENT
+)
+def session_revoke_all(session: SessionDep, current_user: CurrentUser) -> Response:
+    """Sign out everywhere, this browser included.
+
+    Bumps the session version (every user JWT goes stale), revokes every web
+    session, desktop and mobile client and trusted device, and soft-revokes
+    the user's CLI, A2A and MCP tokens. Clears this browser's cookie.
+    """
+    UserSessionService.end_sessions(
+        session,
+        current_user,
+        reason=REASON_SIGN_OUT_EVERYWHERE,
+        include_api_tokens=True,
+    )
+    session.commit()
+    response = Response(status_code=status.HTTP_204_NO_CONTENT)
+    clear_refresh_cookie(response)
+    return response
 
 
 @router.post("/login/test-token", response_model=UserPublic)

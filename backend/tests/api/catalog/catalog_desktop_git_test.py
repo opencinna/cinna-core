@@ -294,6 +294,12 @@ def test_every_accepted_and_rejected_token_kind(
 
     expired = mint_platform_token(dev.id, expires_delta=timedelta(minutes=-5))
     assert upload(_bearer(expired)) == 401
+    # A web JWT with a stale session version (``sv``) is refused; the same
+    # user's current token still works.
+    stale = mint_platform_token(dev.id, extra_claims={"sv": 2})
+    assert upload(_bearer(stale)) == 401
+    assert upload(_basic(stale)) == 401
+    assert upload(_bearer(mint_platform_token(dev.id))) == 200
     assert not GitClient(tmp_path, token=desktop["access_token"]).clone(
         url, tmp_path / "revoked"
     ).ok

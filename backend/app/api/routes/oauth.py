@@ -1,7 +1,8 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, Response, status
 from pydantic import BaseModel
 
 from app.api.deps import CurrentUser, SessionDep
+from app.api.routes._web_session_http import WebSessionOptIn, issue_login_token
 from app.models import LoginResponse, LoginToken, Message, MfaChallenge, OAuthConfig
 from app.services.users.access_policy_service import RegistrationNotAllowedError
 from app.services.users.auth_service import AuthService
@@ -45,7 +46,11 @@ def google_authorize() -> dict[str, str]:
 
 @router.post("/google/callback", response_model=LoginResponse)
 async def google_callback(
-    session: SessionDep, body: GoogleCallbackRequest
+    request: Request,
+    http_response: Response,
+    session: SessionDep,
+    body: GoogleCallbackRequest,
+    opt_in: WebSessionOptIn,
 ):
     """Handle Google OAuth callback.
 
@@ -55,6 +60,9 @@ async def google_callback(
     - :class:`LoginToken` (``kind="token"``) for users without 2FA.
     - :class:`MfaChallenge` (``kind="mfa_challenge"``) when the user has
       2FA enabled — the frontend completes via ``/login/mfa/verify``.
+
+    ``X-Cinna-Web-Session: 1`` opts the token arm into a browser cookie
+    session, as on ``/login/access-token``.
 
     A Google login on a pre-created invited account also settles that
     invitation. The hook is deliberately below the error handlers rather than
@@ -74,16 +82,14 @@ async def google_callback(
 
         if result.requires_mfa:
             # "Do not ask on this device" skip — only attempted when 2FA
-            # is on (Google identity already verified above). The result's
-            # ``access_token`` is None on the MFA branch, so mint it here
-            # via the same helper the non-MFA branch uses.
+            # is on (Google identity already verified above).
             if MfaService.consume_trusted_device(
                 session=session,
                 user=result.user,
                 token=body.trusted_device_token,
             ):
-                response = LoginToken(
-                    access_token=AuthService.create_user_access_token(result.user)
+                response = issue_login_token(
+                    session, result.user, request, http_response, opt_in=opt_in
                 )
             else:
                 challenge = result.mfa_challenge
@@ -96,8 +102,9 @@ async def google_callback(
                     ),
                 )
         else:
-            assert result.access_token is not None
-            response = LoginToken(access_token=result.access_token)
+            response = issue_login_token(
+                session, result.user, request, http_response, opt_in=opt_in
+            )
         authenticated_user = result.user
 
     except RegistrationNotAllowedError as e:

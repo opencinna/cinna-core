@@ -28391,6 +28391,17 @@ export const LoginTokenSchema = {
                 }
             ],
             title: 'Trusted Device Token'
+        },
+        csrf_token: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Csrf Token'
         }
     },
     type: 'object',
@@ -43542,6 +43553,30 @@ export const VoiceTranscriptionUsageRowSchema = {
     type: 'object',
     required: ['user_id', 'email', 'seconds', 'sessions'],
     title: 'VoiceTranscriptionUsageRow'
+} as const;
+
+export const WebSessionTokenSchema = {
+    properties: {
+        access_token: {
+            type: 'string',
+            title: 'Access Token'
+        },
+        token_type: {
+            type: 'string',
+            title: 'Token Type',
+            default: 'bearer'
+        },
+        expires_in: {
+            type: 'integer',
+            title: 'Expires In'
+        }
+    },
+    type: 'object',
+    required: ['access_token', 'expires_in'],
+    title: 'WebSessionToken',
+    description: `Response of \`\`POST /login/session/refresh\`\`: a fresh access token.
+
+The rotated refresh token travels only in the \`\`cinna_refresh\`\` cookie.`
 } as const;
 
 export const WebappDataApiRequestSchema = {

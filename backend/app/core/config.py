@@ -62,8 +62,22 @@ class Settings(BaseSettings):
     SECRET_KEY: str = secrets.token_urlsafe(32)
     # Encryption key for sensitive credential fields (32 bytes for AES-256)
     ENCRYPTION_KEY: str = secrets.token_urlsafe(32)
-    # 60 minutes * 24 hours * 8 days = 8 days
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 8
+    # Every user access JWT (web cookie sessions and bearer-only logins alike).
+    # Short on purpose: a cookie session renews it through
+    # ``/login/session/refresh``; scripts that run longer must re-login.
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
+    # Browser refresh sessions (``user_web_session``). Sliding: each rotation
+    # extends the session by this much again; no absolute cap.
+    WEB_REFRESH_TOKEN_EXPIRE_DAYS: int = 14
+    # A rotated web refresh token re-presented within this window mints an
+    # access token without rotating again (concurrent tabs share one cookie
+    # jar); outside it, the replay revokes the whole session.
+    WEB_REFRESH_TOKEN_REUSE_GRACE_SECONDS: int = 60
+    # ``Secure`` attribute of the ``cinna_refresh`` cookie. ``None`` means
+    # "on unless ENVIRONMENT=local" (the http localhost stack and tests).
+    WEB_SESSION_COOKIE_SECURE: bool | None = None
+    # HSTS max-age the backend sends on https responses. 0 disables HSTS.
+    SECURITY_HSTS_MAX_AGE_SECONDS: int = 31536000
     FRONTEND_HOST: str = "http://localhost:5173"
     # Publicly reachable origin of THIS backend. Every absolute URL that points
     # at the API and is handed to something outside the platform is built from
@@ -388,6 +402,22 @@ class Settings(BaseSettings):
     # attacker-chosen token as input and each one costs an indexed SELECT,
     # while that projection is one cached row identical for every caller.
     INVITATION_RATE_LIMIT_PER_MIN: int = 30
+
+    # Login throttle (C4) on ``/login/access-token`` and the native
+    # ``/desktop-auth/token`` / ``/app-auth/token``. In-process, per worker.
+    LOGIN_RATE_LIMIT_ENABLED: bool = True
+    # Every password-login attempt from one source, per minute.
+    LOGIN_RATE_LIMIT_PER_SOURCE_PER_MIN: int = 30
+    # Failed-login lockout: after this many failures inside the window the
+    # account (+ source) is locked for BASE * 2^(failures - threshold) seconds,
+    # capped at MAX, counted from the last failure.
+    LOGIN_FAILURES_PER_ACCOUNT_SOURCE: int = 5
+    LOGIN_FAILURES_PER_ACCOUNT: int = 20
+    LOGIN_FAILURE_WINDOW_SECONDS: int = 900
+    LOGIN_LOCKOUT_BASE_SECONDS: int = 30
+    LOGIN_LOCKOUT_MAX_SECONDS: int = 900
+    # Native token endpoint (code exchange and refresh), per source per minute.
+    NATIVE_TOKEN_RATE_LIMIT_PER_SOURCE_PER_MIN: int = 60
 
     @computed_field  # type: ignore[prop-decorator]
     @property

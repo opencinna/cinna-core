@@ -16,6 +16,9 @@ from app.core.config import settings
 # isolation escape). Setting it here guarantees it is True at the time the
 # lifespan runs (when the per-test ``TestClient(app)`` context is entered).
 settings.TESTING = True
+# C4 login throttle off for the suite: many tests log in from one source in a
+# burst. The C4 tests re-enable it via monkeypatch plus ``LoginThrottle.reset()``.
+settings.LOGIN_RATE_LIMIT_ENABLED = False
 
 # Under pytest-xdist every worker gets its own test database
 # (``app_test_gw0``, ``app_test_gw1``, ...). Workers cannot share one: the

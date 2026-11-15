@@ -15,6 +15,7 @@ from app.core.access_log_filter import install_access_log_filter
 from app.core.artifact_content_middleware import ArtifactContentMiddleware
 from app.core.artifact_upload_limit_middleware import ArtifactUploadLimitMiddleware
 from app.core.robots_middleware import RobotsTagMiddleware
+from app.core.security_headers_middleware import SecurityHeadersMiddleware
 from app.api.routes.cli import setup_router as cli_setup_router
 from app.api.routes.desktop_auth import router as desktop_auth_router  # noqa: F401 (used below)
 from app.api.routes.local_agent_kit import start_router as local_agent_kit_router
@@ -243,6 +244,10 @@ from app.services.desktop_auth.desktop_auth_scheduler import (
     start_scheduler as start_desktop_auth_cleanup_scheduler,
     shutdown_scheduler as shutdown_desktop_auth_cleanup_scheduler
 )
+from app.services.users.web_session_scheduler import (
+    start_scheduler as start_web_session_cleanup_scheduler,
+    shutdown_scheduler as shutdown_web_session_cleanup_scheduler,
+)
 from app.services.bundles.app_data_orphan_scheduler import (
     start_scheduler as start_app_data_orphan_scheduler,
     shutdown_scheduler as shutdown_app_data_orphan_scheduler,
@@ -310,6 +315,7 @@ async def lifespan(app: FastAPI):
         start_cli_cleanup_scheduler()
         start_device_login_cleanup_scheduler()
         start_desktop_auth_cleanup_scheduler()
+        start_web_session_cleanup_scheduler()
         start_app_data_orphan_scheduler()
         start_app_data_gc_scheduler()
         start_mfa_cleanup_scheduler()
@@ -537,6 +543,7 @@ async def lifespan(app: FastAPI):
         shutdown_cli_cleanup_scheduler()
         shutdown_device_login_cleanup_scheduler()
         shutdown_desktop_auth_cleanup_scheduler()
+        shutdown_web_session_cleanup_scheduler()
         shutdown_app_data_orphan_scheduler()
         shutdown_app_data_gc_scheduler()
         shutdown_mfa_cleanup_scheduler()
@@ -573,7 +580,13 @@ app.add_middleware(
     # for itself, so a header a cross-origin caller must read has to be listed
     # here. X-Kit-Version is how a browser-hosted assistant checks whether its
     # copy of the Local Agent Kit is current without re-downloading it.
-    expose_headers=["mcp-session-id", "mcp-protocol-version", "X-Kit-Version"],
+    # Retry-After is not CORS-safelisted; the SPA reads it on the login 429.
+    expose_headers=[
+        "mcp-session-id",
+        "mcp-protocol-version",
+        "X-Kit-Version",
+        "Retry-After",
+    ],
 )
 
 # Artifact content (/a/) — MUST stay registered after CORSMiddleware so it is
@@ -584,6 +597,9 @@ app.add_middleware(
 app.add_middleware(ArtifactContentMiddleware)
 # Body cap for artifact uploads, whatever the reverse proxy allows.
 app.add_middleware(ArtifactUploadLimitMiddleware)
+# nosniff / Referrer-Policy / HSTS, set only where absent (never XFO or CSP:
+# the SPA iframes backend content). See app/core/security_headers_middleware.py.
+app.add_middleware(SecurityHeadersMiddleware)
 # X-Robots-Tag noindex on every HTTP response — MUST stay the last
 # add_middleware call so it is the outermost layer and also stamps the
 # responses the middlewares above write themselves (/a/ preflights and 500s,

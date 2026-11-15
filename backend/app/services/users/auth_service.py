@@ -28,13 +28,14 @@ logger = logging.getLogger(__name__)
 class LoginResult:
     """Return value for first-factor authentication paths.
 
-    Exactly one of ``access_token`` / ``mfa_challenge`` is set; callers
-    branch on which is populated.  We deliberately keep this as a
-    server-side dataclass (not a Pydantic schema) — the route layer
-    converts it into the public ``LoginResponse`` discriminated union.
+    ``mfa_challenge`` is set when a second factor is required; otherwise the
+    first factor is complete and the route issues the access token itself
+    (through ``_web_session_http.issue_login_token``, which may also open a
+    browser cookie session). We deliberately keep this as a server-side
+    dataclass (not a Pydantic schema) — the route layer converts it into the
+    public ``LoginResponse`` discriminated union.
     """
     user: User
-    access_token: str | None = None
     mfa_challenge: UserMfaChallenge | None = None
 
     @property
@@ -430,9 +431,9 @@ class AuthService:
 
         Returns a :class:`LoginResult`.  When the user has
         ``two_factor_enabled=True`` the result carries an
-        :class:`UserMfaChallenge` instead of an access token — the route
-        layer translates the two cases into the ``LoginResponse``
-        discriminated union.
+        :class:`UserMfaChallenge`; otherwise the route mints the access
+        token. The route layer translates the two cases into the
+        ``LoginResponse`` discriminated union.
 
         Raises:
             ValueError: If authentication fails.
@@ -523,9 +524,9 @@ class AuthService:
             )
             return LoginResult(user=user, mfa_challenge=challenge)
 
-        # Generate JWT access token
-        access_token = cls.create_user_access_token(user)
-        return LoginResult(user=user, access_token=access_token)
+        # First factor complete; the route issues the access token (and,
+        # when opted in, the browser cookie session).
+        return LoginResult(user=user)
 
     @classmethod
     async def link_google_account_for_user(
