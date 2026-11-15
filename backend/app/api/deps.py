@@ -34,18 +34,138 @@ SessionDep = Annotated[Session, Depends(get_db)]
 TokenDep = Annotated[str, Depends(reusable_oauth2)]
 
 
+_CREDENTIALS_DETAIL = "Could not validate credentials"
+
+
+class UserTokenRejected(Exception):
+    """A decoded user JWT that must not authenticate.
+
+    Raised by :func:`_authenticate_user_payload` so HTTP and non-HTTP callers
+    can map it to their own failure shape (``to_http`` for routes).
+    """
+
+    def __init__(self, status_code: int, detail: str) -> None:
+        super().__init__(detail)
+        self.status_code = status_code
+        self.detail = detail
+
+    def to_http(self) -> HTTPException:
+        headers = (
+            {"WWW-Authenticate": "Bearer"}
+            if self.status_code == status.HTTP_401_UNAUTHORIZED
+            and self.detail == _CREDENTIALS_DETAIL
+            else None
+        )
+        return HTTPException(
+            status_code=self.status_code, detail=self.detail, headers=headers
+        )
+
+
+def _expired_token_exception() -> HTTPException:
+    """401 for an expired user JWT: "refresh and retry" (forged stays 403)."""
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail=_CREDENTIALS_DETAIL,
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+def _authenticate_user_payload(session: Session, payload: dict[str, Any]) -> User:
+    """Resolve a decoded user JWT to its User, or raise :class:`UserTokenRejected`.
+
+    In order: agent-env ``token_type`` reject (401), ``TokenPayload`` shape
+    (403), user exists (404), account valid (400), desktop client not revoked
+    (401), session version current (401). Shared by every user-JWT decode
+    path so none of them can skip a step.
+    """
+    # Defense-in-depth for an env token minted without ``aud`` — see the
+    # fence comment in ``get_current_user``. Runs before any user lookup.
+    if payload.get("token_type") == "agent_env":
+        raise UserTokenRejected(
+            status.HTTP_401_UNAUTHORIZED,
+            "Agent-environment tokens cannot be used on this endpoint",
+        )
+    try:
+        token_data = TokenPayload(**payload)
+    except ValidationError:
+        raise UserTokenRejected(status.HTTP_403_FORBIDDEN, _CREDENTIALS_DETAIL)
+
+    user = session.get(User, token_data.sub)
+    if not user:
+        raise UserTokenRejected(404, "User not found")
+    # Per-request account validity goes through the policy service — today
+    # that is exactly ``is_active``, but it is the single seam a later rule
+    # (suspension, expiry, licence) has to land in, so no caller here tests
+    # the flag inline.
+    if not AccessPolicyService.is_account_valid(user):
+        raise UserTokenRejected(400, "Inactive user")
+
+    # Desktop-issued access tokens are stateless JWTs (15-min TTL) but
+    # the originating DesktopOAuthClient row can be revoked from
+    # Settings > Channels > Desktop Sessions.  Delegate to the service
+    # so revocation takes effect immediately instead of waiting for the
+    # access token to expire.
+    if payload.get("client_kind") == "desktop":
+        from app.services.desktop_auth.desktop_auth_service import (
+            DesktopAuthError,
+            DesktopAuthService,
+        )
+
+        try:
+            DesktopAuthService.verify_active_or_raise(
+                session, payload.get("external_client_id")
+            )
+        except DesktopAuthError as e:
+            raise UserTokenRejected(status.HTTP_401_UNAUTHORIZED, e.message)
+
+    # Session version (``sv``): bumped by password change/reset, admin set,
+    # Google link wipe and sign-out-everywhere. Desktop tokens are exempt
+    # (their revocation is the client row above).
+    from app.services.users.user_session_service import UserSessionService
+
+    if not UserSessionService.is_token_current(user, payload):
+        raise UserTokenRejected(status.HTTP_401_UNAUTHORIZED, _CREDENTIALS_DETAIL)
+    return user
+
+
+def authenticate_user_jwt(session: Session, token: str) -> tuple[User, dict[str, Any]]:
+    """Decode a user JWT and resolve it to ``(user, payload)`` for HTTP callers.
+
+    Same rules as ``CurrentUser``: expired → 401, forged / ``aud``-bearing →
+    403, then :func:`_authenticate_user_payload`.
+    """
+    try:
+        payload = jwt.decode(
+            token, settings.SECRET_KEY, algorithms=[security.ALGORITHM]
+        )
+    except jwt.ExpiredSignatureError:
+        raise _expired_token_exception()
+    except InvalidTokenError as e:
+        logger.error(f"Token validation failed: {type(e).__name__}: {str(e)}")
+        logger.error(f"Token received: {token[:8]}...")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=_CREDENTIALS_DETAIL,
+        )
+    try:
+        return _authenticate_user_payload(session, payload), payload
+    except UserTokenRejected as e:
+        raise e.to_http()
+
+
 def get_current_user(session: SessionDep, token: TokenDep) -> User:
     try:
         payload = jwt.decode(
             token, settings.SECRET_KEY, algorithms=[security.ALGORITHM]
         )
-        token_data = TokenPayload(**payload)
-    except (InvalidTokenError, ValidationError) as e:
+    except jwt.ExpiredSignatureError:
+        raise _expired_token_exception()
+    except InvalidTokenError as e:
         logger.error(f"Token validation failed: {type(e).__name__}: {str(e)}")
         logger.error(f"Token received: {token[:8]}...")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Could not validate credentials",
+            detail=_CREDENTIALS_DETAIL,
         )
 
     # ── Load-bearing security fix ────────────────────────────────────────
@@ -75,45 +195,11 @@ def get_current_user(session: SessionDep, token: TokenDep) -> User:
     # case an env token is ever minted without ``aud`` (or PyJWT's aud handling
     # changes). Runs BEFORE any ``session.get(User, ...)``. Real user / CLI /
     # desktop tokens carry neither ``aud`` nor ``token_type == "agent_env"`` and
-    # are unaffected.
-    if payload.get("token_type") == "agent_env":
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Agent-environment tokens cannot be used on this endpoint",
-        )
-
-    user = session.get(User, token_data.sub)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    # Per-request account validity goes through the policy service — today
-    # that is exactly ``is_active``, but it is the single seam a later rule
-    # (suspension, expiry, licence) has to land in, so no caller here tests
-    # the flag inline.
-    if not AccessPolicyService.is_account_valid(user):
-        raise HTTPException(status_code=400, detail="Inactive user")
-
-    # Desktop-issued access tokens are stateless JWTs (15-min TTL) but
-    # the originating DesktopOAuthClient row can be revoked from
-    # Settings > Channels > Desktop Sessions.  Delegate to the service
-    # so revocation takes effect immediately instead of waiting for the
-    # access token to expire.
-    if payload.get("client_kind") == "desktop":
-        from app.services.desktop_auth.desktop_auth_service import (
-            DesktopAuthError,
-            DesktopAuthService,
-        )
-
-        try:
-            DesktopAuthService.verify_active_or_raise(
-                session, payload.get("external_client_id")
-            )
-        except DesktopAuthError as e:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=e.message,
-            )
-
-    return user
+    # are unaffected. (The reject itself lives in ``_authenticate_user_payload``.)
+    try:
+        return _authenticate_user_payload(session, payload)
+    except UserTokenRejected as e:
+        raise e.to_http()
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
@@ -212,6 +298,8 @@ def get_current_user_or_guest(
         payload = jwt.decode(
             token, settings.SECRET_KEY, algorithms=[security.ALGORITHM]
         )
+    except jwt.ExpiredSignatureError:
+        raise _expired_token_exception()
     except InvalidTokenError:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -250,21 +338,12 @@ def get_current_user_or_guest(
                 detail="Could not validate credentials",
             )
 
-    # Regular user JWT — delegate to standard user resolution
+    # Regular user JWT — the same resolution ``CurrentUser`` applies
+    # (account validity, desktop revocation, session version).
     try:
-        token_data = TokenPayload(**payload)
-    except ValidationError:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Could not validate credentials",
-        )
-
-    user = session.get(User, token_data.sub)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    if not user.is_active:
-        raise HTTPException(status_code=400, detail="Inactive user")
-    return user
+        return _authenticate_user_payload(session, payload)
+    except UserTokenRejected as e:
+        raise e.to_http()
 
 
 CurrentUserOrGuest = Annotated[
@@ -879,6 +958,12 @@ def _resolve_platform_token(
         except DesktopAuthError as e:
             raise ValueError(e.message) from e
 
+    # Session version, same as ``get_current_user`` (desktop tokens exempt).
+    from app.services.users.user_session_service import UserSessionService
+
+    if not UserSessionService.is_token_current(user, payload):
+        raise ValueError("Could not validate credentials")
+
     return user, payload
 
 
@@ -1067,6 +1152,9 @@ class SpeechPrincipal(SQLModel):
     # ``desktop`` / ``mobile`` / ``None`` (web session token).
     client_kind: str | None = None
     external_client_id: str | None = None
+    # ``User.session_version`` at the upgrade, for non-desktop tokens; the
+    # periodic recheck ends the session once it moves. ``None`` for desktop.
+    session_version: int | None = None
 
 
 def _extract_bearer_header(websocket: WebSocket) -> str:
@@ -1100,12 +1188,17 @@ async def get_speech_principal_ws(websocket: WebSocket) -> SpeechPrincipal:
                 check_account_valid=True,
             )
             user_id = user.id
+            client_kind = payload.get("client_kind") or None
+            session_version = (
+                None if client_kind == "desktop" else user.session_version
+            )
     except ValueError as e:
         raise WebSocketException(code=1008, reason=str(e)[:123])
     return SpeechPrincipal(
         user_id=user_id,
-        client_kind=payload.get("client_kind") or None,
+        client_kind=client_kind,
         external_client_id=payload.get("external_client_id") or None,
+        session_version=session_version,
     )
 
 
@@ -1113,8 +1206,9 @@ def recheck_speech_principal(principal: SpeechPrincipal) -> bool:
     """Is the session's principal still allowed? (periodic mid-session check)
 
     The access token itself may have expired by now (15-min TTL, 30-min
-    sessions); what is re-checked is the account and, for desktop tokens, the
-    device's revocation.
+    sessions); what is re-checked is the account, for desktop tokens the
+    device's revocation, and otherwise the session version captured at the
+    upgrade.
     """
     from app.core import db as core_db
     from app.services.desktop_auth.desktop_auth_service import (
@@ -1131,6 +1225,11 @@ def recheck_speech_principal(principal: SpeechPrincipal) -> bool:
                 DesktopAuthService.verify_active_or_raise(db, principal.external_client_id)
             except DesktopAuthError:
                 return False
+        elif (
+            principal.session_version is not None
+            and user.session_version != principal.session_version
+        ):
+            return False
     return True
 
 
@@ -1161,6 +1260,19 @@ def get_current_client_claims(token: TokenDep) -> tuple[str | None, str | None]:
 CurrentClientClaims = Annotated[
     tuple[str | None, str | None], Depends(get_current_client_claims)
 ]
+
+
+def get_current_token_claims(token: TokenDep) -> dict[str, Any]:
+    """The bearer JWT's full claim dict (``{}`` if it cannot be decoded).
+
+    Pair with ``CurrentUser`` (which validates the token): used to find the
+    caller's own session — ``sid`` for a web session, ``external_client_id``
+    for a desktop token — e.g. to keep it when ending the others.
+    """
+    return security.decode_token_claims(token) or {}
+
+
+CurrentTokenClaims = Annotated[dict[str, Any], Depends(get_current_token_claims)]
 
 
 # ── Credential-minting gate for CLI-exchanged desktop sessions ─────────

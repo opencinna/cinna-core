@@ -32,7 +32,6 @@ from fastapi import status as http_status
 from sqlmodel import Session
 
 from app.core.config import settings
-from app.core.security import create_access_token
 from app.models.cli.account_convenience import AccountApiProxyRequest
 from app.models.cli.cli_token import CLIToken
 from app.models.events.security_event import (
@@ -47,6 +46,7 @@ from app.services.cli.account_api_proxy_policy import (
 )
 from app.services.common.rate_limiter import RateLimiter
 from app.services.events.security_event_service import SecurityEventService
+from app.services.users.auth_service import AuthService
 from app.utils import client_ip
 
 logger = logging.getLogger(__name__)
@@ -179,8 +179,8 @@ class AccountApiProxyService:
 
         # 4. Mint a request-scoped normal user JWT (8 s TTL). Never returned to
         #    the client; presents as an ordinary user JWT to get_current_user.
-        inner_jwt = create_access_token(
-            user.id, expires_delta=timedelta(seconds=_INNER_JWT_TTL_SECONDS)
+        inner_jwt = AuthService.create_user_access_token(
+            user, expires_delta=timedelta(seconds=_INNER_JWT_TTL_SECONDS)
         )
 
         # 5. In-process ASGI re-dispatch against the REAL middleware + route

@@ -3,22 +3,20 @@ Agent Webapp Routes.
 
 Owner preview routes for serving webapp content from agent environments.
 """
-import uuid
 import logging
+import time
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import Response
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 
-import jwt as pyjwt
-from jwt.exceptions import InvalidTokenError
-from pydantic import ValidationError
+from sqlmodel import Session
 
-from app.api.deps import CurrentUser, SessionDep
-from app.core import security
+from app.api.deps import CurrentUser, SessionDep, authenticate_user_jwt
 from app.core.config import settings
-from app.models import Agent, AgentEnvironment, TokenPayload, User
+from app.models import Agent, AgentEnvironment, User
 from app.services.environments.environment_service import EnvironmentService
 from app.services.webapp.webapp_service import (
     WebappService,
@@ -35,24 +33,16 @@ _optional_oauth2 = OAuth2PasswordBearer(
 )
 
 
-def _resolve_user_from_token(session, raw_token: str) -> User:
-    """Validate a JWT string and return the User, or raise 403."""
-    try:
-        payload = pyjwt.decode(
-            raw_token, settings.SECRET_KEY, algorithms=[security.ALGORITHM]
-        )
-        token_data = TokenPayload(**payload)
-    except (InvalidTokenError, ValidationError):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Could not validate credentials",
-        )
-    user = session.get(User, token_data.sub)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    if not user.is_active:
-        raise HTTPException(status_code=400, detail="Inactive user")
-    return user
+def _resolve_user_from_token(session: Session, raw_token: str) -> tuple[User, dict]:
+    """Validate a user JWT (bearer, ``?token=`` or the owner cookie) and return
+    ``(user, payload)``. Same rules as ``CurrentUser``: expired or stale
+    session version → 401, forged → 403."""
+    return authenticate_user_jwt(session, raw_token)
+
+
+def _remaining_lifetime_seconds(payload: dict) -> int:
+    """Seconds until the token's ``exp`` (the owner cookie must not outlive it)."""
+    return max(int(payload.get("exp", 0) - time.time()), 0)
 
 
 def _handle_webapp_error(e: WebappError) -> None:
@@ -111,7 +101,7 @@ async def webapp_data_api(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
         )
-    current_user = _resolve_user_from_token(session, raw_token)
+    current_user, token_payload = _resolve_user_from_token(session, raw_token)
 
     # Strip .py extension if caller included it in the URL
     if endpoint.endswith(".py"):
@@ -159,7 +149,7 @@ async def get_webapp_owner_status(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
         )
-    current_user = _resolve_user_from_token(session, raw_token)
+    current_user, token_payload = _resolve_user_from_token(session, raw_token)
 
     # Resolve agent without requiring the environment to be running.
     agent = session.get(Agent, agent_id)
@@ -193,7 +183,7 @@ async def serve_webapp_file(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
         )
-    current_user = _resolve_user_from_token(session, raw_token)
+    current_user, token_payload = _resolve_user_from_token(session, raw_token)
 
     try:
         agent, environment = WebappService.resolve_agent_environment(
@@ -256,7 +246,9 @@ async def serve_webapp_file(
                 samesite="strict",
                 secure=request.url.scheme == "https",
                 path=f"/api/v1/agents/{agent_id}/webapp",
-                max_age=8 * 24 * 3600,  # Match JWT expiry
+                # Never outlive the token it carries (a stale-``sv`` or
+                # expired token is refused anyway; this keeps it off disk).
+                max_age=_remaining_lifetime_seconds(token_payload),
             )
         return response
     except HTTPException:

@@ -42,6 +42,12 @@ MFA_RECOVERY_CODES_REGENERATED = "MFA_RECOVERY_CODES_REGENERATED"
 MFA_TRUSTED_DEVICE_REGISTERED = "MFA_TRUSTED_DEVICE_REGISTERED"
 MFA_TRUSTED_DEVICE_USED = "MFA_TRUSTED_DEVICE_USED"
 
+# ── Session revocation ──────────────────────────────────────────────
+# Emitted by ``UserSessionService.end_sessions`` whenever a user's sessions are
+# ended at once (password change / set / reset, admin password set, Google
+# link wipe, "Sign out everywhere"). Details: ``{reason, api_tokens}``.
+SESSIONS_REVOKED = "SESSIONS_REVOKED"
+
 # ── Agent environment console event-type constants ───────────────────
 # Emitted by ``EnvironmentConsoleService`` when an owner+developer opens or
 # closes an interactive web terminal against their agent's Docker environment.

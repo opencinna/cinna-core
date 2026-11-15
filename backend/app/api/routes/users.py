@@ -9,12 +9,14 @@ from sqlmodel import Session, delete, func, select
 from app.services.credentials.credential_reshare_service import CredentialReshareService
 from app.services.catalog.desktop_agent_service import DesktopAgentService
 from app.api.deps import (
+    CurrentTokenClaims,
     CurrentUser,
     SessionDep,
     get_current_active_superuser,
 )
 from app.core.config import settings
 from app.services.users.user_service import UserService
+from app.services.users.user_session_service import UserSessionService
 from app.services.users.user_data_cleanup_service import UserDataCleanupService
 from app.models import (
     InvitationLinkPublic,
@@ -572,18 +574,26 @@ async def update_user_me(
 
 @router.patch("/me/password", response_model=Message)
 def update_password_me(
-    *, session: SessionDep, body: UpdatePassword, current_user: CurrentUser
+    *,
+    session: SessionDep,
+    body: UpdatePassword,
+    current_user: CurrentUser,
+    claims: CurrentTokenClaims,
 ) -> Any:
     """
-    Update own password.
+    Update own password. Ends every other session (the caller's own web
+    session or desktop client survives); API tokens keep working.
     """
     _require_password_auth(session, current_user)
+    keep_web, keep_desktop = UserSessionService.kept_sessions_from_claims(claims)
     try:
         UserService.update_password(
             session=session,
             user=current_user,
             current_password=body.current_password,
             new_password=body.new_password,
+            keep_web_session_id=keep_web,
+            keep_desktop_client_pk=keep_desktop,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -592,15 +602,25 @@ def update_password_me(
 
 @router.post("/me/set-password", response_model=Message)
 def set_password_me(
-    *, session: SessionDep, body: SetPassword, current_user: CurrentUser
+    *,
+    session: SessionDep,
+    body: SetPassword,
+    current_user: CurrentUser,
+    claims: CurrentTokenClaims,
 ) -> Any:
     """
-    Set password for user (for OAuth users who don't have one).
+    Set password for user (for OAuth users who don't have one). Ends every
+    other session, like a password change.
     """
     _require_password_auth(session, current_user)
+    keep_web, keep_desktop = UserSessionService.kept_sessions_from_claims(claims)
     try:
         UserService.set_password(
-            session=session, user=current_user, new_password=body.new_password
+            session=session,
+            user=current_user,
+            new_password=body.new_password,
+            keep_web_session_id=keep_web,
+            keep_desktop_client_pk=keep_desktop,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

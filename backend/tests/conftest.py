@@ -247,9 +247,11 @@ def client(db: Session) -> Generator[TestClient, None, None]:
 def superuser_token_headers(setup_db: None) -> dict[str, str]:
     """Auth headers for the seeded superuser, minted once per session.
 
-    JWTs are stateless and the superuser is seeded by ``setup_db`` (committed to
-    the test DB outside any rollback transaction), so its login token is stable
-    for the whole session. Minting it once avoids a login round-trip on every
+    The superuser is seeded by ``setup_db`` (committed to the test DB outside
+    any rollback transaction). Its token carries ``sv`` (session version) and
+    stays valid for the whole session only because each test's transaction
+    rolls back any ``sv`` bump a test makes (password change, sign out
+    everywhere). Minting it once avoids a login round-trip on every
     test. We use a short-lived ``TestClient`` whose ``get_db`` yields a plain
     session on the test engine (not the per-test savepoint session) so this
     fixture has no dependency on the function-scoped ``db``/``client`` fixtures.

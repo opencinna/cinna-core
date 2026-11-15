@@ -181,6 +181,11 @@ class User(UserBase, table=True):
     workspaces_enabled: bool = Field(default=False)
     # Per-user monotonic counter for short-code generation (TASK-1, TASK-2, ...)
     task_sequence_counter: int = Field(default=0)
+    # Session version, stamped into every non-desktop user JWT as ``sv``.
+    # Bumping it (``UserSessionService.end_sessions``) kills every such token
+    # at once. A token without ``sv`` reads as 0, so pre-column tokens die.
+    # Never exposed: it must not reach ``UserPublic``.
+    session_version: int = Field(default=1, sa_column_kwargs={"server_default": "1"})
     # ── Two-Factor Authentication ────────────────────────────────────
     # Master switch — True once the user has enrolled at least one
     # second factor (passkey or TOTP) and has not disabled 2FA since.

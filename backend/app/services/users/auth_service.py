@@ -6,6 +6,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from uuid import UUID
 
 import httpx
 from sqlmodel import Session, select
@@ -235,7 +236,12 @@ class AuthService:
 
     @classmethod
     def link_google_account(
-        cls, *, session: Session, user: User, google_id: str
+        cls,
+        *,
+        session: Session,
+        user: User,
+        google_id: str,
+        wipe_password: bool = False,
     ) -> User:
         """
         Link a Google account to an existing user.
@@ -294,6 +300,18 @@ class AuthService:
             session: Database session
             user: User to link
             google_id: Google's unique user ID
+            wipe_password: C1 wipe-and-link. After the claim gate passes,
+                drop the password, clear all MFA enrollment (passkeys, TOTP,
+                recovery codes, pending challenges, ``two_factor_enabled``)
+                and end every session *and* API token (CLI, CLI setup, A2A,
+                MCP) in the same commit as the link. Used for an
+                *unconfirmed* account auto-linked by email: whoever set that
+                password never proved the address, so nothing they enrolled
+                or signed in with may survive the address owner's Google
+                sign-in, and the owner gets a plain token, not the
+                pre-registrant's MFA challenge. The gate runs first so it
+                sees the row as it was (a password-holding account is
+                claimed).
 
         Returns:
             Updated User
@@ -325,6 +343,26 @@ class AuthService:
             )
             raise RegistrationNotAllowedError(REASON_REGISTRATION_CLOSED)
 
+        if wipe_password:
+            from app.services.users.user_session_service import (
+                REASON_GOOGLE_LINK_WIPE,
+                UserSessionService,
+            )
+
+            user.hashed_password = None
+            UserService.disable_all_factors(
+                session=session,
+                user=user,
+                reason=REASON_GOOGLE_LINK_WIPE,
+                commit=False,
+            )
+            UserSessionService.end_sessions(
+                session,
+                user,
+                reason=REASON_GOOGLE_LINK_WIPE,
+                include_api_tokens=True,
+            )
+
         user.google_id = google_id
         session.add(user)
         session.commit()
@@ -350,18 +388,32 @@ class AuthService:
         return user
 
     @classmethod
-    def create_access_token(cls, user_id: Any) -> str:
-        """
-        Create a JWT access token for a user.
+    def create_user_access_token(
+        cls,
+        user: User,
+        *,
+        web_session_id: UUID | None = None,
+        expires_delta: timedelta | None = None,
+    ) -> str:
+        """Mint a user access JWT carrying ``sv``, ``iat`` and, for a cookie
+        web session, ``sid``.
 
-        Args:
-            user_id: User's ID
-
-        Returns:
-            JWT access token string
+        The one minting path for user JWTs (web logins, invitation accept, the
+        account-API proxy's inner token). ``sv`` is read from ``user`` as it is
+        now, so any ``end_sessions`` must be committed before this is called.
+        Native desktop/mobile pairs and scoped tokens do not use it.
         """
-        access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-        return security.create_access_token(user_id, expires_delta=access_token_expires)
+        if expires_delta is None:
+            expires_delta = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        claims: dict[str, Any] = {
+            "sv": user.session_version,
+            "iat": int(datetime.now(timezone.utc).timestamp()),
+        }
+        if web_session_id is not None:
+            claims["sid"] = str(web_session_id)
+        return security.create_access_token(
+            user.id, expires_delta=expires_delta, extra_claims=claims
+        )
 
     @classmethod
     async def authenticate_with_google(
@@ -421,8 +473,19 @@ class AuthService:
                 # account this call *is* the claim, so it asks the same
                 # question the password doors ask and raises the same generic
                 # registration refusal when the answer is no.
+                #
+                # C1: an unconfirmed account's password was set by someone
+                # who never proved the address. Captured before the link;
+                # the link then wipes it, clears MFA enrollment and ends every
+                # session and API token in its commit, before
+                # ``two_factor_enabled`` is read and any token is minted below
+                # (the new token must carry the bumped ``sv``).
+                was_unconfirmed = not user.email_confirmed
                 user = cls.link_google_account(
-                    session=session, user=user, google_id=google_id
+                    session=session,
+                    user=user,
+                    google_id=google_id,
+                    wipe_password=was_unconfirmed,
                 )
             else:
                 # Create new user
@@ -461,7 +524,7 @@ class AuthService:
             return LoginResult(user=user, mfa_challenge=challenge)
 
         # Generate JWT access token
-        access_token = cls.create_access_token(user.id)
+        access_token = cls.create_user_access_token(user)
         return LoginResult(user=user, access_token=access_token)
 
     @classmethod

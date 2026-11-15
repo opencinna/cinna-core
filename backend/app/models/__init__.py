@@ -50,6 +50,10 @@ from .users.user_trusted_device import (
     UserTrustedDevice,
     TrustedDevicePublic,
 )
+from .users.user_web_session import (
+    UserWebSession,
+    UserWebRefreshToken,
+)
 from .users.user_invitation import (
     UserInvitation,
     UserInvitationPublic,
@@ -1234,6 +1238,8 @@ __all__ = [
     "RecoveryCodeStatus",
     "RecoveryCodesPlaintext",
     "UserTrustedDevice",
+    "UserWebSession",
+    "UserWebRefreshToken",
     "TrustedDevicePublic",
     # Invitations (zero-touch onboarding phase 3)
     "UserInvitation",

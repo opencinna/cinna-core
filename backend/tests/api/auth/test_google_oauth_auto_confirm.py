@@ -33,6 +33,9 @@ from unittest.mock import AsyncMock, patch
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
+from tests.utils.cli import account_cli_headers, bootstrap_account_token
+from tests.utils.mfa import enroll_totp, get_mfa_status
+from tests.utils.user import promote_to_developer
 from tests.utils.utils import random_email, random_lower_string
 
 _BASE = settings.API_V1_STR
@@ -159,15 +162,21 @@ def test_google_signup_user_is_auto_confirmed(client: TestClient) -> None:
     )
 
 
-def test_existing_unconfirmed_user_confirmed_on_google_login(client: TestClient) -> None:
+def test_existing_unconfirmed_user_confirmed_on_google_login(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
     """
     An existing unconfirmed (password-signup) user who authenticates via Google
-    has email_confirmed flipped to True by the Google login path.
+    has email_confirmed flipped to True — and, because whoever set that
+    password never proved the address, the password is wiped and every
+    earlier session ends (C1 wipe-and-link).
 
       1. Signup user with email+password → unconfirmed.
       2. Drive Google callback for the *same* email (auto-link + confirm path).
-      3. GET /users/me → email_confirmed=True.
-      4. Original password login still works, and /users/me still shows confirmed.
+      3. GET /users/me → email_confirmed=True, has_password=False.
+      4. The old password no longer logs in; the pre-link token is dead.
+      5. The pre-registrant's TOTP is gone and their account CLI token is
+         revoked.
     """
     # ── Phase 1: Create unconfirmed user ──────────────────────────────────
     email = random_email()
@@ -180,26 +189,46 @@ def test_existing_unconfirmed_user_confirmed_on_google_login(client: TestClient)
     me_pre = _me(client, pre_headers)
     assert me_pre["email_confirmed"] is False
 
+    # The pre-registrant enrolls TOTP and mints an account CLI token (the
+    # account setup token needs the agent-developer role).
+    enroll_totp(client, pre_headers)
+    promote_to_developer(client, superuser_token_headers, me_pre["id"])
+    account_jwt, _ = bootstrap_account_token(client, pre_headers)
+    cli_headers = account_cli_headers(account_jwt)
+    r = client.get(f"{settings.API_V1_STR}/cli/account/agents", headers=cli_headers)
+    assert r.status_code == 200, r.text
+
     # ── Phase 2: Same email authenticates via Google ───────────────────────
     # AuthService.authenticate_with_google finds the existing user by email
-    # (auto-link), then calls EmailConfirmationService.mark_confirmed because
-    # user.email_confirmed is False at that point.
+    # (auto-link), wipes the unproven password, clears MFA, ends sessions and
+    # API tokens, then calls EmailConfirmationService.mark_confirmed. The
+    # callback returns a plain token, not the pre-registrant's MFA challenge.
     google_id = f"google-uid-{uuid.uuid4().hex}"
     callback_body = _google_callback(client, email=email, google_id=google_id)
     google_headers = _headers_from_google_token(callback_body)
 
-    # ── Phase 3: User is now confirmed ────────────────────────────────────
+    # ── Phase 3: User is now confirmed, password gone ─────────────────────
     me_post = _me(client, google_headers)
     assert me_post["email"] == email
     assert me_post["email_confirmed"] is True, (
         "Existing unconfirmed user must become email_confirmed=True after Google login"
     )
     assert me_post["email_confirmed_at"] is not None
+    assert me_post["has_password"] is False
 
-    # ── Phase 4: Confirmation persists across subsequent password logins ───
-    # The auto-confirm is durable — not just a token-level claim.
-    post_password_headers = _login_password(client, email, password)
-    me_password = _me(client, post_password_headers)
-    assert me_password["email_confirmed"] is True, (
-        "email_confirmed=True must persist for subsequent password logins"
+    # ── Phase 4: The pre-link password and session are dead ───────────────
+    r = client.post(
+        f"{settings.API_V1_STR}/login/access-token",
+        data={"username": email, "password": password},
     )
+    assert r.status_code == 400, r.text
+    r = client.get(f"{settings.API_V1_STR}/users/me", headers=pre_headers)
+    assert r.status_code == 401, r.text
+
+    # ── Phase 5: MFA enrollment cleared, API tokens revoked ───────────────
+    status = get_mfa_status(client, google_headers)
+    assert status["enabled"] is False
+    assert status["has_totp"] is False
+    assert status["has_recovery_codes"] is False
+    r = client.get(f"{settings.API_V1_STR}/cli/account/agents", headers=cli_headers)
+    assert r.status_code in (401, 403), r.text

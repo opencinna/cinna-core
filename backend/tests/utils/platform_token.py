@@ -33,9 +33,16 @@ def mint_platform_token(
     ``expires_delta`` may be negative to produce an already-expired token.
     ``extra_claims`` is merged into the token payload (e.g. ``token_type`` /
     ``role`` for scoped-token rejection tests).
+
+    The token carries ``sv=1`` (a fresh user's session version) so it passes
+    the session-version check; pass ``extra_claims={"sv": ...}`` to override,
+    or ``{"sv": None}`` to omit it (a legacy, pre-``sv`` token).
     """
+    claims: dict = {"sv": 1, **(extra_claims or {})}
+    if claims["sv"] is None:
+        del claims["sv"]
     return create_access_token(
         subject=subject,
         expires_delta=expires_delta,
-        extra_claims=extra_claims or {},
+        extra_claims=claims,
     )

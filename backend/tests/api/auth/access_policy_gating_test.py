@@ -295,9 +295,10 @@ def test_password_auth_off_blocks_every_password_path_except_for_admins(
         },
     )
     assert admin_reset.status_code == 200, admin_reset.text
-    assert (
-        _login(client, settings.FIRST_SUPERUSER, admin_new_password).status_code == 200
-    )
+    admin_login = _login(client, settings.FIRST_SUPERUSER, admin_new_password)
+    assert admin_login.status_code == 200
+    # A reset ends every session, so the admin continues on a fresh token.
+    admin_headers = {"Authorization": f"Bearer {admin_login.json()['access_token']}"}
 
     # ── Phase 7: The authenticated password endpoints ─────────────────
     change = client.patch(
@@ -321,7 +322,7 @@ def test_password_auth_off_blocks_every_password_path_except_for_admins(
     # The administrator may still rotate their own password.
     admin_change = client.patch(
         f"{API}/users/me/password",
-        headers=superuser_token_headers,
+        headers=admin_headers,
         json={
             "current_password": admin_new_password,
             "new_password": random_lower_string(),

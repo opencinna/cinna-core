@@ -35,6 +35,13 @@ from app.services.users.access_policy_service import (
     RegistrationNotAllowedError,
 )
 from app.services.users.role_service import RoleService
+from app.services.users.user_session_service import (
+    REASON_ADMIN_PASSWORD_SET,
+    REASON_PASSWORD_CHANGED,
+    REASON_PASSWORD_RESET,
+    REASON_PASSWORD_SET,
+    UserSessionService,
+)
 from app.utils import (
     generate_password_reset_token,
     generate_reset_password_email,
@@ -328,15 +335,24 @@ class UserService:
 
     @staticmethod
     def update_user(*, session: Session, db_user: User, user_in: UserUpdate) -> Any:
-        """Update an existing user, hashing password if provided."""
+        """Update an existing user, hashing password if provided.
+
+        An admin-set password ends every session of the user (API tokens
+        stay), in the same commit as the hash write.
+        """
         user_data = user_in.model_dump(exclude_unset=True)
         extra_data = {}
-        if "password" in user_data:
+        password_set = "password" in user_data
+        if password_set:
             password = user_data["password"]
             hashed_password = get_password_hash(password)
             extra_data["hashed_password"] = hashed_password
         db_user.sqlmodel_update(user_data, update=extra_data)
         session.add(db_user)
+        if password_set:
+            UserSessionService.end_sessions(
+                session, db_user, reason=REASON_ADMIN_PASSWORD_SET
+            )
         session.commit()
         session.refresh(db_user)
         return db_user
@@ -630,10 +646,19 @@ class UserService:
 
     @staticmethod
     def update_password(
-        *, session: Session, user: User, current_password: str, new_password: str
+        *,
+        session: Session,
+        user: User,
+        current_password: str,
+        new_password: str,
+        keep_web_session_id: uuid.UUID | None = None,
+        keep_desktop_client_pk: uuid.UUID | None = None,
     ) -> None:
         """
         Update password for a user who already has one set.
+
+        Ends every other session of the user (the kept web session / desktop
+        client survive; API tokens stay) in the same commit.
 
         Raises:
             ValueError: If no password set, current password wrong, or same password.
@@ -648,12 +673,28 @@ class UserService:
             )
         user.hashed_password = get_password_hash(new_password)
         session.add(user)
+        UserSessionService.end_sessions(
+            session,
+            user,
+            reason=REASON_PASSWORD_CHANGED,
+            keep_web_session_id=keep_web_session_id,
+            keep_desktop_client_pk=keep_desktop_client_pk,
+        )
         session.commit()
 
     @staticmethod
-    def set_password(*, session: Session, user: User, new_password: str) -> None:
+    def set_password(
+        *,
+        session: Session,
+        user: User,
+        new_password: str,
+        keep_web_session_id: uuid.UUID | None = None,
+        keep_desktop_client_pk: uuid.UUID | None = None,
+    ) -> None:
         """
         Set password for an OAuth user who doesn't have one yet.
+
+        Ends every other session of the user, like :meth:`update_password`.
 
         Raises:
             ValueError: If password already set.
@@ -664,6 +705,13 @@ class UserService:
             )
         user.hashed_password = get_password_hash(new_password)
         session.add(user)
+        UserSessionService.end_sessions(
+            session,
+            user,
+            reason=REASON_PASSWORD_SET,
+            keep_web_session_id=keep_web_session_id,
+            keep_desktop_client_pk=keep_desktop_client_pk,
+        )
         session.commit()
 
     @staticmethod
@@ -725,6 +773,10 @@ class UserService:
         AccessPolicyService.require_password_auth(session, user)
         user.hashed_password = get_password_hash(password=new_password)
         session.add(user)
+        # Forgot-password reset ends everything, API tokens included.
+        UserSessionService.end_sessions(
+            session, user, reason=REASON_PASSWORD_RESET, include_api_tokens=True
+        )
         session.commit()
         return user
 
@@ -734,6 +786,7 @@ class UserService:
         session: Session,
         user: User,
         reason: str = "user_initiated",
+        commit: bool = True,
     ) -> None:
         """Wipe every 2FA artefact for ``user`` and flip the master flag off.
 
@@ -752,6 +805,10 @@ class UserService:
         Also writes a :data:`MFA_DISABLED` security-event row for the
         audit trail.  Idempotent — safe to call when no factors are
         enrolled.
+
+        ``commit=False`` leaves the commit (and the refresh) to the caller,
+        so the wipe lands in the caller's transaction. Used by the C1
+        Google wipe-and-link (``reason="google_link_wipe"``).
         """
         for stmt in (
             delete(UserPasskey).where(UserPasskey.user_id == user.id),
@@ -782,6 +839,8 @@ class UserService:
                 created_at=datetime.now(UTC),
             )
         )
+        if not commit:
+            return
         session.commit()
         # Bulk deletes don't auto-expire ORM-tracked rows. Refresh the
         # passed-in user so any post-call read in the same request sees

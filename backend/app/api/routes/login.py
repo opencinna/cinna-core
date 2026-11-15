@@ -1,5 +1,4 @@
 import logging
-from datetime import timedelta
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -11,8 +10,6 @@ logger = logging.getLogger(__name__)
 from app.api.deps import CurrentUser, SessionDep, get_current_active_superuser
 from app.api.routes._mfa_errors import translate_mfa_error
 from app.api.routes._user_public import user_to_public
-from app.core import security
-from app.core.config import settings
 from app.models import (
     ConfirmEmailRequest,
     LoginResponse,
@@ -31,6 +28,7 @@ from app.services.users.access_policy_service import (
     AccessPolicyService,
     PasswordAuthDisabledError,
 )
+from app.services.users.auth_service import AuthService
 from app.services.users.email_confirmation_service import EmailConfirmationService
 from app.services.users.invitation_service import InvitationService
 from app.services.users.mfa_service import FIRST_FACTOR_PASSWORD, MfaService
@@ -98,13 +96,8 @@ def login_access_token(
         if MfaService.consume_trusted_device(
             session=session, user=user, token=trusted_device_token
         ):
-            access_token_expires = timedelta(
-                minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
-            )
             return LoginToken(
-                access_token=security.create_access_token(
-                    user.id, expires_delta=access_token_expires
-                )
+                access_token=AuthService.create_user_access_token(user)
             )
         challenge = MfaService.issue_challenge(
             session=session, user=user, first_factor=FIRST_FACTOR_PASSWORD
@@ -117,12 +110,7 @@ def login_access_token(
             ),
         )
 
-    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    return LoginToken(
-        access_token=security.create_access_token(
-            user.id, expires_delta=access_token_expires
-        )
-    )
+    return LoginToken(access_token=AuthService.create_user_access_token(user))
 
 
 @router.post(
@@ -230,11 +218,8 @@ def login_mfa_verify(
     if not user.is_active:
         raise HTTPException(status_code=400, detail="Inactive user")
 
-    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     return LoginToken(
-        access_token=security.create_access_token(
-            user.id, expires_delta=access_token_expires
-        ),
+        access_token=AuthService.create_user_access_token(user),
         trusted_device_token=trusted_device_token,
     )
 

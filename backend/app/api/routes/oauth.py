@@ -83,7 +83,7 @@ async def google_callback(
                 token=body.trusted_device_token,
             ):
                 response = LoginToken(
-                    access_token=AuthService.create_access_token(result.user.id)
+                    access_token=AuthService.create_user_access_token(result.user)
                 )
             else:
                 challenge = result.mfa_challenge

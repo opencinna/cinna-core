@@ -15,6 +15,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
+from sqlalchemy import update
 from sqlmodel import Session, select
 
 from app.core.app_schemes import MOBILE_APP_SCHEME_PATTERN
@@ -301,6 +302,38 @@ class DesktopAuthService:
 
         session.commit()
         logger.info("Revoked desktop client %s and its tokens", client_id_str)
+
+    @staticmethod
+    def revoke_all_clients_for_user(
+        session: Session,
+        user_id: UUID,
+        *,
+        except_client_pk: UUID | None = None,
+    ) -> None:
+        """Soft-revoke every desktop/mobile client of ``user_id`` and their live
+        refresh tokens, except the client whose primary key is
+        ``except_client_pk``.
+
+        Sets ``is_revoked`` only and leaves ``revoked_at`` NULL — the
+        hard-revoke invariant — so a later refresh answers the existing
+        ``400 invalid_grant``. Does not commit: the caller commits it together
+        with whatever caused it (a password write, a sign-out-everywhere).
+        """
+        client_stmt = update(DesktopOAuthClient).where(
+            DesktopOAuthClient.user_id == user_id,
+            DesktopOAuthClient.is_revoked == False,  # noqa: E712
+        )
+        token_stmt = update(DesktopRefreshToken).where(
+            DesktopRefreshToken.user_id == user_id,
+            DesktopRefreshToken.is_revoked == False,  # noqa: E712
+        )
+        if except_client_pk is not None:
+            client_stmt = client_stmt.where(DesktopOAuthClient.id != except_client_pk)
+            token_stmt = token_stmt.where(
+                DesktopRefreshToken.client_id != except_client_pk
+            )
+        session.execute(client_stmt.values(is_revoked=True))
+        session.execute(token_stmt.values(is_revoked=True))
 
     # ── Consent flow ───────────────────────────────────────────────────────
 

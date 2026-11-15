@@ -159,4 +159,4 @@ async def accept_invitation(
         # The single mapping. One exception type, one status, one body — see
         # the module docstring on why a second branch here is an oracle.
         raise HTTPException(status_code=400, detail=str(exc))
-    return LoginToken(access_token=AuthService.create_access_token(user.id))
+    return LoginToken(access_token=AuthService.create_user_access_token(user))
