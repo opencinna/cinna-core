@@ -22,6 +22,12 @@ import {
   Package,
 } from "lucide-react"
 import { EnvironmentPanel } from "@/components/Environment/EnvironmentPanel"
+import {
+  clearGuestToken,
+  getAccessToken,
+  getGuestToken,
+  setGuestToken,
+} from "@/lib/authSession"
 
 export const Route = createFileRoute("/guest/$guestShareToken")({
   component: GuestChatPage,
@@ -163,7 +169,7 @@ function GuestChatPage() {
 
     // Check for an existing valid guest JWT before requiring code entry.
     // This handles page refresh after the user already entered the code.
-    const existingToken = localStorage.getItem("access_token")
+    const existingToken = getAccessToken() ?? getGuestToken()
     if (existingToken) {
       const guestClaims = parseGuestJwt(existingToken)
       if (guestClaims && guestClaims.exp * 1000 > Date.now()) {
@@ -189,7 +195,9 @@ function GuestChatPage() {
 
   const performAuth = useCallback(async (securityCode?: string) => {
     try {
-      const existingToken = localStorage.getItem("access_token")
+      // A signed-in user activates the share under their own account; an
+      // anonymous visitor uses a guest JWT kept apart from any user session.
+      const existingToken = getAccessToken() ?? getGuestToken()
 
       if (existingToken) {
         const guestClaims = parseGuestJwt(existingToken)
@@ -201,7 +209,7 @@ function GuestChatPage() {
             setAuthState("ready")
             return
           }
-          localStorage.removeItem("access_token")
+          clearGuestToken()
           await authenticateAnonymous(securityCode)
         } else {
           try {
@@ -219,7 +227,6 @@ function GuestChatPage() {
               throw activateError
             }
             if ([401, 404].includes(activateError?.status)) {
-              localStorage.removeItem("access_token")
               await authenticateAnonymous(securityCode)
             } else {
               throw activateError
@@ -258,7 +265,8 @@ function GuestChatPage() {
       requestBody: securityCode ? { security_code: securityCode } : undefined,
     })) as unknown as GuestShareAuthResponse
 
-    localStorage.setItem("access_token", authResult.access_token)
+    // Never replaces a user session: the bearer prefers the user token.
+    setGuestToken(authResult.access_token)
     setGuestShareId(authResult.guest_share_id)
     setAgentId(authResult.agent_id)
     setAuthState("ready")

@@ -3,7 +3,8 @@
  *
  * The plaintext token is minted once by `POST /login/mfa/verify` when the
  * user opts to skip the 2FA challenge on this device for a bounded window.
- * It is persisted in localStorage (consistent with `access_token`) and sent
+ * It is persisted in localStorage (it skips only the second factor, never
+ * the password, so unlike the access token it may live there) and sent
  * on every future login so the backend can skip the challenge until it
  * expires. Storage access is centralized here so callers never touch the
  * raw key.

@@ -66,7 +66,9 @@ const ChangePassword = () => {
     mutationFn: (data: UpdatePassword) =>
       UsersService.updatePasswordMe({ requestBody: data }),
     onSuccess: () => {
-      showSuccessToast("Password updated successfully")
+      showSuccessToast(
+        "Password updated. Other browsers and apps were signed out.",
+      )
       form.reset()
       setOpen(false)
     },
@@ -78,7 +80,15 @@ const ChangePassword = () => {
   }
 
   return (
-    <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) form.reset() }}>
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        // Escape or an outside click mid-request would drop the result.
+        if (mutation.isPending) return
+        setOpen(v)
+        if (!v) form.reset()
+      }}
+    >
       <DialogTrigger asChild>
         <Button variant="outline" size="sm">Change Password</Button>
       </DialogTrigger>
@@ -86,7 +96,8 @@ const ChangePassword = () => {
         <DialogHeader>
           <DialogTitle>Change Password</DialogTitle>
           <DialogDescription>
-            Enter your current password and choose a new one.
+            Enter your current password and choose a new one; every other
+            browser and app will be signed out.
           </DialogDescription>
         </DialogHeader>
         <Form {...form}>

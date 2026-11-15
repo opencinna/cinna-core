@@ -8,8 +8,8 @@
  *   * `logs`     → `WS /api/v1/env-console/{id}/logs/stream?tail=N`
  *
  * Browsers cannot set `Authorization` on a WS handshake, so the platform
- * access token is passed as a `?token=` query param (read from
- * `localStorage["access_token"]`), matching the backend
+ * access token is passed as a `?token=` query param (the in-memory session
+ * token, refreshed first when close to expiry), matching the backend
  * `get_env_console_context_ws` dependency.
  *
  * Wire contract (mirrors `EnvironmentConsoleService`):
@@ -27,6 +27,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 
 import { OpenAPI } from "@/client"
+import { getFreshAccessToken } from "@/lib/authSession"
 
 export type EnvConsoleKind = "terminal" | "logs"
 
@@ -86,7 +87,12 @@ export interface UseEnvConsoleSocketResult {
 }
 
 /** Build the `ws(s)://…` console URL from the configured API base. */
-function buildConsoleUrl(kind: EnvConsoleKind, environmentId: string, tail?: number): string {
+function buildConsoleUrl(
+  kind: EnvConsoleKind,
+  environmentId: string,
+  token: string | null,
+  tail?: number,
+): string {
   // OpenAPI.BASE is the http(s) API origin (VITE_API_URL); may be relative/empty.
   const base = (OpenAPI.BASE || window.location.origin).replace(/\/$/, "")
   const httpUrl = base.startsWith("http") ? base : `${window.location.origin}${base}`
@@ -98,7 +104,6 @@ function buildConsoleUrl(kind: EnvConsoleKind, environmentId: string, tail?: num
       : `/api/v1/env-console/${environmentId}/logs/stream`
 
   const params = new URLSearchParams()
-  const token = localStorage.getItem("access_token")
   if (token) params.set("token", token)
   if (kind === "logs" && tail != null) params.set("tail", String(tail))
 
@@ -146,6 +151,9 @@ export function useEnvConsoleSocket(
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const attemptRef = useRef(0)
   const manualCloseRef = useRef(false)
+  // Bumped by every connect and teardown, so a connect still awaiting its
+  // token can tell it was superseded and must not open a socket.
+  const connectGenerationRef = useRef(0)
   // Keep callbacks in refs so connect() stays stable and doesn't churn the socket.
   const onMessageRef = useRef(onMessage)
   const onOpenRef = useRef(onOpen)
@@ -162,7 +170,8 @@ export function useEnvConsoleSocket(
     }
   }, [])
 
-  const connect = useCallback(() => {
+  const connect = useCallback(async () => {
+    const generation = ++connectGenerationRef.current
     // Drop any prior socket before opening a new one.
     if (wsRef.current) {
       try {
@@ -177,9 +186,14 @@ export function useEnvConsoleSocket(
     setStatus("connecting")
     setCloseReason(null)
 
+    const token = await getFreshAccessToken()
+    if (generation !== connectGenerationRef.current || manualCloseRef.current) {
+      return
+    }
+
     let ws: WebSocket
     try {
-      ws = new WebSocket(buildConsoleUrl(kind, environmentId, tail))
+      ws = new WebSocket(buildConsoleUrl(kind, environmentId, token, tail))
     } catch {
       setStatus("error")
       setCloseReason("error")
@@ -247,7 +261,7 @@ export function useEnvConsoleSocket(
       attemptRef.current += 1
       setReconnectAttempt(attemptRef.current)
       setStatus("connecting")
-      reconnectTimerRef.current = setTimeout(connect, delay)
+      reconnectTimerRef.current = setTimeout(() => void connect(), delay)
     }
   }, [clearReconnectTimer, environmentId, kind, tail])
 
@@ -255,11 +269,12 @@ export function useEnvConsoleSocket(
     attemptRef.current = 0
     setReconnectAttempt(0)
     manualCloseRef.current = false
-    connect()
+    void connect()
   }, [connect])
 
   const disconnect = useCallback(() => {
     manualCloseRef.current = true
+    connectGenerationRef.current += 1
     clearReconnectTimer()
     if (wsRef.current) {
       try {
@@ -290,9 +305,10 @@ export function useEnvConsoleSocket(
     }
     manualCloseRef.current = false
     attemptRef.current = 0
-    connect()
+    void connect()
     return () => {
       manualCloseRef.current = true
+      connectGenerationRef.current += 1
       clearReconnectTimer()
       if (wsRef.current) {
         try {

@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button"
 import { isMfaChallengeResponse } from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
 import { clearLoginScopedDisclaimerAck, getErrorMessage, persistDetectedLocaleDefaults, safeRedirectPath } from "@/utils"
+import { setSession } from "@/lib/authSession"
 import { accessPolicyReasonCopy } from "@/utils/accessPolicyReasons"
 import { getTrustedDeviceToken } from "@/utils/trustedDevice"
 
@@ -38,6 +39,7 @@ export function GoogleLoginButton() {
       }
       return await OauthService.googleCallback({
         requestBody,
+        xCinnaWebSession: "1",
       })
     },
     onSuccess: (data) => {
@@ -53,7 +55,8 @@ export function GoogleLoginButton() {
         return
       }
 
-      localStorage.setItem("access_token", data.access_token)
+      // CSRF token persisted before any full assign; S0 restores on reload.
+      setSession(data.access_token, data.csrf_token)
       clearLoginScopedDisclaimerAck()
       // Fire-and-forget: persist browser-detected locale defaults (NULL-only
       // fill server-side). Must not block navigation; errors are swallowed.

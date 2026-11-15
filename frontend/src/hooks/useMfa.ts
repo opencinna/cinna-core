@@ -245,7 +245,11 @@ export async function runStepUpPasskey(): Promise<StepUpPasskeyAssertion> {
 export function useVerifyMfaMutation() {
   return useMutation<LoginToken, Error, MfaVerifyRequest>({
     mutationFn: (payload) =>
-      LoginService.loginMfaVerify({ requestBody: payload }),
+      // Opt in to the refresh-cookie session, as every web sign-in does.
+      LoginService.loginMfaVerify({
+        requestBody: payload,
+        xCinnaWebSession: "1",
+      }),
   })
 }
 

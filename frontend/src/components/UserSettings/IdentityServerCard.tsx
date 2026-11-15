@@ -74,14 +74,15 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import useCustomToast from "@/hooks/useCustomToast"
+import { getFreshAccessToken } from "@/lib/authSession"
 import { cn } from "@/lib/utils"
 import { getErrorMessage } from "@/utils"
 import { getColorPreset } from "@/utils/colorPresets"
 
 const API_BASE = import.meta.env.VITE_API_URL || ""
 
-function getAuthHeaders() {
-  const token = localStorage.getItem("access_token")
+async function getAuthHeaders() {
+  const token = await getFreshAccessToken()
   return {
     "Content-Type": "application/json",
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -161,7 +162,7 @@ export function IdentityServerCard() {
     queryKey: ["identity-bindings"],
     queryFn: async () => {
       const res = await fetch(`${API_BASE}/api/v1/identity/bindings/`, {
-        headers: getAuthHeaders(),
+        headers: await getAuthHeaders(),
       })
       if (!res.ok) throw new Error("Failed to load identity bindings")
       return res.json()
@@ -264,7 +265,7 @@ export function IdentityServerCard() {
         `${API_BASE}/api/v1/identity/bindings/${bindingId}`,
         {
           method: "PUT",
-          headers: getAuthHeaders(),
+          headers: await getAuthHeaders(),
           body: JSON.stringify(body),
         },
       )
@@ -290,7 +291,7 @@ export function IdentityServerCard() {
         `${API_BASE}/api/v1/identity/bindings/${bindingId}`,
         {
           method: "DELETE",
-          headers: getAuthHeaders(),
+          headers: await getAuthHeaders(),
         },
       )
       if (!res.ok) {
@@ -320,7 +321,7 @@ export function IdentityServerCard() {
         `${API_BASE}/api/v1/identity/bindings/${bindingId}`,
         {
           method: "PUT",
-          headers: getAuthHeaders(),
+          headers: await getAuthHeaders(),
           body: JSON.stringify({ is_active: isActive }),
         },
       )
@@ -349,7 +350,7 @@ export function IdentityServerCard() {
         `${API_BASE}/api/v1/identity/bindings/${bindingId}/assignments`,
         {
           method: "POST",
-          headers: getAuthHeaders(),
+          headers: await getAuthHeaders(),
           body: JSON.stringify(userIds),
         },
       )
@@ -378,7 +379,7 @@ export function IdentityServerCard() {
         `${API_BASE}/api/v1/identity/bindings/${bindingId}/assignments/${userId}`,
         {
           method: "DELETE",
-          headers: getAuthHeaders(),
+          headers: await getAuthHeaders(),
         },
       )
       if (!res.ok) {

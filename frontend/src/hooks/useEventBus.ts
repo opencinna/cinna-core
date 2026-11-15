@@ -9,6 +9,7 @@
 
 import { useEffect, useRef, useCallback, useState } from "react"
 import { eventService, EventHandler, EventTypes, ConnectionStatus } from "@/services/eventService"
+import { getFreshAccessToken } from "@/lib/authSession"
 import useAuth from "./useAuth"
 
 /**
@@ -24,7 +25,7 @@ export function useEventBusConnection() {
       console.log("[useEventBusConnection] Initializing event bus for user:", user.id)
       // The socket authenticates with the signed token, not the user id — see
       // eventService.connect(). Read lazily so reconnects pick up a refreshed one.
-      eventService.connect(() => localStorage.getItem("access_token"))
+      eventService.connect(getFreshAccessToken)
       hasInitialized.current = true
     }
 

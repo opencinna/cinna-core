@@ -60,7 +60,7 @@ export default function SetPassword() {
     mutationFn: (data: { new_password: string }) =>
       UsersService.setPasswordMe({ requestBody: data }),
     onSuccess: () => {
-      showSuccessToast("Password set successfully")
+      showSuccessToast("Password set. Other browsers and apps were signed out.")
       form.reset()
       setOpen(false)
       queryClient.invalidateQueries({ queryKey: ["currentUser"] })
@@ -82,7 +82,15 @@ export default function SetPassword() {
   }
 
   return (
-    <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) form.reset() }}>
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        // Escape or an outside click mid-request would drop the result.
+        if (mutation.isPending) return
+        setOpen(v)
+        if (!v) form.reset()
+      }}
+    >
       <DialogTrigger asChild>
         <Button variant="outline" size="sm">Set Password</Button>
       </DialogTrigger>
@@ -90,7 +98,8 @@ export default function SetPassword() {
         <DialogHeader>
           <DialogTitle>Set Password</DialogTitle>
           <DialogDescription>
-            You signed up with Google. Set a password to enable password login.
+            You signed up with Google. Set a password to enable password
+            login; every other browser and app will be signed out.
           </DialogDescription>
         </DialogHeader>
         <Form {...form}>

@@ -28,6 +28,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { googleSignInAvailable } from "@/hooks/useAccessPolicy"
 import { isMfaChallengeResponse } from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
+import { setSession } from "@/lib/authSession"
 import {
   APP_NAME,
   clearLoginScopedDisclaimerAck,
@@ -153,6 +154,7 @@ function AcceptInvite() {
           password: data.password,
           full_name: data.full_name?.trim() ? data.full_name.trim() : null,
         },
+        xCinnaWebSession: "1",
       }),
     onSuccess: (result) => {
       if (isMfaChallengeResponse(result)) {
@@ -163,7 +165,8 @@ function AcceptInvite() {
         void navigate({ to: "/login" })
         return
       }
-      localStorage.setItem("access_token", result.access_token)
+      // CSRF token persisted before the full assign; S0 restores on reload.
+      setSession(result.access_token, result.csrf_token)
       clearLoginScopedDisclaimerAck()
       // Fire-and-forget, as on every other sign-in path.
       persistDetectedLocaleDefaults()

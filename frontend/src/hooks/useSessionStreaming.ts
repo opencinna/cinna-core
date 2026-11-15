@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from "react"
 import { useQueryClient } from "@tanstack/react-query"
+import { getFreshAccessToken } from "@/lib/authSession"
 import { eventService } from "@/services/eventService"
 
 export interface StreamEvent {
@@ -253,7 +254,7 @@ export function useSessionStreaming({
       setIsInterruptPending(false)
 
       try {
-        const token = localStorage.getItem("access_token")
+        const token = await getFreshAccessToken()
         if (!token) {
           throw new Error("Not authenticated")
         }
@@ -412,7 +413,7 @@ export function useSessionStreaming({
     setIsInterruptPending(true)
 
     try {
-      const token = localStorage.getItem("access_token")
+      const token = await getFreshAccessToken()
       if (!token) {
         console.error("Not authenticated")
         setIsInterruptPending(false)

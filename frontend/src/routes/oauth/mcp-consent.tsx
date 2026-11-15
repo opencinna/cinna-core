@@ -23,6 +23,7 @@ import {
   AlertTriangle,
   CheckCircle2,
 } from "lucide-react"
+import { getFreshAccessToken } from "@/lib/authSession"
 import { APP_NAME } from "@/utils"
 
 const searchSchema = z.object({
@@ -76,7 +77,9 @@ async function fetchConsentInfo(nonce: string, appMcp: boolean) {
 }
 
 async function approveConsent(nonce: string) {
-  const token = localStorage.getItem("access_token")
+  // Raw fetch sits outside the 401 interceptor, so take a token refreshed if
+  // it is about to expire: the page may have been open for over 15 min.
+  const token = await getFreshAccessToken()
   const res = await fetch(`${API_BASE}/api/v1/mcp/consent/${nonce}/approve`, {
     method: "POST",
     headers: {

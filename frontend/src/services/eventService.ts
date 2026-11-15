@@ -135,6 +135,9 @@ export type ConnectionStatus = "connected" | "connecting" | "disconnected"
 // Connection status listener
 export type ConnectionStatusListener = (status: ConnectionStatus) => void
 
+/** Returns the JWT the socket authenticates with; may refresh it first. */
+type TokenProvider = () => string | null | Promise<string | null>
+
 class EventServiceClass {
   private socket: Socket | null = null
   private subscriptions: Map<string, EventSubscription> = new Map()
@@ -145,7 +148,7 @@ class EventServiceClass {
   private currentStatus: ConnectionStatus = "disconnected"
   // Remember the token provider so ensureConnected() (and window-event
   // recovery nudges) can re-create the socket if it was torn down.
-  private tokenProvider: (() => string | null) | null = null
+  private tokenProvider: TokenProvider | null = null
   // Guard so window listeners are only registered once.
   private windowListenersBound = false
 
@@ -158,9 +161,10 @@ class EventServiceClass {
    *   `access_token`, or a webapp-viewer share token. It is a *function*, not
    *   a string, because socket.io re-invokes `auth` on every reconnect — a
    *   captured string would keep replaying a token that has since been
-   *   refreshed or expired.
+   *   refreshed or expired. It may be async, so a user token close to its
+   *   15 min expiry is refreshed before a reconnect sends it.
    */
-  connect(getToken: () => string | null): void {
+  connect(getToken: TokenProvider): void {
     this.tokenProvider = getToken
     this.bindWindowListeners()
 
@@ -188,7 +192,9 @@ class EventServiceClass {
       path: "/ws",
       transports: ["websocket", "polling"],
       auth: (cb: (data: Record<string, unknown>) => void) => {
-        cb({ token: getToken() ?? "" })
+        Promise.resolve(getToken())
+          .catch(() => null)
+          .then((token) => cb({ token: token ?? "" }))
       },
       reconnection: true,
       // Retry forever — after a backend deploy the client must keep trying so

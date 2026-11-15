@@ -4,13 +4,15 @@ import {
   Link as RouterLink,
   redirect,
 } from "@tanstack/react-router"
-import { useEffect, useState } from "react"
+import { Clock } from "lucide-react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
 
 import type { Body_login_login_access_token as AccessToken } from "@/client"
 import { GoogleLoginButton } from "@/components/Auth/GoogleLoginButton"
 import { AuthLayout } from "@/components/Common/AuthLayout"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   Form,
   FormControl,
@@ -27,6 +29,11 @@ import { googleSignInAvailable, useAccessPolicy } from "@/hooks/useAccessPolicy"
 import useAuth, { isLoggedIn } from "@/hooks/useAuth"
 import { useLocalAgentKitAvailable } from "@/hooks/useLocalAgentKit"
 import { APP_NAME, safeRedirectPath } from "@/utils"
+import {
+  isLoginRateLimited,
+  loginThrottleMessage,
+  retryAfterSeconds,
+} from "@/utils/loginThrottle"
 
 const formSchema = z.object({
   username: z.email(),
@@ -63,8 +70,48 @@ export const Route = createFileRoute("/login/")({
   }),
 })
 
+/**
+ * S1: the login throttle as an inline notice. Shown on a 429 `rate_limited`,
+ * cleared when `Retry-After` elapses (one timer, no live countdown) or when
+ * the form is submitted again. Log In stays enabled: the lockout can be per
+ * account, so another account from this browser may still succeed.
+ */
+function useLoginThrottleNotice() {
+  const [message, setMessage] = useState<string | null>(null)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const clear = useCallback(() => {
+    if (timerRef.current !== null) clearTimeout(timerRef.current)
+    timerRef.current = null
+    setMessage(null)
+  }, [])
+
+  const showFor = useCallback(
+    (error: Error) => {
+      if (!isLoginRateLimited(error)) return
+      clear()
+      const seconds = retryAfterSeconds(error)
+      setMessage(loginThrottleMessage(seconds))
+      if (seconds !== null) {
+        timerRef.current = setTimeout(clear, Math.max(1, seconds) * 1000)
+      }
+    },
+    [clear],
+  )
+
+  useEffect(
+    () => () => {
+      if (timerRef.current !== null) clearTimeout(timerRef.current)
+    },
+    [],
+  )
+
+  return { message, clear, showFor }
+}
+
 function Login() {
   const { loginMutation } = useAuth()
+  const throttle = useLoginThrottleNotice()
   const { redirect: redirectParam } = Route.useSearch()
   const signupSearch = redirectParam ? { redirect: redirectParam } : undefined
   const localAgentKitAvailable = useLocalAgentKitAvailable()
@@ -117,7 +164,8 @@ function Login() {
 
   const onSubmit = (data: FormData) => {
     if (loginMutation.isPending) return
-    loginMutation.mutate(data)
+    throttle.clear()
+    loginMutation.mutate(data, { onError: throttle.showFor })
   }
 
   return (
@@ -202,6 +250,13 @@ function Login() {
                       </FormItem>
                     )}
                   />
+
+                  {throttle.message && (
+                    <Alert>
+                      <Clock className="h-4 w-4" />
+                      <AlertDescription>{throttle.message}</AlertDescription>
+                    </Alert>
+                  )}
 
                   <LoadingButton
                     type="submit"

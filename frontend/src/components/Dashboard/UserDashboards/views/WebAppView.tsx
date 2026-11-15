@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useCallback } from "react"
 import { Globe, Loader2, AlertCircle, RefreshCw } from "lucide-react"
 import { OpenAPI, WebappService } from "@/client"
 import { Button } from "@/components/ui/button"
+import { getAccessToken } from "@/lib/authSession"
 
 interface WebAppViewProps {
   agentId: string
@@ -144,7 +145,9 @@ export function WebAppView({ agentId, webappEnabled, iframeRef }: WebAppViewProp
   // ── Running — render the iframe ──────────────────────────────────────────
 
   const baseUrl = OpenAPI.BASE || ""
-  const accessToken = localStorage.getItem("access_token") || ""
+  // The iframe keeps the token it loaded with; past its 15 min the webapp
+  // needs a reload (accepted, plan §13 Q2).
+  const accessToken = getAccessToken() || ""
   const webappUrl = `${baseUrl}/api/v1/agents/${agentId}/webapp/?token=${encodeURIComponent(accessToken)}`
 
   return (

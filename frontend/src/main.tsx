@@ -1,3 +1,4 @@
+import { GoogleOAuthProvider } from "@react-oauth/google"
 import {
   MutationCache,
   QueryCache,
@@ -5,21 +6,29 @@ import {
   QueryClientProvider,
 } from "@tanstack/react-query"
 import { createRouter, RouterProvider } from "@tanstack/react-router"
-import { GoogleOAuthProvider } from "@react-oauth/google"
 import { StrictMode } from "react"
 import ReactDOM from "react-dom/client"
 import { ApiError, LoginService, OpenAPI } from "./client"
 import NotFound from "./components/Common/NotFound"
 import { ThemeProvider } from "./components/theme-provider"
 import { Toaster } from "./components/ui/sonner"
-import { safeRedirectPath } from "./utils"
+import {
+  bootstrapSession,
+  clearSession,
+  isRefreshInconclusive,
+} from "./lib/authSession"
+import {
+  installAuthSession,
+  isPublicPath,
+  redirectToLogin,
+} from "./lib/authSessionClient"
 import "./index.css"
 import { routeTree } from "./routeTree.gen"
 
 OpenAPI.BASE = import.meta.env.VITE_API_URL
-OpenAPI.TOKEN = async () => {
-  return localStorage.getItem("access_token") || ""
-}
+// Cookies on every request, the in-memory bearer, and the 401 → refresh →
+// retry-once interceptor. No user JWT is ever read from Web Storage.
+installAuthSession()
 
 // A 401/403 does not necessarily mean "your session is dead". It also covers
 // "you may not do this" (role gates like require_developer) and routes that
@@ -33,7 +42,6 @@ OpenAPI.TOKEN = async () => {
 // safe in both directions: a genuinely invalid token fails the probe and still
 // logs out, while a network/backend outage leaves the user signed in.
 let sessionProbe: Promise<boolean> | null = null
-let redirectingToLogin = false
 
 // True when the backend still accepts our token. Concurrent failures share one
 // in-flight probe so a page full of erroring queries issues a single request.
@@ -43,9 +51,12 @@ const isSessionStillValid = (): Promise<boolean> => {
       .then(() => true)
       .catch((error: unknown) => {
         const status = (error as ApiError | null)?.status
+        // A 401 after a refresh that failed transiently (5xx, network) says
+        // nothing about the cookie session; clearing would orphan it.
+        if (status === 401) return isRefreshInconclusive()
         // Only these mean the token itself is rejected. Anything else (network
         // failure, 5xx) is inconclusive — keep the user signed in.
-        return !(status === 401 || status === 403 || status === 404)
+        return !(status === 403 || status === 404)
       })
       .finally(() => {
         sessionProbe = null
@@ -61,30 +72,14 @@ const handleApiError = async (error: Error) => {
   // Don't redirect to login if we're on a guest share page, on a public
   // artifact link — a wrong link code answers 403 to a signed-out visitor —
   // or on a public skill link, which renders a stale token as signed out.
-  if (
-    window.location.pathname.startsWith("/guest/") ||
-    window.location.pathname.startsWith("/s/") ||
-    window.location.pathname.startsWith("/get/")
-  ) {
-    return
-  }
-  if (redirectingToLogin) return
+  if (isPublicPath()) return
   if (await isSessionStillValid()) return
-  if (redirectingToLogin) return
-  redirectingToLogin = true
 
-  localStorage.removeItem("access_token")
+  clearSession()
   // Preserve the current location as ?redirect= so consent/authorize
   // pages (OAuth MCP, Desktop Auth) bring the user back after re-login
   // instead of dropping them on the dashboard.
-  const here =
-    window.location.pathname + window.location.search + window.location.hash
-  const safe = safeRedirectPath(here)
-  if (safe !== "/" && safe !== "/login") {
-    window.location.href = `/login?redirect=${encodeURIComponent(safe)}`
-  } else {
-    window.location.href = "/login"
-  }
+  redirectToLogin()
 }
 const queryClient = new QueryClient({
   queryCache: new QueryCache({
@@ -124,14 +119,21 @@ const AppTree = (
   </ThemeProvider>
 )
 
-ReactDOM.createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    {GOOGLE_CLIENT_ID ? (
-      <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
-        {AppTree}
-      </GoogleOAuthProvider>
-    ) : (
-      AppTree
-    )}
-  </StrictMode>,
-)
+// S0: restore the session from the refresh cookie before the first render, so
+// a reload lands signed in without a login flash. Capped at 5 s inside
+// bootstrapSession; on timeout or any failure the app renders signed out.
+void bootstrapSession()
+  .catch(() => undefined)
+  .then(() => {
+    ReactDOM.createRoot(document.getElementById("root")!).render(
+      <StrictMode>
+        {GOOGLE_CLIENT_ID ? (
+          <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
+            {AppTree}
+          </GoogleOAuthProvider>
+        ) : (
+          AppTree
+        )}
+      </StrictMode>,
+    )
+  })

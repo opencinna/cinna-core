@@ -1,6 +1,7 @@
 import { AxiosError } from "axios"
 import type { ApiError } from "./client"
 import { OpenAPI, UsersService } from "./client"
+import { getFreshAccessToken } from "./lib/authSession"
 import { accessPolicyReasonCopy } from "./utils/accessPolicyReasons"
 
 export const APP_NAME = import.meta.env.VITE_APP_NAME || "Cinna"
@@ -305,7 +306,7 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || ""
 export const fetchAuthenticatedResponse = async (
   path: string,
 ): Promise<Response> => {
-  const token = localStorage.getItem("access_token")
+  const token = await getFreshAccessToken()
   const response = await fetch(`${API_BASE_URL}${path}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   })

@@ -17,7 +17,8 @@
     "test:oauth-callback:ui": "node --test tests/oauthCallback.test.mjs",
     "test:skill-links:ui": "node --test tests/skillLink.test.mjs",
     "test:brand-theme:ui": "node --test tests/brandTheme.test.mjs",
-    "test:brand-theme:admin:ui": "node --test tests/brandThemeAdmin.test.mjs"
+    "test:brand-theme:admin:ui": "node --test tests/brandThemeAdmin.test.mjs",
+    "test:auth-session": "node --test tests/authSession.test.mjs"
   },
   "dependencies": {
     "@dagrejs/dagre": "^3.0.0",

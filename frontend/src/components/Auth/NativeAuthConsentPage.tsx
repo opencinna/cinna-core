@@ -21,7 +21,10 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { redirectToLoginPreservingTarget } from "@/hooks/useAuth"
+import {
+  redirectToLoginPreservingTarget,
+  signOutAndReturnHere,
+} from "@/hooks/useAuth"
 import { cinnaConnectDeepLink } from "@/utils"
 
 /** Non-secret metadata returned by the consent-request endpoint. */
@@ -66,6 +69,9 @@ export function NativeAuthConsentPage({
 }: NativeAuthConsentPageProps) {
   const [authorized, setAuthorized] = useState(false)
   const [denied, setDenied] = useState(false)
+  // "Use another account" waits (≤ 2 s) for the server logout before it
+  // navigates; the page stays inert meanwhile.
+  const [signingOut, setSigningOut] = useState(false)
 
   const {
     data: requestInfo,
@@ -254,7 +260,7 @@ export function NativeAuthConsentPage({
             variant="outline"
             className="flex-1"
             onClick={() => consentMutation.mutate("deny")}
-            disabled={consentMutation.isPending}
+            disabled={consentMutation.isPending || signingOut}
           >
             <ShieldX className="mr-2 h-4 w-4" />
             Deny
@@ -262,7 +268,7 @@ export function NativeAuthConsentPage({
           <Button
             className="flex-1"
             onClick={() => consentMutation.mutate("approve")}
-            disabled={consentMutation.isPending}
+            disabled={consentMutation.isPending || signingOut}
           >
             {consentMutation.isPending ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -283,11 +289,16 @@ export function NativeAuthConsentPage({
         <div className="px-6 pb-6 text-center">
           <button
             type="button"
-            onClick={() => redirectToLoginPreservingTarget()}
-            disabled={consentMutation.isPending}
+            // Ends this browser's session first: clearing it locally alone
+            // would restore the same account from the cookie on reload.
+            onClick={() => {
+              setSigningOut(true)
+              void signOutAndReturnHere()
+            }}
+            disabled={consentMutation.isPending || signingOut}
             className="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline disabled:pointer-events-none disabled:opacity-50"
           >
-            Use another account
+            {signingOut ? "Signing out…" : "Use another account"}
           </button>
         </div>
       </Card>

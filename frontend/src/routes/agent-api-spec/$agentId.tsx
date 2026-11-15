@@ -14,9 +14,11 @@ import { getErrorMessage } from "@/utils"
  * Integrations card and consumer connection credential).
  *
  * Auth: this is a normal SPA route, so it runs inside the same app shell and
- * reuses the JWT in localStorage (``OpenAPI.TOKEN``) — the spec is fetched
- * through the authenticated client exactly like every other request, no
- * separate token handling. ``beforeLoad`` bounces unauthenticated tabs to login.
+ * reuses the browser session (the new tab restores its in-memory access token
+ * from the refresh cookie on load; ``OpenAPI.TOKEN`` sends it) — the spec is
+ * fetched through the authenticated client exactly like every other request,
+ * no separate token handling. ``beforeLoad`` bounces unauthenticated tabs to
+ * login.
  *
  * Wake-on-open: the producer env may be suspended (idle). Instead of immediately
  * showing "could not load", we poll ``POST /_refresh`` — which wakes a suspended
@@ -84,7 +86,8 @@ function AgentApiSpecPage() {
     const sleep = (ms: number) =>
       new Promise((resolve) => setTimeout(resolve, ms))
 
-    const isCurrent = () => pollActiveRef.current && activeRunRef.current === runId
+    const isCurrent = () =>
+      pollActiveRef.current && activeRunRef.current === runId
 
     // Holder path: one read through the key-holder endpoint (it applies the
     // producer's ``expose_spec`` and refuses ended keys with a 409).
@@ -234,7 +237,9 @@ function AgentApiSpecPage() {
       <div className="flex h-screen w-screen items-center justify-center bg-background p-6">
         <div className="flex flex-col items-center gap-3 text-center">
           <AlertCircle className="h-7 w-7 text-muted-foreground" />
-          <p className="text-base font-medium">Could not load the OpenAPI spec</p>
+          <p className="text-base font-medium">
+            Could not load the OpenAPI spec
+          </p>
           <p className="max-w-md text-sm text-muted-foreground">
             {errorMessage ||
               "The producer's API may be stopped or failing to build. Check the build status on the agent's Integrations tab and try again."}

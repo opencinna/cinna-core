@@ -1,21 +1,22 @@
 import { createFileRoute, Outlet, redirect } from "@tanstack/react-router"
-import { createContext, useContext, useState, ReactNode } from "react"
 import { Loader2 } from "lucide-react"
+import { createContext, type ReactNode, useContext, useState } from "react"
 
 import { LoginService } from "@/client"
+import AgentUserWelcomeBanner from "@/components/Common/AgentUserWelcomeBanner"
+import { ConnectionBanner } from "@/components/Common/ConnectionBanner"
 import AppSidebar from "@/components/Sidebar/AppSidebar"
 import {
   SidebarInset,
   SidebarProvider,
   SidebarTrigger,
 } from "@/components/ui/sidebar"
-import { isLoggedIn } from "@/hooks/useAuth"
-import { useEventBusConnection } from "@/hooks/useEventBus"
+import { isLoggedIn, isSessionRejection } from "@/hooks/useAuth"
 import { useBundleEvents } from "@/hooks/useBundleEvents"
-import { useRoleEvents } from "@/hooks/useRoleEvents"
+import { useEventBusConnection } from "@/hooks/useEventBus"
 import { useNavigationTracker } from "@/hooks/useNavigationHistory"
-import AgentUserWelcomeBanner from "@/components/Common/AgentUserWelcomeBanner"
-import { ConnectionBanner } from "@/components/Common/ConnectionBanner"
+import { useRoleEvents } from "@/hooks/useRoleEvents"
+import { clearSession } from "@/lib/authSession"
 
 interface HeaderContextType {
   setHeaderContent: (content: ReactNode) => void
@@ -49,12 +50,8 @@ export const Route = createFileRoute("/_layout")({
     try {
       await LoginService.testToken()
     } catch (error: any) {
-      if (
-        error?.status === 401 ||
-        error?.status === 403 ||
-        error?.status === 404
-      ) {
-        localStorage.removeItem("access_token")
+      if (isSessionRejection(error?.status)) {
+        clearSession()
         throw redirect({ to: "/login" })
       }
       throw error

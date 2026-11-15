@@ -47,12 +47,13 @@ import { Separator } from "@/components/ui/separator"
 import { Switch } from "@/components/ui/switch"
 import useCustomToast from "@/hooks/useCustomToast"
 import useRole from "@/hooks/useRole"
+import { getFreshAccessToken } from "@/lib/authSession"
 import { McpDirectTokensManager } from "./McpDirectTokensManager"
 
 const API_BASE = import.meta.env.VITE_API_URL || ""
 
-function getAuthHeaders() {
-  const token = localStorage.getItem("access_token")
+async function getAuthHeaders() {
+  const token = await getFreshAccessToken()
   return {
     "Content-Type": "application/json",
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -156,7 +157,7 @@ export function McpConnectorsCard({
       const res = await fetch(
         `${API_BASE}/api/v1/agents/${agentId}/mcp-connectors`,
         {
-          headers: getAuthHeaders(),
+          headers: await getAuthHeaders(),
         },
       )
       if (!res.ok) throw new Error("Failed to load connectors")
@@ -188,7 +189,7 @@ export function McpConnectorsCard({
         `${API_BASE}/api/v1/agents/${agentId}/mcp-connectors`,
         {
           method: "POST",
-          headers: getAuthHeaders(),
+          headers: await getAuthHeaders(),
           body: JSON.stringify(body),
         },
       )
@@ -212,7 +213,7 @@ export function McpConnectorsCard({
     mutationFn: async (connectorId: string) => {
       const res = await fetch(
         `${API_BASE}/api/v1/agents/${agentId}/mcp-connectors/${connectorId}`,
-        { method: "DELETE", headers: getAuthHeaders() },
+        { method: "DELETE", headers: await getAuthHeaders() },
       )
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
@@ -241,7 +242,7 @@ export function McpConnectorsCard({
         `${API_BASE}/api/v1/agents/${agentId}/mcp-connectors/${connectorId}`,
         {
           method: "PUT",
-          headers: getAuthHeaders(),
+          headers: await getAuthHeaders(),
           body: JSON.stringify({ is_active: isActive }),
         },
       )
@@ -275,7 +276,7 @@ export function McpConnectorsCard({
         `${API_BASE}/api/v1/agents/${agentId}/mcp-connectors/${connectorId}`,
         {
           method: "PUT",
-          headers: getAuthHeaders(),
+          headers: await getAuthHeaders(),
           body: JSON.stringify(body),
         },
       )

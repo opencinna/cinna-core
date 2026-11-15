@@ -42,7 +42,8 @@ function StartPage() {
   const { data: landing } = useLandingPage()
   const localAgentKitAvailable = useLocalAgentKitAvailable()
 
-  // A pure localStorage read, never a validation call: a returning visitor
+  // A pure read of the in-memory session (restored from the refresh cookie
+  // before the first render), never a validation call: a returning visitor
   // gets a shortcut back to the app, and everyone else gets the page. A stale
   // token shows the banner and the `_layout` guard sorts it out on arrival —
   // strictly better than bouncing an anonymous visitor to `/login`.

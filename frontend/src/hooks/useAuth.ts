@@ -11,7 +11,20 @@ import {
   UsersService,
 } from "@/client"
 import { useMfaChallenge } from "@/components/Auth/MfaChallengeContext"
-import { clearLoginScopedDisclaimerAck, handlePolicyAwareError, persistDetectedLocaleDefaults, safeRedirectPath } from "@/utils"
+import {
+  clearSession,
+  getAccessToken,
+  isRefreshInconclusive,
+  logoutSession,
+  setSession,
+} from "@/lib/authSession"
+import {
+  clearLoginScopedDisclaimerAck,
+  handlePolicyAwareError,
+  persistDetectedLocaleDefaults,
+  safeRedirectPath,
+} from "@/utils"
+import { isLoginRateLimited } from "@/utils/loginThrottle"
 import { getTrustedDeviceToken } from "@/utils/trustedDevice"
 import useCustomToast from "./useCustomToast"
 
@@ -55,8 +68,20 @@ const navigateToPostAuthTarget = (target: string | null) => {
   window.location.assign("/")
 }
 
+/**
+ * The status of a failed token probe (`testToken`) means the session is
+ * gone: 403 (forged or scoped token), 404 (user deleted), or 401 unless the
+ * refresh behind it failed transiently, in which case the cookie session
+ * may be alive and clearing `cinna_csrf` would orphan it.
+ */
+const isSessionRejection = (status: number | undefined): boolean =>
+  status === 403 ||
+  status === 404 ||
+  (status === 401 && !isRefreshInconclusive())
+
+/** Signed in = this tab holds a user access token (restored by S0 on load). */
 const isLoggedIn = () => {
-  return localStorage.getItem("access_token") !== null
+  return getAccessToken() !== null
 }
 
 /**
@@ -79,12 +104,8 @@ const ensureSessionValid = async (returnTo: string): Promise<void> => {
   try {
     await LoginService.testToken()
   } catch (error: any) {
-    if (
-      error?.status === 401 ||
-      error?.status === 403 ||
-      error?.status === 404
-    ) {
-      localStorage.removeItem("access_token")
+    if (isSessionRejection(error?.status)) {
+      clearSession()
       throw loginRedirect
     }
     throw error
@@ -92,13 +113,28 @@ const ensureSessionValid = async (returnTo: string): Promise<void> => {
 }
 
 /**
- * Clear the local token and send the user to `/login`, preserving the
+ * Clear the local session and send the user to `/login`, preserving the
  * current URL as `?redirect=` so they return here after signing in. Use
- * from page-level error handlers when the token expires mid-session
- * (e.g. while sitting on a consent screen).
+ * from page-level error handlers when the session is already dead
+ * (e.g. a 401 while sitting on a consent screen).
  */
 const redirectToLoginPreservingTarget = () => {
-  localStorage.removeItem("access_token")
+  clearSession()
+  goToLoginPreservingTarget()
+}
+
+/**
+ * "Use another account" on a consent page: end this browser's session on the
+ * server first, then go to `/login?redirect=<here>`. Clearing locally alone
+ * would loop — the reload restores the same account from the refresh cookie
+ * and `/login` sends the person straight back as the same user.
+ */
+const signOutAndReturnHere = async () => {
+  await logoutSession()
+  goToLoginPreservingTarget()
+}
+
+const goToLoginPreservingTarget = () => {
   const here =
     window.location.pathname + window.location.search + window.location.hash
   const safe = safeRedirectPath(here)
@@ -122,15 +158,20 @@ const useAuth = () => {
         const userData = await UsersService.readUserMe()
         // If user is inactive, clear token and redirect to login
         if (userData && !userData.is_active) {
-          localStorage.removeItem("access_token")
+          clearSession()
           navigate({ to: "/login" })
           return null
         }
         return userData
       } catch (error: any) {
-        // If user not found (404) or unauthorized (401), clear token and redirect to login
-        if (error?.status === 404 || error?.status === 401) {
-          localStorage.removeItem("access_token")
+        // User not found (404), or a 401 the refresh interceptor could not
+        // settle as anything but expired: clear and go to /login. A 401 after
+        // a transient refresh failure keeps the cookie session.
+        if (
+          error?.status === 404 ||
+          (error?.status === 401 && !isRefreshInconclusive())
+        ) {
+          clearSession()
           navigate({ to: "/login" })
         }
         throw error
@@ -150,9 +191,7 @@ const useAuth = () => {
     mutationFn: (data: UserRegister) =>
       UsersService.registerUser({ requestBody: data }),
     onSuccess: () => {
-      showSuccessToast(
-        "Your account has been created. You can now log in.",
-      )
+      showSuccessToast("Your account has been created. You can now log in.")
       const target = readRedirectFromUrl()
       navigate({
         to: "/login",
@@ -181,6 +220,8 @@ const useAuth = () => {
       // "Do not ask on this device" — when a valid token is stored, the
       // backend skips the 2FA challenge and returns a token directly.
       xTrustedDevice: getTrustedDeviceToken() ?? undefined,
+      // Opt in to the refresh-cookie session (scripts omit it, bearer only).
+      xCinnaWebSession: "1",
     })
     if (isMfaChallengeResponse(response)) {
       return { kind: "mfa_challenge", challenge: response }
@@ -197,19 +238,32 @@ const useAuth = () => {
         void navigate({ to: "/login/mfa" })
         return
       }
-      localStorage.setItem("access_token", outcome.token.access_token)
+      // The CSRF token is persisted before the full-page assign below; S0
+      // restores the session from the cookie on that reload.
+      setSession(outcome.token.access_token, outcome.token.csrf_token)
       clearLoginScopedDisclaimerAck()
       // Fire-and-forget: persist browser-detected locale defaults (NULL-only
       // fill server-side). Must not block navigation; errors are swallowed.
       persistDetectedLocaleDefaults()
       navigateToPostAuthTarget(target)
     },
-    onError: handlePolicyAwareError.bind(showErrorToast),
+    onError: (error: Error) => {
+      // S1: the login page shows the throttle inline; the wire code
+      // `rate_limited` must never reach a toast.
+      if (isLoginRateLimited(error)) return
+      handlePolicyAwareError.call(showErrorToast, error)
+    },
   })
 
+  /**
+   * S7: end the cookie session (local state is cleared even if the call
+   * fails), tell other tabs, then a full load of /login so no React Query
+   * cache of this identity survives.
+   */
   const logout = () => {
-    localStorage.removeItem("access_token")
-    navigate({ to: "/login" })
+    void logoutSession().finally(() => {
+      window.location.assign("/login")
+    })
   }
 
   return {
@@ -222,8 +276,10 @@ const useAuth = () => {
 
 export {
   isLoggedIn,
+  isSessionRejection,
   ensureSessionValid,
   redirectToLoginPreservingTarget,
+  signOutAndReturnHere,
   isMfaChallengeResponse,
   navigateToPostAuthTarget,
 }

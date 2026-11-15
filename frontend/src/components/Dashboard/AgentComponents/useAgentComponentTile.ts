@@ -31,6 +31,7 @@ import type {
   TileController,
 } from "./tileController"
 import { useTileRefreshDriver } from "./useTileRefreshDriver"
+import { getAccessToken } from "@/lib/authSession"
 
 let lastPageStateSeq = 0
 
@@ -52,7 +53,9 @@ function sendPageStateKeepalive(
   blockId: string,
   body: DashboardTilePageStateRequest,
 ): void {
-  const token = localStorage.getItem("access_token")
+  // Synchronous on purpose: this runs while the tab closes, with no time to
+  // refresh. A token past its 15 min only loses this best-effort write.
+  const token = getAccessToken()
   void fetch(
     `${OpenAPI.BASE}/api/v1/dashboards/${dashboardId}/blocks/${blockId}/component/page-state`,
     {
