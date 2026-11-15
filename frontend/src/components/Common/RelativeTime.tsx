@@ -22,20 +22,25 @@ interface RelativeTimeProps {
   tooltipContent?: string
 }
 
+/** Trailing zone designator: `Z`, `+03:00`, `-0500`. */
+const HAS_ZONE = /(Z|[+-]\d{2}:?\d{2})$/i
+
 /**
  * Parse a server timestamp as UTC.
  *
  * The backend serialises naive UTC datetimes without a zone suffix, and
  * `new Date("2026-09-09T10:00:00")` reads that as *local* time — so every
  * relative label built straight off `new Date(x)` is off by the viewer's UTC
- * offset. One parser, shared by the component and by callers that need the
+ * offset. A string that already carries a zone designator (`Z` or a
+ * `+03:00` style offset) is honoured as given; only a bare naive string is
+ * read as UTC. One parser, shared by the component and by callers that need the
  * label as a plain string (a `RowInfo` fact, a card description).
  */
 export function parseTimestamp(timestamp: string | Date): Date | null {
   try {
     const timestampStr =
       typeof timestamp === "string"
-        ? timestamp.endsWith("Z")
+        ? HAS_ZONE.test(timestamp)
           ? timestamp
           : `${timestamp}Z`
         : timestamp

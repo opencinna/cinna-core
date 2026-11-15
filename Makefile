@@ -255,6 +255,11 @@ check-docs: # check docs: broken file references + index/frontmatter/route/orpha
 docs-registry: # regenerate the Feature Registry block in docs/README.md from doc frontmatter
 	python3 .cinna-core-kit/scripts/docs_index.py registry
 
+.PHONY: email-template
+email-template: # rebuild one email template with the pinned mjml (usage: make email-template T=session_error)
+	@test -n "$(T)" || { echo "usage: make email-template T=<template name without .mjml>"; exit 1; }
+	cd backend/app/email-templates && npm ci --ignore-scripts --no-audit --no-fund && npx --no-install mjml src/$(T).mjml -o build/$(T).html
+
 .PHONY: brand-theme-skill
 brand-theme-skill: # build the brand-theme catalog skill archive for upload (OUT=drafts/brand-theme.tgz)
 	python3 backend/app/scripts/build_brand_theme_skill.py $(or $(OUT),drafts/brand-theme.tgz)

@@ -2149,7 +2149,7 @@ class SessionService:
                 env_was_suspended = environment.status == "suspended"
 
                 # Start activation in background
-                from app.services.environments.environment_lifecycle import EnvironmentLifecycleManager
+                from app.services.environments.environment_service import EnvironmentService
 
                 async def _start_with_fresh_session():
                     """Wrapper to fetch objects with a fresh DB session"""
@@ -2160,7 +2160,7 @@ class SessionService:
                             logger.error(f"Could not fetch environment or agent for activation")
                             return False
 
-                        lifecycle_manager = EnvironmentLifecycleManager()
+                        lifecycle_manager = EnvironmentService.get_lifecycle_manager()
                         if env_was_suspended:
                             # Use optimized activation for suspended environments
                             return await lifecycle_manager.activate_suspended_environment(
@@ -2323,7 +2323,7 @@ class SessionService:
             RuntimeError: If activation fails or times out
         """
         import time
-        from app.services.environments.environment_lifecycle import EnvironmentLifecycleManager
+        from app.services.environments.environment_service import EnvironmentService
 
         logger.info(f"Activating environment {environment_id} synchronously...")
 
@@ -2334,7 +2334,7 @@ class SessionService:
             if not environment or not agent:
                 raise RuntimeError("Environment or agent not found")
 
-            lifecycle_manager = EnvironmentLifecycleManager()
+            lifecycle_manager = EnvironmentService.get_lifecycle_manager()
 
             # Activate synchronously and wait for it
             await lifecycle_manager.activate_suspended_environment(
@@ -2430,7 +2430,7 @@ class SessionService:
         Raises:
             RuntimeError: If start fails or times out
         """
-        from app.services.environments.environment_lifecycle import EnvironmentLifecycleManager
+        from app.services.environments.environment_service import EnvironmentService
 
         logger.info(f"Starting stopped environment {environment_id} synchronously...")
 
@@ -2441,7 +2441,7 @@ class SessionService:
             if not environment or not agent:
                 raise RuntimeError("Environment or agent not found")
 
-            lifecycle_manager = EnvironmentLifecycleManager()
+            lifecycle_manager = EnvironmentService.get_lifecycle_manager()
 
             # Start the environment (this handles both new and existing containers)
             await lifecycle_manager.start_environment(
@@ -2485,7 +2485,7 @@ class SessionService:
         Raises:
             RuntimeError: If restart fails or times out
         """
-        from app.services.environments.environment_lifecycle import EnvironmentLifecycleManager
+        from app.services.environments.environment_service import EnvironmentService
 
         logger.info(f"Restarting errored environment {environment_id} synchronously...")
 
@@ -2496,7 +2496,7 @@ class SessionService:
             if not environment or not agent:
                 raise RuntimeError("Environment or agent not found")
 
-            lifecycle_manager = EnvironmentLifecycleManager()
+            lifecycle_manager = EnvironmentService.get_lifecycle_manager()
 
             # Restart the environment (stop + start) to recover from error state
             await lifecycle_manager.restart_environment(

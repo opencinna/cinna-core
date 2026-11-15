@@ -6,7 +6,7 @@
  * Refresh size + Wipe (only on orphaned volumes).
  */
 import { Copy, RefreshCw, Trash2 } from "lucide-react"
-import { formatDistanceToNow } from "date-fns"
+import { formatRelativeTimestamp } from "@/components/Common/RelativeTime"
 
 import type { AppDataVolumePublic } from "@/client"
 import useCustomToast from "@/hooks/useCustomToast"
@@ -36,11 +36,7 @@ function formatBytes(bytes: number): string {
 
 function formatRelative(iso: string | null | undefined): string {
   if (!iso) return "Never"
-  try {
-    return formatDistanceToNow(new Date(iso), { addSuffix: true })
-  } catch {
-    return "Unknown"
-  }
+  return formatRelativeTimestamp(iso) ?? "Unknown"
 }
 
 

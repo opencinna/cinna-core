@@ -980,9 +980,7 @@ class InstallService:
              ``INSTALL_UPDATE_APPLIED`` / ``INSTALL_UPDATE_FAILED``.
         """
         from app.services.bundles.bundle_service import BundleService
-        from app.services.environments.environment_lifecycle import (
-            EnvironmentLifecycleManager,
-        )
+        from app.services.environments.environment_service import EnvironmentService
         from app.services.environments.workspace_copy import replace_bundle_content
         from app.services.events.event_service import event_service
 
@@ -1008,7 +1006,7 @@ class InstallService:
             session.get(AgentEnvironment, install.active_environment_id)
             if install.active_environment_id else None
         )
-        lifecycle = EnvironmentLifecycleManager()
+        lifecycle = EnvironmentService.get_lifecycle_manager()
 
         was_running = env is not None and env.status == "running"
         try:

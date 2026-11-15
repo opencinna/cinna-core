@@ -2,10 +2,10 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 from sqlalchemy import text
-from sqlmodel import Session, create_engine, select
+from sqlmodel import Session, create_engine
 
 from app.core.config import settings
-from app.models import AccountOrigin, User, UserCreate
+from app.models import AccountOrigin, UserCreate
 from app.services.users.user_service import UserService
 
 # Explicit pool sizing (see ``DB_POOL_SIZE`` in ``app/core/config.py``): this
@@ -107,9 +107,9 @@ def init_db(session: Session) -> None:
     # This works because the models are already imported and registered from app.models
     # SQLModel.metadata.create_all(engine)
 
-    user = session.exec(
-        select(User).where(User.email == settings.FIRST_SUPERUSER)
-    ).first()
+    user = UserService.get_user_by_email(
+        session=session, email=settings.FIRST_SUPERUSER
+    )
     if not user:
         user_in = UserCreate(
             email=settings.FIRST_SUPERUSER,

@@ -183,7 +183,7 @@ class SyncActivityTracker:
         try:
             from app.core.db import engine
             from app.models.environments.environment import AgentEnvironment
-            from app.services.environments.environment_lifecycle import EnvironmentLifecycleManager
+            from app.services.environments.environment_service import EnvironmentService
             from sqlmodel import Session
 
             with Session(engine) as db:
@@ -199,7 +199,7 @@ class SyncActivityTracker:
                         "skipping suspend"
                     )
                     return
-                lifecycle_manager = EnvironmentLifecycleManager()
+                lifecycle_manager = EnvironmentService.get_lifecycle_manager()
                 await lifecycle_manager.suspend_environment(db_session=db, environment=env)
                 logger.info(
                     f"SyncActivityTracker: env {environment_id} suspended after sync grace period"

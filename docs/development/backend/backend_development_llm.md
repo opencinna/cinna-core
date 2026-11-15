@@ -193,6 +193,10 @@ bash scripts/generate-client.sh
 3. Regenerate client: `bash scripts/generate-client.sh`
 4. Use in frontend: `import { ServiceName } from "@/client"`
 
+### Environment lifecycle manager
+
+Always get it from `EnvironmentService.get_lifecycle_manager()` (a process-wide singleton); never construct `EnvironmentLifecycleManager()` in app code. The singleton is the one place the configured adapter and its per-environment instances live, so a second instance silently runs with a different adapter and loses instance state. Tests must patch `EnvironmentService.get_lifecycle_manager` (target `app.services.environments.environment_service.EnvironmentService.get_lifecycle_manager`) or use the `patch_environment_adapter` fixture, not a module-level `EnvironmentLifecycleManager` name. Test side: `backend/tests/README.md`.
+
 ## Package Management
 - **Backend**: `uv` (not pip)
 - Install: `cd backend && uv sync`

@@ -1788,7 +1788,11 @@ class GitSourceService:
                 if conflict_resolution == GIT_PULL_KEEP_LOCAL else None
             )
             await GitSourceService._apply_revision_to_install(
-                session, install, revision, preserve_fields=preserve_fields
+                session,
+                install,
+                revision,
+                bundle=bundle,
+                preserve_fields=preserve_fields,
             )
 
             source.last_synced_commit = pulled_sha
@@ -3021,7 +3025,8 @@ class GitSourceService:
         update banner vs. the push guard.
 
         Deliberately narrower than the dirty indicator: schedules, plugin links,
-        credential links and env SDK selections survive a pull untouched, so
+        credential links (a pull only adds missing slots, never unlinks) and env
+        SDK selections survive a pull, so
         blocking on them would only deadlock the user (pull refuses, and a pull
         is exactly what an advanced remote demands first) while protecting
         nothing. They still light up the dirty / commit-preview endpoints with
@@ -3119,14 +3124,26 @@ class GitSourceService:
         install: Agent,
         revision: AgentBundleRevision,
         *,
+        bundle: AgentBundle,
         preserve_fields: set[str] | None = None,
     ) -> None:
         """Apply a revision's snapshot onto the install's active env.
 
-        Mirrors :meth:`InstallService.apply_update` (stop → ``replace_bundle_content``
-        → reset prompt-sync baselines → DB prompts from manifest → restart) but
-        targets a specific git-imported revision and never touches the catalog's
-        ``bundle.latest_revision_id`` / install-notify machinery.
+        Mirrors :meth:`InstallService.apply_update` (re-provision credentials →
+        stop → ``replace_bundle_content`` → reset prompt-sync baselines → DB
+        prompts from manifest → restart) but targets a specific git-imported
+        revision and never touches the catalog's ``bundle.latest_revision_id`` /
+        install-notify machinery.
+
+        Credentials go through the same
+        :meth:`InstallService._reprovision_update_credentials` as apply-update,
+        before anything else mutates: a new spec in the pulled revision gets its
+        slot, answered slots stay. A git-shared bundle is ownerless, so a
+        ``provided_by="publisher"`` spec lands as a placeholder (same boundary
+        as checkout). A provisioning error aborts the pull with the env and
+        workspace untouched; an unhonoured spec sets
+        ``install.last_update_status = "degraded"``, which the pull response
+        (``AgentPublic``) carries.
 
         ``preserve_fields`` (the ``keep_local`` resolution) names RAW attributes
         — prompt columns and/or ``metadata`` fields — to leave at their current
@@ -3147,6 +3164,12 @@ class GitSourceService:
         )
         lifecycle = EnvironmentService.get_lifecycle_manager()
         was_running = env is not None and env.status == "running"
+
+        # DB-only and idempotent; raises (after rolling back) before the env is
+        # stopped or the workspace replaced. The commit below covers its writes.
+        credentials_report = InstallService._reprovision_update_credentials(
+            session, install=install, bundle=bundle, revision=revision
+        )
 
         if was_running:
             try:
@@ -3183,10 +3206,29 @@ class GitSourceService:
         install.refiner_prompt_updated_at = prompt_now
         install.installed_revision_id = revision.id
         install.last_sync_at = prompt_now
-        install.last_update_status = "synced"
+        install.last_update_status = (
+            "degraded" if credentials_report.degraded else "synced"
+        )
         session.add(install)
         session.commit()
         session.refresh(install)
+
+        # A running env is restarted below and picks the new links up on start;
+        # otherwise push them to any running env now (same as apply-update).
+        if credentials_report.changed and not was_running:
+            try:
+                from app.services.credentials.credentials_service import (
+                    CredentialsService,
+                )
+
+                await CredentialsService.sync_credentials_to_agent_environments(
+                    session=session, agent_id=install.id
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "git pull: failed to sync credentials for install %s: %s",
+                    install.id, exc,
+                )
 
         if env is not None and was_running:
             try:

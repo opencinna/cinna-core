@@ -410,7 +410,7 @@ class EventService:
             from sqlmodel import Session as DBSession
             from app.models.environments.environment import AgentEnvironment
             from app.models.agents.agent import Agent
-            from app.services.environments.environment_lifecycle import EnvironmentLifecycleManager
+            from app.services.environments.environment_service import EnvironmentService
 
             # Use fresh DB session for background task
             with DBSession(db_engine) as session:
@@ -422,7 +422,7 @@ class EventService:
                     return
 
                 # Activate the environment using asyncio.run for async operations
-                lifecycle_manager = EnvironmentLifecycleManager()
+                lifecycle_manager = EnvironmentService.get_lifecycle_manager()
                 asyncio.run(
                     lifecycle_manager.activate_suspended_environment(
                         db_session=session,

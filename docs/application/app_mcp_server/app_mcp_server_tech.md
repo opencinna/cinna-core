@@ -70,8 +70,8 @@
 - `frontend/src/components/Agents/McpConnectorsCardSimple.tsx` -- purely explanatory for `agent-user`: takes `routerTriggerPrompt` as a prop (no longer fetches `app-mcp-routes`), renders a read-only mirror of the trigger prompt, and states the agent is reachable — no per-user toggle, since there is nothing left to toggle per agent
 - `frontend/src/components/Agents/AgentIntegrationsTab.tsx` -- passes `agent.router_trigger_prompt` into `McpConnectorsCardSimple`
 - `frontend/src/components/Agents/EditRouterTriggerPromptModal.tsx` -- no longer invalidates an `["app-mcp-routes", agentId]` query key (nothing reads it any more) and drops the copy promising a route "will appear here automatically"
-- `frontend/src/components/UserSettings/AppMcpServerCard.tsx` -- stripped to the **MCP Server URL** (copyable) + connect-instructions button only, and renamed from `AppAgentRoutesCard.tsx` in Phase 7 of the channels & identity unification, since there are no routes left for it to be named after. Everything else — "MCP Shared Agents", "Personal Routes", per-route toggles — is gone; `UserChannelsCard`'s App MCP row now owns the on/off + agent-scope + identity-routing controls
-- `frontend/src/components/UserSettings/Channels/UserChannelsCard.tsx` -- renders the App MCP channel row like any other channel; the identity-contacts toggle list this card fetches is now the **sole** surface for that list (previously duplicated on `AppAgentRoutesCard`, renamed `AppMcpServerCard.tsx` in Phase 7)
+- `frontend/src/components/UserSettings/AppMcpServerCard.tsx` -- stripped to the **MCP Server URL** (copyable) + connect-instructions button only, and renamed from `AppAgentRoutesCard.tsx` in Phase 7 of the channels & identity unification, since there are no routes left for it to be named after. Everything else — "MCP Shared Agents", "Personal Routes", per-route toggles — is gone; the App MCP row of `Channels/UserChannelsCard.tsx` (configured in `ChannelConfigSheet.tsx`) now owns the on/off + agent-scope + identity-routing controls
+- `frontend/src/components/UserSettings/Channels/UserChannelsCard.tsx` -- renders the App MCP channel row like any other channel (`ChannelRow.tsx`; scope and consent in `ChannelConfigSheet.tsx`). The identity-contacts list is **not** on this card: it is `Channels/IdentityContactsCard.tsx`, the sole surface for that list (previously duplicated on `AppAgentRoutesCard`, renamed `AppMcpServerCard.tsx` in Phase 7)
 - `frontend/src/components/Onboarding/GettingStartedModal.tsx` -- "After Connecting" article rewritten: routing is by trigger prompt, not "configured agent routes"; points at the App MCP Server row under Settings → Channels for the on/off + scope controls
 - `frontend/src/routes/oauth/mcp-consent.tsx` -- adapted for `app_mcp=true` query param (unchanged by this phase)
 
@@ -228,14 +228,14 @@ Stripped to the one thing nothing else renders: the **MCP Server URL** and the c
 
 - Card header: copyable App MCP URL + help button (Getting Started modal, `app-mcp-setup` article).
 - Body: two short explanatory paragraphs (what the URL connects to; where the on/off + agent-scope controls actually live — the `UserChannelsCard` App MCP row above it) + a "Connect instructions" button.
-- **Removed**: "MCP Shared Agents" section, "Personal Routes" section, and any per-user identity toggle (that list now lives solely on `UserChannelsCard`).
+- **Removed**: "MCP Shared Agents" section, "Personal Routes" section, and any per-user identity toggle (that list now lives solely on `IdentityContactsCard`).
 
 **State:**
 - `["mcp-info"]` -- App MCP Server URL (`staleTime: Infinity`)
 
-### UserChannelsCard (`UserChannelsCard.tsx`)
+### UserChannelsCard (`Channels/UserChannelsCard.tsx`)
 
-Renders the App MCP channel row like any other channel — on/off, agent scope, `allow_identity_routing` — and is now the **sole** surface for the identity-contacts toggle list (previously duplicated, without the consent copy, on `AppAgentRoutesCard`, renamed `AppMcpServerCard.tsx` in Phase 7).
+Renders the App MCP channel row like any other channel: a row with the on/off switch, and agent scope plus `allow_identity_routing` in the Configure sheet (`ChannelConfigSheet.tsx`). The identity-contacts toggle list is a separate card, `Channels/IdentityContactsCard.tsx`, and the sole surface for that list (previously duplicated, without the consent copy, on `AppAgentRoutesCard`, renamed `AppMcpServerCard.tsx` in Phase 7).
 
 ## Security
 

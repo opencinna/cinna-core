@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { formatDistanceToNow } from "date-fns"
+import { parseTimestamp } from "@/components/Common/RelativeTime"
 import {
   Check,
   Copy,
@@ -95,9 +96,8 @@ function getShareStatus(
 
 function formatRelativeExpiry(expiresAt: string): string {
   try {
-    const ts = expiresAt.endsWith("Z") ? expiresAt : expiresAt + "Z"
-    const expiry = new Date(ts)
-    if (isNaN(expiry.getTime()) || expiry <= new Date()) return "Expired"
+    const expiry = parseTimestamp(expiresAt)
+    if (!expiry || expiry <= new Date()) return "Expired"
     return formatDistanceToNow(expiry) + " remaining"
   } catch {
     return "Expired"

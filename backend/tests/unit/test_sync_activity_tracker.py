@@ -285,12 +285,13 @@ class TestGracePeriodScheduling:
 
         We patch:
         - asyncio.sleep → immediate (no real wait)
-        - The EnvironmentLifecycleManager (imported locally in the method)
+        - EnvironmentService.get_lifecycle_manager (the method resolves the
+          lifecycle manager through the singleton accessor)
         - A fake DB session that returns a fake "running" environment
 
-        Because the Session and EnvironmentLifecycleManager are imported
-        inside the method body (local imports), we patch them at their
-        source module paths.
+        Because Session and EnvironmentService are imported inside the
+        method body (local imports), we patch them at their source module
+        paths.
         """
         tracker = _make_tracker()
         env_id = uuid.uuid4()
@@ -321,7 +322,7 @@ class TestGracePeriodScheduling:
             suspend_calls.append(environment.id)
 
         mock_lm.suspend_environment = _mock_suspend
-        mock_lm_cls = MagicMock(return_value=mock_lm)
+        mock_get_lm = MagicMock(return_value=mock_lm)
 
         async def _run():
             with (
@@ -330,13 +331,12 @@ class TestGracePeriodScheduling:
                 # The method does "from sqlmodel import Session" locally, so
                 # patching sqlmodel.Session intercepts that import.
                 patch("sqlmodel.Session", fake_session_cls),
-                # Patch EnvironmentLifecycleManager at its definition source.
-                # The method does "from app.services.environments.environment_lifecycle
-                # import EnvironmentLifecycleManager" locally — patching the class
-                # in its home module intercepts the lookup.
+                # The method imports EnvironmentService locally and calls
+                # get_lifecycle_manager(); patching the classmethod on the
+                # class object intercepts that call.
                 patch(
-                    "app.services.environments.environment_lifecycle.EnvironmentLifecycleManager",
-                    mock_lm_cls,
+                    "app.services.environments.environment_service.EnvironmentService.get_lifecycle_manager",
+                    mock_get_lm,
                 ),
             ):
                 await tracker._grace_period_suspend(env_id)

@@ -7,10 +7,8 @@ from sqlmodel import select
 from app.core.db import create_session
 from app.models.environments.environment import AgentEnvironment
 from app.models.agents.agent import Agent
-from app.services.environments.environment_lifecycle import (
-    EnvironmentLifecycleManager,
-    _set_status,
-)
+from app.services.environments.environment_lifecycle import _set_status
+from app.services.environments.environment_service import EnvironmentService
 from app.services.events.event_service import event_service
 from app.models.events.event import EventType
 
@@ -47,7 +45,7 @@ async def _check_environment_statuses():
 
         logger.info(f"Checking status of {len(running_envs)} running environments")
 
-        lifecycle_manager = EnvironmentLifecycleManager()
+        lifecycle_manager = EnvironmentService.get_lifecycle_manager()
 
         error_count = 0
         for env in running_envs:

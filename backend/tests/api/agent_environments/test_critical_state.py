@@ -443,7 +443,7 @@ def test_status_scheduler_clears_critical_when_container_dies(
 
     # ── Phase 3: Run scheduler ────────────────────────────────────────────
     with patch(
-        "app.services.environments.environment_status_scheduler.EnvironmentLifecycleManager",
+        "app.services.environments.environment_service.EnvironmentService.get_lifecycle_manager",
         return_value=lm,
     ):
         asyncio.run(_check_environment_statuses())

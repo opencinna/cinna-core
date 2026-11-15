@@ -172,9 +172,12 @@ class AuthService:
 
     @classmethod
     def get_user_by_email(cls, *, session: Session, email: str) -> User | None:
-        """Get user by email address."""
-        statement = select(User).where(User.email == email)
-        return session.exec(statement).first()
+        """Get user by email address, case-insensitively.
+
+        Delegates to :meth:`UserService.get_user_by_email` so both share one
+        rule, including ``None`` for ambiguous legacy case-only duplicates.
+        """
+        return UserService.get_user_by_email(session=session, email=email)
 
     @classmethod
     def create_user_from_google(
@@ -398,13 +401,11 @@ class AuthService:
             raise ValueError("Invalid Google token")
 
         google_id = claims["sub"]
-        # Normalised before the auto-link lookup, not after. Google may return
-        # a mixed-case address for a Workspace account whose platform row was
-        # stored lowercase; ``get_user_by_email`` is an exact match, so the
-        # link would miss, ``create_user_from_google`` would run, and the
-        # chokepoint's duplicate check would refuse a perfectly legitimate
-        # login. Same rule ``create_account`` applies, applied one step
-        # earlier so the lookup and the write agree on who this is.
+        # Normalised here so the auto-link lookup and ``create_account`` agree
+        # on who this is (Google may return a mixed-case Workspace address).
+        # ``get_user_by_email`` is case-insensitive; on legacy case-only
+        # duplicates it returns None, so the create path's duplicate check
+        # refuses the login instead of linking an arbitrary account.
         email = (claims["email"] or "").strip().lower()
         full_name = claims.get("name")
 

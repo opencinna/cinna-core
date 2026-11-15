@@ -36,6 +36,7 @@ from app.models.users.user_group import UserGroup, UserGroupMember, UserGroupRef
 from app.services.credentials.credentials_service import CredentialsService
 from app.services.credentials.credential_reuse_policy import reuse_effective_ids
 from app.services.users.user_group_access import UserGroupAccess
+from app.services.users.user_service import UserService
 
 logger = logging.getLogger(__name__)
 
@@ -100,8 +101,9 @@ class CredentialShareService:
             raise ValueError("This credential does not allow sharing. Enable sharing first.")
 
         # Find target user by email
-        statement = select(User).where(User.email == shared_with_email)
-        target_user = session.exec(statement).first()
+        target_user = UserService.get_user_by_email(
+            session=session, email=shared_with_email
+        )
         if not target_user:
             raise ValueError(f"User with email '{shared_with_email}' not found")
 

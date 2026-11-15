@@ -15,7 +15,6 @@ import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlmodel import select
 
 from app.api.deps import CurrentUser, SessionDep, require_developer
 from app.models.bundles.agent_bundle import (
@@ -39,6 +38,7 @@ from app.models.users.user import User
 from app.services.bundles.bundle_service import BundleService
 from app.services.bundles.catalog_service import CatalogService
 from app.services.bundles.exceptions import BundleError
+from app.services.users.user_service import UserService
 
 logger = logging.getLogger(__name__)
 
@@ -309,8 +309,7 @@ def add_grant(
         bundle = BundleService.get_for_publisher(session, bundle_uuid, current_user)
     except BundleError as e:
         raise _handle_bundle_error(e)
-    target_stmt = select(User).where(User.email == data.email.strip().lower())
-    target = session.exec(target_stmt).first()
+    target = UserService.get_user_by_email(session=session, email=data.email)
     if not target:
         raise HTTPException(
             status_code=404,

@@ -1,0 +1,8 @@
+{
+  "name": "cinna-email-templates",
+  "private": true,
+  "description": "Pinned MJML compiler for src/*.mjml -> build/*.html. Rebuild one template with `make email-template T=<name>` from the repo root.",
+  "devDependencies": {
+    "mjml": "5.4.1"
+  }
+}

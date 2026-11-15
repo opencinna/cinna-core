@@ -8,7 +8,6 @@ from sqlmodel import Session, func, select
 from app.models import Agent, AgentCreate, AgentPublic, AgentUpdate, User, SessionCreate, AgentHandoverConfig, AgentEnvironment, Session as ChatSession, AgentSdkConfig, InputTaskCreate
 from app.models.environments.environment import AgentEnvironmentCreate
 from app.services.environments.environment_service import EnvironmentService
-from app.services.environments.environment_lifecycle import EnvironmentLifecycleManager
 from app.services.sessions.session_service import SessionService
 from app.services.ai_functions.ai_functions_service import AIFunctionsService
 from app.services.tasks.input_task_service import InputTaskService
@@ -1179,7 +1178,7 @@ class AgentService:
         try:
             environment = session.get(AgentEnvironment, environment_id)
             if environment:
-                lifecycle_manager = EnvironmentLifecycleManager()
+                lifecycle_manager = EnvironmentService.get_lifecycle_manager()
                 adapter = lifecycle_manager.get_adapter(environment)
                 await adapter.set_agent_handover_config(
                     handovers=handovers_list,
@@ -1544,7 +1543,7 @@ class AgentService:
             )
 
             # Get lifecycle manager and adapter
-            lifecycle_manager = EnvironmentLifecycleManager()
+            lifecycle_manager = EnvironmentService.get_lifecycle_manager()
             adapter = lifecycle_manager.get_adapter(environment)
 
             await adapter.set_plugins(manifest)

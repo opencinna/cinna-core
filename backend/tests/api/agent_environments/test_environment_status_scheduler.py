@@ -59,10 +59,10 @@ def test_healthy_environment_remains_running(
     health_check_before = fetched_before["last_health_check"]
     # It may or may not be None depending on lifecycle path, but we note the value.
 
-    # ── Phase 3: Patch scheduler's EnvironmentLifecycleManager to use lm ──
+    # ── Phase 3: Route the scheduler's lifecycle manager to lm ──
     lm = patch_environment_adapter
     with patch(
-        "app.services.environments.environment_status_scheduler.EnvironmentLifecycleManager",
+        "app.services.environments.environment_service.EnvironmentService.get_lifecycle_manager",
         return_value=lm,
     ):
         asyncio.run(_check_environment_statuses())
@@ -127,7 +127,7 @@ def test_unhealthy_environment_marked_as_error(
 
     # ── Phase 3: Run scheduler ─────────────────────────────────────────────
     with patch(
-        "app.services.environments.environment_status_scheduler.EnvironmentLifecycleManager",
+        "app.services.environments.environment_service.EnvironmentService.get_lifecycle_manager",
         return_value=lm,
     ):
         asyncio.run(_check_environment_statuses())
@@ -183,7 +183,7 @@ def test_unhealthy_health_check_but_container_running_no_error(
 
     # ── Phase 3: Run scheduler ─────────────────────────────────────────────
     with patch(
-        "app.services.environments.environment_status_scheduler.EnvironmentLifecycleManager",
+        "app.services.environments.environment_service.EnvironmentService.get_lifecycle_manager",
         return_value=lm,
     ):
         asyncio.run(_check_environment_statuses())
@@ -227,7 +227,7 @@ def test_no_running_environments_is_noop(
     # ── Phase 2: Run scheduler — should be a no-op ─────────────────────────
     lm = patch_environment_adapter
     with patch(
-        "app.services.environments.environment_status_scheduler.EnvironmentLifecycleManager",
+        "app.services.environments.environment_service.EnvironmentService.get_lifecycle_manager",
         return_value=lm,
     ):
         # Must not raise any exception

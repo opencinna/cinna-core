@@ -1,4 +1,4 @@
-import { formatDistanceToNow } from "date-fns"
+import { formatRelativeTimestamp } from "@/components/Common/RelativeTime"
 import { Eye, FileText } from "lucide-react"
 
 import type { SkillPackageRevisionPublic } from "@/client"
@@ -37,15 +37,11 @@ export function SkillRevisionRow({
 }: SkillRevisionRowProps) {
   const label = skillRevisionLabel(rev)
 
-  let publishedLabel = "published at an unknown time"
-  try {
-    publishedLabel = `published ${formatDistanceToNow(
-      new Date(rev.published_at),
-      { addSuffix: true },
-    )}`
-  } catch {
-    // The row still has to render; a bad timestamp is not a reason to lose it.
-  }
+  // The row still has to render; a bad timestamp is not a reason to lose it.
+  const published = formatRelativeTimestamp(rev.published_at)
+  const publishedLabel = published
+    ? `published ${published}`
+    : "published at an unknown time"
 
   return (
     <ListRow

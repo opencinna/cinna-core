@@ -137,7 +137,7 @@ Stage 2 only considers agents where the caller has an active, enabled binding as
 
 ### Caller: Enable and Use an Identity Contact
 
-1. Opens Settings > Channels tab and finds the identity contacts list on `UserChannelsCard` (as of Phase 5 the sole surface for this list — it used to be duplicated, without the consent copy, on the now-stripped `AppAgentRoutesCard` / "MCP Server" card, renamed `AppMcpServerCard.tsx` in Phase 7)
+1. Opens Settings > Channels tab and finds the identity contacts list on its own "People who shared with you" card (`IdentityContactsCard`) (as of Phase 5 the sole surface for this list — it used to be duplicated, without the consent copy, on the now-stripped `AppAgentRoutesCard` / "MCP Server" card, renamed `AppMcpServerCard.tsx` in Phase 7)
 2. Each row shows an identity owner's name, email, and an enable/disable toggle
 4. Enables the desired contact
 5. In their MCP client, types a message addressing that person: "Ask User B to prepare the annual report"

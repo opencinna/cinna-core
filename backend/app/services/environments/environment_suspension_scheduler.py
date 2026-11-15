@@ -7,7 +7,7 @@ from sqlmodel import Session, select
 from app.core.db import engine
 from app.models.environments.environment import AgentEnvironment
 from app.models.agents.agent import Agent
-from app.services.environments.environment_lifecycle import EnvironmentLifecycleManager
+from app.services.environments.environment_service import EnvironmentService
 from app.services.events.event_service import event_service
 from app.models.events.event import EventType
 from app.services.bundles.install_service import InstallService
@@ -58,7 +58,7 @@ async def _check_and_suspend_environments():
 
         logger.info(f"Checking {len(running_envs)} running environments for suspension")
 
-        lifecycle_manager = EnvironmentLifecycleManager()
+        lifecycle_manager = EnvironmentService.get_lifecycle_manager()
 
         suspended_count = 0
         for env in running_envs:

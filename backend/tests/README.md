@@ -428,6 +428,8 @@ assert r.status_code == 200
 
 ### Mocking External Services
 
+**Environment lifecycle manager:** app code obtains it only through `EnvironmentService.get_lifecycle_manager()`, so a test that needs a stub patches `app.services.environments.environment_service.EnvironmentService.get_lifecycle_manager` (see `tests/api/agent_environments/test_environment_status_scheduler.py`) or uses the `patch_environment_adapter` fixture. Patching an `EnvironmentLifecycleManager` name in a service module no longer intercepts anything. Rule and rationale: `docs/development/backend/backend_development_llm.md`.
+
 Use `unittest.mock.patch` for external services (email, OAuth, etc.):
 
 ```python

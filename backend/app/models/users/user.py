@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from enum import Enum
 from typing import List
-from pydantic import EmailStr
+from pydantic import EmailStr, field_validator
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, Relationship, SQLModel, Column, Text
 
@@ -75,6 +75,23 @@ class ConversationStyle(str, Enum):
 VALID_CONVERSATION_STYLES = [s.value for s in ConversationStyle]
 
 
+def _normalize_email(value: str | None) -> str | None:
+    """Stored and compared form of an address: trimmed and lowercase."""
+    return value.strip().lower() if value is not None else None
+
+
+class _NormalizedEmailInput(SQLModel):
+    """Mixin for request schemas: ``email`` arrives lowercase, so every write
+    path stores the same canonical form lookups compare against. Not applied
+    to ``UserBase`` itself, which would also rewrite responses for legacy
+    mixed-case rows."""
+
+    @field_validator("email", mode="after", check_fields=False)
+    @classmethod
+    def _lowercase_email(cls, value: str | None) -> str | None:
+        return _normalize_email(value)
+
+
 # Shared properties
 class UserBase(SQLModel):
     email: EmailStr = Field(unique=True, index=True, max_length=255)
@@ -88,23 +105,23 @@ class UserBase(SQLModel):
 
 
 # Properties to receive via API on creation
-class UserCreate(UserBase):
+class UserCreate(_NormalizedEmailInput, UserBase):
     password: str = Field(min_length=8, max_length=128)
 
 
-class UserRegister(SQLModel):
+class UserRegister(_NormalizedEmailInput):
     email: EmailStr = Field(max_length=255)
     password: str = Field(min_length=8, max_length=128)
     full_name: str | None = Field(default=None, max_length=255)
 
 
 # Properties to receive via API on update, all are optional
-class UserUpdate(UserBase):
+class UserUpdate(_NormalizedEmailInput, UserBase):
     email: EmailStr | None = Field(default=None, max_length=255)  # type: ignore
     password: str | None = Field(default=None, min_length=8, max_length=128)
 
 
-class UserUpdateMe(SQLModel):
+class UserUpdateMe(_NormalizedEmailInput):
     full_name: str | None = Field(default=None, max_length=255)
     email: EmailStr | None = Field(default=None, max_length=255)
     username: str | None = Field(default=None, max_length=50, regex=r"^[a-zA-Z0-9_]*$")

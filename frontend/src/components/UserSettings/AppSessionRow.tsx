@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { formatDistanceToNow } from "date-fns"
+import { formatRelativeTimestamp } from "@/components/Common/RelativeTime"
 import {
   Apple,
   Chrome,
@@ -55,11 +55,7 @@ function PlatformIcon({ platform }: { platform?: string | null }) {
 
 /** Relative time, or the carried-over "Unknown" when the date will not parse. */
 function relativeTime(iso: string): string | null {
-  try {
-    return formatDistanceToNow(new Date(iso), { addSuffix: true })
-  } catch {
-    return null
-  }
+  return formatRelativeTimestamp(iso)
 }
 
 /**

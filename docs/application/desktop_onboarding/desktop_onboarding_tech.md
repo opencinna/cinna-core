@@ -169,8 +169,6 @@ The success state renders a "Return to {appLabel}" button carrying `cinnaConnect
 
 ## MJML build trap
 
-The committed `backend/app/email-templates/build/*.html` files are **mjml 4.x** output. `npx mjml` now resolves to **5.4.0**, which reformats the whole document — rebuilding `new_account.html` from source churns roughly 181 chunks of unrelated diff.
+`new_account.html` is one of five legacy templates that were hand-edited and match no mjml version, so rebuilding it from source churns roughly 180 lines of unrelated diff under any version. It was therefore **hand-edited**, and verified by building the old and the new `.mjml` sources and diffing those two outputs against each other: the delta is exactly the button label plus the new text row, and the inserted row is copied from the sibling row mjml already emits in `confirm_email.html`.
 
-`new_account.html` was therefore **hand-edited**, and verified by building the old and the new `.mjml` sources under 5.4.0 and diffing those two outputs against each other: the delta is exactly the button label plus the new text row, and the inserted row is copied from the sibling row mjml already emits in `confirm_email.html`.
-
-Neither `backend/README.md` (the "Email Templates" section, which points at the VS Code MJML extension) nor `docs/application/system_notifications/system_notifications_tech.md` (the `npx mjml … -o …` snippet) pins a version. **Both now under-specify**: following either instruction today produces a whole-file reformat rather than a reviewable diff. Anyone regenerating a build template should either pin mjml 4.x or accept — and separate — the reformat commit.
+The version pin, the `make email-template` command and the rule for legacy templates are stated once, in [System Notifications — tech](../system_notifications/system_notifications_tech.md#mjml-version-pin).

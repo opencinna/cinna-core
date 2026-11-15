@@ -6,3 +6,6 @@ app.egg-info
 .coverage
 htmlcov
 .venv
+
+# Node (pinned mjml under app/email-templates; build tooling, not runtime)
+node_modules

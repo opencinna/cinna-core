@@ -5,7 +5,7 @@ import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
 import { LayoutDashboard, Plus, Pencil, Trash2, MoreVertical } from "lucide-react"
-import { formatDistanceToNow } from "date-fns"
+import { RelativeTime } from "@/components/Common/RelativeTime"
 
 import { DashboardsService } from "@/client"
 import { Button } from "@/components/ui/button"
@@ -254,7 +254,7 @@ export function ManageDashboardsPage() {
               <CardFooter>
                 <p className="text-xs text-muted-foreground">
                   Updated{" "}
-                  {formatDistanceToNow(new Date(dashboard.updated_at), { addSuffix: true })}
+                  <RelativeTime timestamp={dashboard.updated_at} />
                 </p>
               </CardFooter>
             </Card>

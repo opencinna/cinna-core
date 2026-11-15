@@ -16,10 +16,11 @@ and may be served by multiple workers.
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlmodel import Session, select
+from sqlmodel import Session
 
 from app.core.config import settings
 from app.models.users.user import User
+from app.services.users.user_service import UserService
 from app.utils import (
     generate_confirmation_email,
     generate_email_confirmation_token,
@@ -120,7 +121,7 @@ class EmailConfirmationService:
         cooldown has elapsed, sends a confirmation email. Any other state
         (unknown email, already confirmed, in cooldown) silently no-ops.
         """
-        user = session.exec(select(User).where(User.email == email)).first()
+        user = UserService.get_user_by_email(session=session, email=email)
         if not user:
             return
         EmailConfirmationService.send_confirmation_email(
@@ -138,7 +139,7 @@ class EmailConfirmationService:
         email = verify_email_confirmation_token(token=token)
         if not email:
             raise ValueError("Invalid token")
-        user = session.exec(select(User).where(User.email == email)).first()
+        user = UserService.get_user_by_email(session=session, email=email)
         if not user:
             raise ValueError(
                 "The user with this email does not exist in the system."

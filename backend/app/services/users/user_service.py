@@ -197,7 +197,7 @@ class UserService:
             assert decision.reason is not None
             raise RegistrationNotAllowedError(decision.reason)
 
-        if UserService.get_user_by_email(session=session, email=email):
+        if UserService.email_in_use(session=session, email=email):
             raise ValueError(
                 "The user with this email already exists in the system"
             )
@@ -342,10 +342,64 @@ class UserService:
         return db_user
 
     @staticmethod
+    def find_users_by_email_ci(*, session: Session, email: str) -> list[User]:
+        """Every user (active or not) whose email equals ``email`` case-insensitively.
+
+        Normally zero or one row. More than one means legacy rows that differ
+        only in case, written before every write path normalised to lowercase.
+        """
+        normalized = (email or "").strip().lower()
+        if not normalized:
+            return []
+        statement = (
+            select(User)
+            .where(func.lower(User.email) == normalized)
+            .order_by(col(User.id))
+        )
+        return list(session.exec(statement).all())
+
+    @staticmethod
     def get_user_by_email(*, session: Session, email: str) -> User | None:
-        """Look up a user by email address."""
-        statement = select(User).where(User.email == email)
-        return session.exec(statement).first()
+        """Resolve one user by email address, case-insensitively.
+
+        With legacy case-only duplicates, the row whose stored address equals
+        the input exactly wins (a password-reset or confirmation token carries
+        the stored address verbatim). Without an exact match the result is
+        ambiguous and this returns ``None`` rather than guessing an account —
+        the same rule as :meth:`find_active_users_by_email_ci`. Callers that
+        lowercase before calling (invitation, get-or-create, Google login,
+        channel inbound) therefore always resolve a legacy ``Foo@x.com`` /
+        ``foo@x.com`` pair to the lowercase row — intentional and
+        deterministic; with no lowercase row among the duplicates they get
+        ``None``. Duplicate
+        checks must not rely on ``None`` meaning "free": use
+        :meth:`email_in_use`, which counts every case-insensitive match.
+        """
+        matches = UserService.find_users_by_email_ci(session=session, email=email)
+        if len(matches) <= 1:
+            return matches[0] if matches else None
+        exact = (email or "").strip()
+        for user in matches:
+            if user.email == exact:
+                return user
+        logger.warning(
+            "Ambiguous email lookup: %d accounts differ only in case; "
+            "refusing to pick one (user ids: %s)",
+            len(matches),
+            ", ".join(str(u.id) for u in matches),
+        )
+        return None
+
+    @staticmethod
+    def email_in_use(
+        *, session: Session, email: str, exclude_user_id: uuid.UUID | None = None
+    ) -> bool:
+        """True when any account other than ``exclude_user_id`` holds ``email``,
+        compared case-insensitively. The duplicate check for every write path."""
+        return any(
+            user.id != exclude_user_id
+            for user in UserService.find_users_by_email_ci(session=session, email=email)
+        )
 
     @staticmethod
     def find_active_users_by_email_ci(*, session: Session, email: str) -> list[User]:
@@ -450,8 +504,7 @@ class UserService:
             assert decision.reason is not None
             raise RegistrationNotAllowedError(decision.reason)
 
-        existing = UserService.get_user_by_email(session=session, email=email)
-        if existing:
+        if UserService.email_in_use(session=session, email=email):
             raise ValueError(
                 "The user with this email already exists in the system"
             )

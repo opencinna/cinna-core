@@ -147,19 +147,16 @@ def test_delegated_task_footer_follows_executor_environment(
 
 def test_handover_prompt_follows_source_agent_environment(
     client: TestClient, superuser_token_headers: dict[str, str], db: Session,
-    patch_environment_adapter, monkeypatch: pytest.MonkeyPatch,
+    patch_environment_adapter,
 ) -> None:
     headers = superuser_token_headers
     source = create_agent_via_api(client, headers, name="CTP Handover Source")
     target = create_agent_via_api(client, headers, name="CTP Handover Target")
     drain_tasks()
     adapter = patch_environment_adapter._test_adapter
-    # sync_agent_handover_config builds its own EnvironmentLifecycleManager();
-    # route it to the test manager so the push lands on the stub adapter.
-    monkeypatch.setattr(
-        "app.services.agents.agent_service.EnvironmentLifecycleManager",
-        lambda: patch_environment_adapter,
-    )
+    # sync_agent_handover_config resolves EnvironmentService.get_lifecycle_manager(),
+    # which the patch_environment_adapter fixture already points at the test
+    # manager, so the push lands on the stub adapter.
     environment = _environment(client, headers, db, source["id"])
     base = f"{settings.API_V1_STR}/agents/{source['id']}/handovers"
 

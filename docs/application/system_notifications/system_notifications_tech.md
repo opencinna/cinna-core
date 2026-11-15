@@ -17,16 +17,21 @@
 - `backend/app/email-templates/build/session_error.html` — compiled HTML read at runtime
 - `backend/app/email-templates/build/model_deprecated.html` — compiled HTML for model-deprecated notifications (no MJML source committed; edit the HTML directly or add MJML source and recompile)
 
-The runtime reads only the built HTML. To modify a template from MJML source:
+The runtime reads only the built HTML. To modify a template from MJML source, from the repo root:
 
 ```bash
-npx mjml backend/app/email-templates/src/session_error.mjml \
-         -o backend/app/email-templates/build/session_error.html
+make email-template T=session_error     # runs `npm ci` then `npx --no-install mjml src/T.mjml -o build/T.html`
 ```
 
 Commit the resulting `build/*.html`.
 
-**Pin the mjml version.** The committed build output was produced by mjml **4.x**; an unpinned `npx mjml` now resolves to **5.4.0**, which reformats the entire document and buries the real change in hundreds of chunks of unrelated diff. Either pin 4.x, or land the reformat as its own commit — see the [Desktop One-Click Onboarding](../desktop_onboarding/desktop_onboarding_tech.md#mjml-build-trap) tech doc, where the same trap was hit on `new_account.html`.
+### mjml version pin
+
+This is the **one canonical statement** of the mjml rule; other docs link here.
+
+- The compiler is pinned in `backend/app/email-templates/package.json` (`"mjml": "5.4.1"`) with a committed `package-lock.json`. Always rebuild through `make email-template`, never an unpinned `npx mjml` and not the VS Code extension (it bundles its own mjml version).
+- The four notification templates (`session_error`, `environment_critical`, `model_deprecated`, `plugin_sync_failed`) reproduce byte-identical on mjml 5.2.0–5.4.1, so rebuilding them gives a reviewable diff.
+- The five legacy templates (`confirm_email`, `invite`, `new_account`, `reset_password`, `test_email`) were hand-edited and match no mjml version. Rebuilding any of them rewrites the whole file (about 180 diff lines) under any version. Either hand-edit the build HTML, or land the reformat as its own commit before the real change. History: [Desktop One-Click Onboarding](../desktop_onboarding/desktop_onboarding_tech.md#mjml-build-trap).
 
 ### Frontend
 

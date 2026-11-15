@@ -186,8 +186,23 @@ Callers:
 | `UserService.create_external_user` | `external` | Both branches; the non-passwordless one passes `secrets.token_urlsafe(32)` |
 | `POST /private/users/` | `admin` | Local-dev helper |
 
+### Email lookups are case-insensitive
+
+Request schemas `UserCreate`, `UserRegister`, `UserUpdate` and `UserUpdateMe` lowercase and strip `email` on input (`_NormalizedEmailInput` mixin in `models/users/user.py`); `UserBase`/response models are deliberately untouched so legacy mixed-case rows are not rewritten in responses. Lookups compare `func.lower(User.email)`, so `Alice@x.com` finds `alice@x.com`. **Legacy-duplicate rule:** if two rows differ only in case, `get_user_by_email` returns the exact-match row, else `None` (ambiguous, logged); duplicate checks use `email_in_use`, never "lookup returned None". Consequence: Google sign-in against an ambiguous pair is refused by the create path's duplicate check instead of linking an arbitrary account. `find_active_users_by_email_ci` (active-only, returns a list) remains the recipient lookup for issued agent-API keys.
+
+Legacy rows already stored mixed-case are **not rewritten**; only new input is lowercased. A legacy pair (e.g. `Foo@x.com` + `FOO@x.com`) cannot self-recover: password recovery and confirmation resend find a user only when the typed address matches a stored one exactly, otherwise `get_user_by_email` returns `None` and logs a warning. To find such pairs, run once:
+
+```sql
+SELECT lower(email), array_agg(email), count(*) FROM "user" GROUP BY 1 HAVING count(*) > 1;
+```
+
+An admin resolves each pair by merging the accounts or renaming one row.
+
 ### UserService (`backend/app/services/users/user_service.py`)
 - `authenticate(session, email, password)` - Validate credentials, return User or None. Both early-return branches — unknown address, and an account with no `hashed_password` — now spend one bcrypt verification against a cached dummy hash (`_burn_password_verification`) before returning, so a miss costs the same as a wrong password. See [Login and recovery timing](#login-and-recovery-timing)
+- `find_users_by_email_ci(session, email) -> list[User]` - Every user (active or not) whose `func.lower(User.email)` equals the stripped, lowercased input, ordered by id. Normally 0–1 rows; more than one means **legacy rows that differ only in case**, written before every write path normalised.
+- `get_user_by_email(session, email) -> User | None` - Case-insensitive resolve. With a legacy case-only duplicate, the row whose stored address equals the input exactly wins (reset/confirmation tokens carry the stored address verbatim); with no exact match it logs a warning and returns `None` rather than guess an account. `AuthService.get_user_by_email` delegates to it. Also used by `EmailConfirmationService` (resend and confirm).
+- `email_in_use(session, email, exclude_user_id=None) -> bool` - The duplicate check for **every write path** (`create_account`, `register_user`, `POST /users/`, `PATCH /users/me`, `PATCH /users/{id}`, the invite wizard's pre-check via `find_users_by_email_ci`). It counts every case-insensitive match, so a legacy ambiguity can never read as "free" the way `get_user_by_email` returning `None` would.
 - `register_user(session, email, password, full_name)` - Public signup; calls `AccessPolicyService.can_register(origin=AccountOrigin.SIGNUP)` before the duplicate check and raises `RegistrationNotAllowedError` on refusal, then delegates to `create_account`
 - `create_user(session, user_create, origin=AccountOrigin.ADMIN)` - `UserCreate`-shaped adapter over `create_account`
 - `update_password(session, user, current_password, new_password)` - Password change with validation
@@ -200,7 +215,7 @@ Callers:
 ### AuthService (`backend/app/services/users/auth_service.py`)
 - `create_access_token(user_id)` - Generate JWT via `security.create_access_token()`
 - `create_user_from_google(...)` - Calls `AccessPolicyService.can_register(origin=AccountOrigin.GOOGLE)` first — kept here as well as inside the chokepoint because this is the refusal the OAuth callback route turns into a 403, and it must happen before anything is written. Then delegates to `create_account(origin=google, email_confirmed=True)`
-- `authenticate_with_google(...)` - The Google-claim email is now lowercased + stripped **before** the auto-link lookup. Google may return a mixed-case address for a Workspace account whose platform row was stored lowercase; `get_user_by_email` is an exact match, so the link would miss, `create_user_from_google` would run, and the chokepoint's duplicate check would refuse a perfectly legitimate login
+- `authenticate_with_google(...)` - The Google-claim email is now lowercased + stripped **before** the auto-link lookup. Google may return a mixed-case address for a Workspace account whose platform row was stored lowercase; `get_user_by_email` is now case-insensitive, but the create path and the lookup must still agree on one canonical form
 - See [Google OAuth Tech](google_oauth_tech.md) for OAuth-specific methods
 - `is_email_domain_allowed(email)` was **removed** — subsumed by `AccessPolicyService.can_register`
 
@@ -268,11 +283,11 @@ Claims: `{exp, nbf, sub, jti, purpose="invite"}` — the **confirmation-token** 
 
 Both halves of the return value are used, for different things: the **`jti` resolves the invitation**, and the address is then compared against the resolved account's own as an independent second check.
 
-The case-folding in that second check is deliberate, and so is the fact that nothing on this path looks an account up by address. Platform address lookup is case-sensitive — `UserService.get_user_by_email` is a plain `User.email == email` against a `VARCHAR(255)` column with no citext and no case-insensitive collation — while every account-creation path stores the address `strip().lower()`ed through `create_account`, so a row saved as `alice@x.com` is not found by `Alice@x.com`. The invite path is built not to depend on that: `invite` lets `create_account` be the normalising authority instead of keying on the caller's string, the token's `sub` is minted from the **stored** `user.email` after normalisation, and `_resolve` resolves by `jti` — so a legacy mixed-case row cannot lock itself out of its own invitation, while an admin genuinely *changing* the address still invalidates the outstanding link. Fixing the general lookup is tracked as separate work; do not "align" the invite path by dropping the folding when it lands.
+The case-folding in that second check is deliberate, and so is the fact that nothing on this path looks an account up by address. The column is a plain `VARCHAR(255)` (no citext), so case-insensitivity comes from the query (`func.lower(User.email)`), not the schema — see [Email lookups are case-insensitive](#email-lookups-are-case-insensitive). The invite path is built not to depend on that: `invite` lets `create_account` be the normalising authority instead of keying on the caller's string, the token's `sub` is minted from the **stored** `user.email` after normalisation, and `_resolve` resolves by `jti` — so a legacy mixed-case row cannot lock itself out of its own invitation, while an admin genuinely *changing* the address still invalidates the outstanding link.  Do not drop the folding on the invite path just because the general lookup is now case-insensitive.
 
 One interaction worth knowing while that work is outstanding: since `POST /password-recovery/{email}` answers a generic `200` for an unknown address instead of the old `404`, a mixed-case recovery attempt is now **silent** where it used to be a visible error. The recovery change is correct non-enumeration behaviour and not a regression — it just makes the case-sensitivity defect quieter to hit.
 
-`generate_invitation_email` is given the **effective** hint (resolved against the policy at send time), and `desktop_link` is `None` when the invitation does not include the desktop block, so the template branches on presence rather than on a second boolean that could disagree with it. The template pair is `email-templates/src/invite.mjml` + `build/invite.html`; the build artefact is **hand-derived** from `new_account.html` rather than compiled, because no mjml version is pinned anywhere in the repo and `npx mjml` resolves 5.x while the committed builds are 4.x output.
+`generate_invitation_email` is given the **effective** hint (resolved against the policy at send time), and `desktop_link` is `None` when the invitation does not include the desktop block, so the template branches on presence rather than on a second boolean that could disagree with it. The template pair is `email-templates/src/invite.mjml` + `build/invite.html`; the build artefact is **hand-derived** from `new_account.html` rather than compiled, because `invite` is a legacy hand-edited template that matches no mjml version (see [mjml version pin](../system_notifications/system_notifications_tech.md#mjml-version-pin)).
 
 #### `verify_password_reset_token` now rejects any `purpose` claim
 

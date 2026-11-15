@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import { ClipboardList, Clock } from "lucide-react"
-import { formatDistanceToNow } from "date-fns"
+import { formatRelativeTimestamp } from "@/components/Common/RelativeTime"
 
 import { TasksService } from "@/client"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -60,7 +60,7 @@ export function LatestTasksView({ agentId: _agentId }: LatestTasksViewProps) {
       <div className="flex-1 overflow-y-auto">
         {tasks.map((task) => {
           const timeAgo = task.updated_at
-            ? formatDistanceToNow(new Date(task.updated_at), { addSuffix: true })
+            ? formatRelativeTimestamp(task.updated_at)
             : null
           const statusStyle = STATUS_STYLES[task.status] ?? "text-gray-500"
 

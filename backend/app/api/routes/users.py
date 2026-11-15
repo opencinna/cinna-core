@@ -209,8 +209,7 @@ def create_user(*, session: SessionDep, user_in: UserCreate) -> Any:
     """
     Create new user.
     """
-    user = UserService.get_user_by_email(session=session, email=user_in.email)
-    if user:
+    if UserService.email_in_use(session=session, email=user_in.email):
         raise HTTPException(
             status_code=400,
             detail="The user with this email already exists in the system.",
@@ -219,11 +218,8 @@ def create_user(*, session: SessionDep, user_in: UserCreate) -> Any:
     try:
         user = UserService.create_user(session=session, user_create=user_in)
     except ValueError as e:
-        # The check above compares the address as typed; ``create_account``
-        # normalises before it stores. "Foo@Bar.com" against an existing
-        # "foo@bar.com" therefore gets past the first check and is caught by
-        # the second — a 400 the admin can act on rather than an
-        # IntegrityError 500.
+        # Invalid address, role, or a duplicate that appeared after the
+        # check above — a 400 the admin can act on rather than a 500.
         raise HTTPException(status_code=400, detail=str(e))
     if settings.emails_enabled and user_in.email:
         # The new-account email carries the temp password and is
@@ -287,9 +283,7 @@ async def invite_user(
     role ⇔ superuser invariant.
     """
     # For the wizard's "resend instead?" hint only. ``create_account`` stays
-    # the authority — it normalises the address before its own duplicate
-    # check, so a case-differing address gets past this one and is caught
-    # below. Same two-step, and same reason, as ``create_user`` above.
+    # the authority and repeats the (case-insensitive) duplicate check.
     #
     # The one account this refusal must NOT catch is an interrupted invite:
     # a row an earlier attempt committed before failing to write its
@@ -297,9 +291,11 @@ async def invite_user(
     # the service adopts the row. The predicate is narrow — no password, no
     # Google identity, no invitation row — so a real duplicate, invited or
     # otherwise, is still refused here.
-    existing = UserService.get_user_by_email(session=session, email=data.email)
-    if existing is not None and not InvitationService.is_interrupted_invite(
-        session, existing
+    if any(
+        not InvitationService.is_interrupted_invite(session, existing)
+        for existing in UserService.find_users_by_email_ci(
+            session=session, email=data.email
+        )
     ):
         raise HTTPException(
             status_code=400,
@@ -470,8 +466,9 @@ async def update_user_me(
                 status_code=403,
                 detail="Email changes are not allowed",
             )
-        existing_user = UserService.get_user_by_email(session=session, email=user_in.email)
-        if existing_user and existing_user.id != current_user.id:
+        if UserService.email_in_use(
+            session=session, email=user_in.email, exclude_user_id=current_user.id
+        ):
             raise HTTPException(
                 status_code=409, detail="User with this email already exists"
             )
@@ -906,8 +903,9 @@ async def update_user(
             detail="The user with this id does not exist in the system",
         )
     if user_in.email:
-        existing_user = UserService.get_user_by_email(session=session, email=user_in.email)
-        if existing_user and existing_user.id != user_id:
+        if UserService.email_in_use(
+            session=session, email=user_in.email, exclude_user_id=user_id
+        ):
             raise HTTPException(
                 status_code=409, detail="User with this email already exists"
             )

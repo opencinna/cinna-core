@@ -167,6 +167,10 @@ If you don't want to start with the default models and want to remove them / mod
 
 The email templates are in `./backend/app/email-templates/`. Here, there are two directories: `build` and `src`. The `src` directory contains the source files that are used to build the final email templates. The `build` directory contains the final email templates that are used by the application.
 
-Before continuing, ensure you have the [MJML extension](https://marketplace.visualstudio.com/items?itemName=attilabuti.vscode-mjml) installed in your VS Code.
+Create or edit the template in the `src` directory, then rebuild it from the repo root with the pinned compiler:
 
-Once you have the MJML extension installed, you can create a new email template in the `src` directory. After creating the new email template and with the `.mjml` file open in your editor, open the command palette with `Ctrl+Shift+P` and search for `MJML: Export to HTML`. This will convert the `.mjml` file to a `.html` file and now you can save it in the build directory.
+```bash
+make email-template T=session_error
+```
+
+Do not use the VS Code MJML extension's `Export to HTML`: it bundles its own mjml version. The pin and the rule for the five legacy hand-edited templates are in [System Notifications — tech](../docs/application/system_notifications/system_notifications_tech.md#mjml-version-pin).

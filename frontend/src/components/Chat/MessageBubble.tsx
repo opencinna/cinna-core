@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react"
 import { formatDistanceToNow } from "date-fns"
+import { parseTimestamp } from "@/components/Common/RelativeTime"
 import { Link } from "@tanstack/react-router"
 import { toast } from "sonner"
 import type { MessagePublic, FileUploadPublic } from "@/client"
@@ -344,13 +345,9 @@ export function MessageBubble({ message, onSendAnswer, onSendMessage, conversati
 
   try {
     if (message.timestamp) {
-      // Handle timestamp - it might already have 'Z' from optimistic updates
-      const timestampStr = typeof message.timestamp === 'string'
-        ? (message.timestamp.endsWith('Z') ? message.timestamp : message.timestamp + 'Z')
-        : message.timestamp
-
-      const date = new Date(timestampStr)
-      if (!isNaN(date.getTime())) {
+      // parseTimestamp handles the 'Z' already present from optimistic updates
+      const date = parseTimestamp(message.timestamp)
+      if (date) {
         formattedTime = formatDistanceToNow(date, { addSuffix: true })
         utcTimestamp = date.toUTCString()
       }
