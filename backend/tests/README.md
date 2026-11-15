@@ -205,11 +205,13 @@ tests/
     mail_server.py         # create_imap_server(), create_smtp_server() — superuser-only route
     managed_ai_credential.py # /admin/llm-providers CRUD wrappers
     network_guard.py       # no_outbound_http() tripwire for "no provider was contacted" claims
-    platform_token.py      # mint_platform_token() — raw/expired/scoped JWTs (documented app.core.security exemption)
+    platform_token.py      # mint_platform_token() — raw/expired/scoped JWTs; stamps sv=1 (documented app.core.security exemption)
     query_counter.py       # count_queries() — counts the SQL a block issues (N+1 guards; observes, never injects)
     security_event.py      # events_of_type() — reads a user's own (self-scoped) security feed
+    login_throttle.py      # enable_login_throttle(), reset_login_throttle(), patch_throttle_clock() — turn the C4 login limiter on for one test
     session.py             # get_agent_session(), get_session(), list_sessions()
     skill_catalog.py       # skills catalog: workspace seeding, publish/install/manage wrappers
+    web_session.py         # web_login(), bearer_login(), post_refresh(), post_logout(), revoke_all(), change_password()… — cookie sessions and session-version revocation
     llm_plugin.py          # plugin marketplaces: create/sync (fixture-repo clone stub), discover,
                            #   install/upgrade, manifest capture, three documented DB seams
                            #   (force_marketplace_type, force_plugin_type, orphan_plugin_link)
@@ -382,6 +384,12 @@ from tests.utils.user import create_random_user, user_authentication_headers
 from tests.utils.ai_credential import create_random_ai_credential
 from tests.utils.agent import create_agent_via_api
 ```
+
+### Web sessions, session version and the login throttle
+
+- **Throttle is off in the suite.** `conftest.py` sets `settings.LOGIN_RATE_LIMIT_ENABLED = False`, because many tests log in from one source (`testclient`) in a burst. A throttle test calls `enable_login_throttle(monkeypatch, LOGIN_RATE_LIMIT_PER_SOURCE_PER_MIN=3, ...)` from `tests/utils/login_throttle.py` (fresh limiters, settings overridden for that test) and `patch_throttle_clock(monkeypatch)` to advance time instead of sleeping. Every request of a test shares one source key.
+- **Cookie sessions.** `tests/utils/web_session.py` logs in with `X-Cinna-Web-Session: 1` and returns a `WebSession(access_token, csrf_token, refresh)`. It captures the raw `cinna_refresh` value from `Set-Cookie` and clears the client jar, so several sessions of one user can coexist; `post_refresh` / `post_logout` send the cookie explicitly. `bearer_login` gives a script-style token with no cookie and no session row. Plain `/login/access-token` calls without the header stay bearer-only.
+- **Token lifetime and `sv`.** Access tokens live 15 minutes and carry `sv`. `mint_platform_token()` stamps `sv=1` (a fresh user's session version) so hand-minted tokens pass the check; pass `extra_claims={"sv": ...}` to override or `{"sv": None}` for a legacy token without it. A password change, reset, admin set, Google wipe or revoke-all bumps the version, so an old token answers 401.
 
 ### Test Utility Helpers
 

@@ -30,7 +30,9 @@ Provides user identity and session management for the platform. Users authentica
 | **Invitation Token** | The HS256 JWT the invite link carries: `purpose="invite"`, `sub` = the invited address, `jti` = the row's `token_jti`, `exp` = the row's `expires_at`. Verification resolves the invitation **by `jti`**, so resending rotates the live link and every link issued before it stops working |
 | **`password_accepted`** | The single server-side answer to "may this invitee set a password" — `AccessPolicyService.is_password_auth_allowed(policy, user)`, the same predicate login uses. Surfaced as one derived boolean on the invitation lookup; the accept page renders its password form on that boolean and on nothing else |
 | **Auth Hint** | `any` / `password` / `google` on an invitation. **Presentational only**: it decides which method the email and the accept page *lead with*. It never enables a method the policy forbids and never hides one it allows |
-| **Access Token** | The JWT stored in frontend `localStorage` and auto-included in API requests |
+| **Access Token** | The short-lived (15 min) user JWT. The SPA keeps it **in memory only** (never in Web Storage) and sends it as a bearer header; it carries `sv` (the user's session version) and, for a browser cookie session, `sid` |
+| **Web Session** | A browser sign-in that opted in with `X-Cinna-Web-Session: 1`: a `user_web_session` row plus an `HttpOnly` `cinna_refresh` cookie that renews the access token (14 days, sliding). A login without the header gets a bearer-only token and no session |
+| **Session Version (`sv`)** | `User.session_version`, stamped into every non-desktop user JWT. Bumping it signs the user out of every outstanding token at once |
 | **Guest Token** | Special JWT with `role=chat-guest` for unauthenticated agent chat access via guest share links |
 
 ## User Stories / Flows
@@ -42,8 +44,9 @@ Provides user identity and session management for the platform. Users authentica
 3. Frontend submits credentials as OAuth2PasswordRequestForm
 4. Backend validates credentials (bcrypt comparison), then the active check, then the access-policy check — in that order, so an address with no account never gets a different answer
 5. Non-superuser on an instance with password auth off → 403 `password_auth_disabled`; superusers pass (break-glass)
-6. Backend returns JWT access token
-7. Frontend stores token in `localStorage` and navigates to the post-login target — the validated `?redirect=` URL search param if present, otherwise the dashboard (see [Post-Login Redirect](#post-login-redirect))
+6. Before any of this, the login throttle runs: too many attempts from one source, or too many failures for one account, answer 429 `rate_limited` with a `Retry-After` header
+6. Backend returns a 15-minute JWT access token; for the SPA it also opens a web session, sets the `cinna_refresh` cookie and returns the session's `csrf_token` once
+7. Frontend keeps the token in memory (the CSRF token in `localStorage["cinna_csrf"]`, which is useless without the cookie) and navigates to the post-login target — the validated `?redirect=` URL search param if present, otherwise the dashboard (see [Post-Login Redirect](#post-login-redirect))
 
 ### User Registration (Signup)
 
@@ -88,20 +91,28 @@ In both of those last two cases the bookkeeping is a **side record**: if it fail
 3. Backend generates time-limited reset token
 4. Backend sends email with reset link containing token
 5. User clicks link, enters new password
-6. Backend validates the token, refuses a never-claimed invited account whose invitation is not `pending` (as "Invalid token"), re-checks the same policy gate for the token's owner (403 `password_auth_disabled` for a gated non-superuser), then hashes and saves the new password
+6. Backend validates the token, refuses a never-claimed invited account whose invitation is not `pending` (as "Invalid token"), re-checks the same policy gate for the token's owner (403 `password_auth_disabled` for a gated non-superuser), then hashes and saves the new password. A reset ends **every** session of the account, including CLI, A2A and MCP tokens, trusted devices and desktop/mobile clients
 7. User redirected to login page
 
 ### Set Password (OAuth Users)
 
 1. OAuth-only user (no password set) navigates to profile settings
 2. User enters desired password
-3. Backend sets password, enabling dual authentication
+3. Backend sets password, enabling dual authentication, and ends the user's other sessions (the caller's own survives; API tokens keep working)
+
+### Change Password
+
+An ordinary password change ends every other session: other browsers, desktop/mobile clients (their next refresh answers `invalid_grant`) and trusted devices. The caller's own browser session or desktop client survives and recovers with one refresh. CLI, A2A and MCP tokens keep working. An administrator setting a user's password does the same, keeping nothing.
 
 ### Logout
 
 1. User clicks logout
-2. Frontend removes `access_token` from localStorage
+2. Frontend drops the in-memory token and the stored CSRF token, calls `POST /login/session/logout` and waits up to 2 s for the server (so the cookie is cleared) before redirecting; the other tabs are told over a `BroadcastChannel`
 3. Frontend redirects to login page
+
+### Sign Out Everywhere
+
+Settings > Password has a "Sign out everywhere" action (with a confirm dialog) calling `POST /login/session/revoke-all`. It ends every session **including the current one**: web sessions, desktop and mobile clients, trusted devices, and the user's CLI, CLI setup, A2A and MCP tokens. The browser then does a full load of `/login`.
 
 ### The Account-Creation Chokepoint
 
@@ -135,10 +146,12 @@ Origins and their gates are owned by the [Access Policy](../server_configuration
 ## Business Rules
 
 ### Token Lifecycle
-- JWT tokens expire after 8 days (configurable via `ACCESS_TOKEN_EXPIRE_MINUTES`)
-- Tokens contain only user ID (`sub`) and expiration (`exp`)
-- Invalid/expired tokens return 403; missing users return 404
-- Frontend clears token and redirects to login on 401/404 errors
+- Access JWTs expire after 15 minutes (`ACCESS_TOKEN_EXPIRE_MINUTES`), for cookie sessions and bearer-only logins alike; a script that runs longer must log in again
+- A browser session renews the token from the refresh cookie (`WEB_REFRESH_TOKEN_EXPIRE_DAYS`, 14 days, sliding). Re-presenting a rotated refresh token inside a 60 s grace window (a second tab) is tolerated; outside it the whole session is revoked
+- Tokens carry `sub`, `exp`, `iat`, `sv` and, for cookie sessions, `sid`. A token whose `sv` no longer matches the user is rejected
+- Expired or stale tokens return **401** (the SPA refreshes once and retries, then goes to login); forged tokens return 403; missing users return 404
+- The session-ending events: password change or first password (others only), admin password set, forgot-password reset, Sign out everywhere, and the Google wipe-and-link (see [Google OAuth](google_oauth.md)). Reset, Sign out everywhere and the wipe also revoke CLI, CLI setup, A2A and MCP tokens; the others leave API tokens working
+- Login throttle: password logins are limited per source (`LOGIN_RATE_LIMIT_PER_SOURCE_PER_MIN`, 30/min) and failures lock an account+source pair (5 failures in 15 min) or the account (20) for 30 s, doubling up to 15 min. The native `/desktop-auth/token` and `/app-auth/token` have their own per-source limit. The answer is 429 `{"detail":{"code":"rate_limited",...}}` with `Retry-After`. The counters are in-process, per worker
 
 ### Registration Restrictions
 - Registration is governed by the [Access Policy](../server_configuration/access_policy.md) on the `ServerConfig` singleton, edited at **Admin → Server Configuration → Access**. `AUTH_WHITELIST_USER_DOMAINS` is retired: it seeds the policy on first boot and by migration, and nothing reads it for a live decision
@@ -218,7 +231,7 @@ Origins and their gates are owned by the [Access Policy](../server_configuration
 - Secondary consumer: the Cinna Desktop consent page (`/desktop-auth/consent`) — same pattern for the desktop OAuth flow. See [Desktop Auth](../desktop_auth/desktop_auth.md)
 
 ### Expired-Session Recovery on Consent Pages
-- Public consent/authorize pages (`/oauth/mcp-consent`, `/desktop-auth/consent`) sit outside the `_layout` guard and previously trusted any non-empty `access_token` in `localStorage` — an expired token was enough to render the page, and clicking Authorize then failed with "Could not validate credentials" leaving the user stranded
+- Public consent/authorize pages (`/oauth/mcp-consent`, `/desktop-auth/consent`) sit outside the `_layout` guard and previously trusted any non-empty stored access token (since the web-session change the token lives in memory and a reload restores it from the refresh cookie; the validation below is unchanged) — an expired token was enough to render the page, and clicking Authorize then failed with "Could not validate credentials" leaving the user stranded
 - Both routes now validate the token in `beforeLoad` by calling `LoginService.testToken()`. On 401/403/404 the token is cleared and the user is redirected to `/login?redirect=<this-page>` so they re-authenticate and land back on the consent screen
 - If the token expires while the user sits on the consent screen (between page load and the Authorize click), the mutation's `onError` handler detects 401/403, clears the token, and bounces through `/login?redirect=` preserving the consent URL — the user never sees the credentials error
 - The global API error handler (React Query's shared `onError`) also preserves the current URL as `?redirect=` when bouncing on 401/403, so any future protected page using the generated client gets the same return-to-page behavior automatically
@@ -241,7 +254,7 @@ Google Button ──→ OAuth Flow ──→ AuthService.authenticate_with_googl
                                               └─► AccountProvisioningService.on_account_created()
                                                                               │
                                                                               ▼
-Frontend (localStorage) ──→ Authorization Header ──→ deps.get_current_user() ──→ CurrentUser
+Frontend (in-memory token, refresh cookie) ──→ Authorization Header ──→ deps.get_current_user() ──→ CurrentUser
 ```
 
 ## Integration Points

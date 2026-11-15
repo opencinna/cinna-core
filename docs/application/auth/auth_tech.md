@@ -108,6 +108,11 @@ The asymmetry between the two keys is behavioural, not cosmetic: deleting an inv
 ### Login Routes (`backend/app/api/routes/login.py`)
 - `POST /api/v1/login/access-token` - Password login (OAuth2PasswordRequestForm) -> Token. 403 `password_auth_disabled` for a gated non-superuser, checked **after** `authenticate()` and the active check
 - `POST /api/v1/login/test-token` - Validate JWT -> UserPublic
+- `POST /api/v1/login/session/refresh` - Cookie `cinna_refresh` + header `X-CSRF-Token` (+ `Origin` check when present) -> `WebSessionToken {access_token, token_type, expires_in: 900}`. Rotates the cookie (`Set-Cookie`), except inside the reuse-grace window. 401 `session_expired` (cookie cleared) for unknown/expired/revoked/replayed; 403 `csrf_failed`
+- `POST /api/v1/login/session/logout` - 204, idempotent; with a cookie it needs `X-CSRF-Token` (403 `csrf_failed`) and clears the cookie
+- `POST /api/v1/login/session/revoke-all` - CurrentUser, 204. `end_sessions(reason="sign_out_everywhere", include_api_tokens=True)`, clears the cookie
+- `POST /api/v1/login/access-token` additionally takes `X-Cinna-Web-Session: 1` (opt in to a cookie session; `LoginToken.csrf_token` is then non-null, else null) and answers 429 `{"detail":{"code":"rate_limited","message":"rate_limited"}}` + integer `Retry-After` when throttled (`Retry-After` is in `CORSMiddleware.expose_headers`). `/login/mfa/verify`, the Google callback and invitation accept issue tokens through the same `issue_login_token`
+- Cookie: `cinna_refresh`, `HttpOnly`, `SameSite=Strict`, host-only, `Path=/api/v1/login/session`, `Max-Age` = `WEB_REFRESH_TOKEN_EXPIRE_DAYS`, `Secure` per `WEB_SESSION_COOKIE_SECURE` (unset: on unless `ENVIRONMENT=local`)
 - `POST /api/v1/password-recovery/{email}` - Initiate password reset -> Message. **Non-enumerating by contract**: always `200`, always the same body — `{"message": "If an account exists for that email, a password recovery email has been sent"}` — for a known and an unknown address alike, with no `detail` key. It no longer 404s for an unknown address. **Every** reason not to send is a silent no-op inside `UserService.recover_password`: outbound mail unconfigured, unknown address, deactivated account, password auth off for this user (superusers keep the break-glass, so a refusal would identify them), an unclaimed invited account whose invitation is not `pending`, the 300 s cooldown, and any failure in the token/template/SMTP/commit block. The service's `bool` return value is for tests and internal callers and is deliberately **not** projected into the response. Status and body carry no signal; response *time* still does — see [Login and recovery timing](#login-and-recovery-timing)
 - `POST /api/v1/reset-password/` - Complete password reset (NewPassword) -> Message. `async def` since phase 3, purely because settling an invitation emits a security event and `SecurityEventService.create_event` is a coroutine — status codes and body are unchanged. 403 `password_auth_disabled` for a gated non-superuser. A never-claimed account whose invitation is not `pending` is refused as `"Invalid token"` (400) rather than with a branch of its own: the reason is the account's state, not the token's, and a distinct status would report it to whoever holds the link. On success it calls `InvitationService.mark_accepted_if_pending(..., method="reset_password")` **after** the `except` block — see [The two hook sites](#the-two-hook-sites)
 
@@ -121,8 +126,8 @@ The asymmetry between the two keys is behavioural, not cosmetic: deleting an inv
 ### User Routes (`backend/app/api/routes/users.py`) - Auth-relevant
 - `POST /api/v1/users/signup` - Public registration (UserRegister) -> UserPublic. 403 + reason code on any policy refusal, raised before the duplicate check
 - `GET /api/v1/users/me` - Current user profile -> UserPublic
-- `PATCH /api/v1/users/me/password` - Change password (UpdatePassword). Gated by `_require_password_auth`
-- `POST /api/v1/users/me/set-password` - Set password for OAuth users (SetPassword). Gated by `_require_password_auth`
+- `PATCH /api/v1/users/me/password` - Change password (UpdatePassword). Gated by `_require_password_auth`. Ends every other session, keeping the caller's (`sid` / desktop `external_client_id` from `CurrentTokenClaims`); API tokens stay
+- `POST /api/v1/users/me/set-password` - Set password for OAuth users (SetPassword). Gated by `_require_password_auth`. Same session effect as a change
 - `PATCH /api/v1/users/me` - Profile update; an email change is refused with 403 while an allowed-email pattern list is configured
 
 ### Invitation Routes — public (`backend/app/api/routes/invitations.py`)
@@ -205,15 +210,18 @@ An admin resolves each pair by merging the accounts or renaming one row.
 - `email_in_use(session, email, exclude_user_id=None) -> bool` - The duplicate check for **every write path** (`create_account`, `register_user`, `POST /users/`, `PATCH /users/me`, `PATCH /users/{id}`, the invite wizard's pre-check via `find_users_by_email_ci`). It counts every case-insensitive match, so a legacy ambiguity can never read as "free" the way `get_user_by_email` returning `None` would.
 - `register_user(session, email, password, full_name)` - Public signup; calls `AccessPolicyService.can_register(origin=AccountOrigin.SIGNUP)` before the duplicate check and raises `RegistrationNotAllowedError` on refusal, then delegates to `create_account`
 - `create_user(session, user_create, origin=AccountOrigin.ADMIN)` - `UserCreate`-shaped adapter over `create_account`
-- `update_password(session, user, current_password, new_password)` - Password change with validation
-- `set_password(session, user, new_password)` - Set password for OAuth-only users
-- `reset_password(session, token, new_password) -> User` - Token-based password reset; refuses a never-claimed invited account whose invitation is not pending (as `"Invalid token"`), then calls `AccessPolicyService.require_password_auth` once the token resolves its owner. **Returns the `User`** since phase 3 (it used to return `None`), so the route has an identity to settle the invitation against instead of decoding the same token a second time
+- `update_password(session, user, current_password, new_password, keep_web_session_id=None, keep_desktop_client_pk=None)` - Password change with validation; calls `UserSessionService.end_sessions(reason="password_changed")` in the same commit
+- `set_password(session, user, new_password, keep_*)` - Set password for OAuth-only users; `end_sessions(reason="password_set")`
+- `update_user` with a `password` key (admin set) calls `end_sessions(reason="admin_password_set")`, keeping nothing
+- `disable_all_factors(..., commit=True)` - `commit=False` lets the Google wipe land in its caller's transaction
+- `reset_password(session, token, new_password) -> User` - Token-based password reset (`end_sessions(reason="password_reset", include_api_tokens=True)`); refuses a never-claimed invited account whose invitation is not pending (as `"Invalid token"`), then calls `AccessPolicyService.require_password_auth` once the token resolves its owner. **Returns the `User`** since phase 3 (it used to return `None`), so the route has an identity to settle the invitation against instead of decoding the same token a second time
 - `recover_password(session, email) -> bool` - Generate reset token and send email. **Every** refusal is a silent no-op — see the route contract above. The whole token/template/send/commit block is inside one handler, because it runs *only* for an address that has an account: a raise anywhere in it would be a 500 for a known address beside a 200 for an unknown one, which is precisely the leak the method exists to close. The handler calls `restore_session` before returning, since its commit sits inside the `try`
 - `_claim_refused(session, user) -> bool` - Deferred-import shim over `InvitationService.claim_refused` (`InvitationService` imports this module for `create_account`, so the edge only goes one way at import time). Nothing else: the fail-closed net lives on the predicate, which serves three doors, so a second `try` here would be a second implementation of that policy
 - `create_external_user(session, email, confirmed, provenance, passwordless=False)` - Get-or-create a user from an externally-arriving sender address (email integration, server channels). Uses the `external` origin, so the registration policy does not apply — the integration's own sender allowlist is the gate. Still picks up the policy's default role. Normalises the address *before* the get-or-create lookup so the idempotency check asks about the same address the chokepoint will store; the two branches now differ only in whether a password hash exists at all
 
 ### AuthService (`backend/app/services/users/auth_service.py`)
-- `create_access_token(user_id)` - Generate JWT via `security.create_access_token()`
+- `create_user_access_token(user, *, web_session_id=None, expires_delta=None)` - The one minting path for user JWTs (web logins, invitation accept, the account-API proxy's inner token): stamps `sv`, `iat` and optional `sid`. Replaces `create_access_token(user_id)`. `sv` is read from `user` as it is now, so commit any `end_sessions` first
+- `link_google_account(..., wipe_password=False)` - With `wipe_password` (set when the auto-linked account was **unconfirmed**) clears the password, all MFA enrollment and ends every session and API token in the link's commit; see [Google OAuth](google_oauth.md)
 - `create_user_from_google(...)` - Calls `AccessPolicyService.can_register(origin=AccountOrigin.GOOGLE)` first — kept here as well as inside the chokepoint because this is the refusal the OAuth callback route turns into a 403, and it must happen before anything is written. Then delegates to `create_account(origin=google, email_confirmed=True)`
 - `authenticate_with_google(...)` - The Google-claim email is now lowercased + stripped **before** the auto-link lookup. Google may return a mixed-case address for a Workspace account whose platform row was stored lowercase; `get_user_by_email` is now case-insensitive, but the create path and the lookup must still agree on one canonical form
 - See [Google OAuth Tech](google_oauth_tech.md) for OAuth-specific methods
@@ -310,7 +318,7 @@ The cost is only exactly equal while every stored hash uses the current bcrypt c
 
 **Recovery (status and body closed, timing recorded).** `POST /password-recovery/{email}` no longer 404s, and every refusal is a silent no-op. What that does **not** close is wall-clock time: the known path performs a synchronous SMTP round-trip plus a row write, the unknown path returns after one SELECT, and the 300 s cooldown then makes the *second* request fast for a known address too — slow-then-fast means the address exists. `POST /resend-confirmation/{email}` has the same shape. Closing it means moving the send off the request path; an artificial delay was deliberately not added, because it would trade a real signal for a fabricated one.
 
-**Not closed, deliberately.** `POST /login/access-token` still has no rate limiter. The timing channel is closed, the volume one is not.
+**Volume (closed by the login throttle).** `POST /login/access-token` is rate limited per source and by failed attempts per account; see the Configuration table. The limiter is in-process, so the limits are per worker. The throttle runs before the password is checked, so a locked account answers 429 even for the right password.
 
 ### Security (`backend/app/core/security.py`)
 - `create_access_token(subject, expires_delta)` - JWT creation (PyJWT, HS256, SECRET_KEY)
@@ -319,7 +327,15 @@ The cost is only exactly equal while every stored hash uses the current bcrypt c
 
 ### Dependencies (`backend/app/api/deps.py`)
 - `TokenDep` - OAuth2PasswordBearer extracting JWT from Authorization header
-- `get_current_user(session, token)` - Decode JWT, fetch User, validate account validity via `AccessPolicyService.is_account_valid` (today: `is_active`) — the single seam a future per-request rule lands in. Other token families in `deps` still test `is_active` inline
+- `get_current_user(session, token)` - Decode JWT (expired → 401, forged → 403), then `_authenticate_user_payload`: agent-env reject, `TokenPayload` shape, user lookup, account validity via `AccessPolicyService.is_account_valid` (today: `is_active`; the single seam a future per-request rule lands in), desktop client revocation, and `UserSessionService.is_token_current` (`sv`, 401). `authenticate_user_jwt`, `get_current_user_or_guest` and the websocket resolver share it via `UserTokenRejected`. Other token families in `deps` still test `is_active` inline
+- `CurrentTokenClaims` - the caller's decoded claims, used to find the session to keep on a password change
+
+### Web sessions and revocation
+- `WebSessionService` (`services/users/web_session_service.py`): `create`, `find_live_session`, `rotate` (locks the `user_web_session` row, then re-reads the token row; CSRF is checked before anything is written; grace-window replay returns without rotating), `verify_csrf` (constant time), `revoke`, `revoke_all_for_user`, `cleanup_expired` (deletes sessions ended over a day ago; run every 15 minutes by `backend/app/services/users/web_session_scheduler.py`, started and stopped from `main.py`)
+- `UserSessionService` (`services/users/user_session_service.py`): `is_token_current`, `kept_sessions_from_claims`, `end_sessions`, `revoke_api_tokens_for_user`. Reasons: `password_changed`, `password_set`, `password_reset`, `admin_password_set`, `google_link_wipe`, `sign_out_everywhere`; each writes a `SESSIONS_REVOKED` security event
+- `LoginThrottle` (`services/users/login_throttle_service.py`): `check_password_attempt`, `record_failure`, `record_success`, `check_native_token`, `reset`; HTTP mapping in `api/routes/_login_throttle_http.py`
+- Models: `User.session_version` (starts at 1), `UserWebSession`, `UserWebRefreshToken` (`models/users/user_web_session.py`, hashes only)
+- `SecurityHeadersMiddleware` (`core/security_headers_middleware.py`): sets `nosniff`, `Referrer-Policy` and (https only) HSTS where absent; never `X-Frame-Options` or CSP; skips `nosniff` on agent-served content paths
 - `CurrentUser` - Annotated dependency for authenticated user
 - `get_current_active_superuser(current_user)` - Admin-only guard (403 if not superuser)
 - `get_current_user_or_guest(session, token)` - Resolves both regular user and guest JWT types
@@ -356,13 +372,14 @@ An anchor test asserts that every hand-written name the walk depends on still ex
 ## Frontend Components
 
 ### useAuth Hook (`frontend/src/hooks/useAuth.ts`)
-- `isLoggedIn()` - Checks `localStorage.getItem("access_token") !== null` (localStorage-only — does not verify the token with the backend)
+- `isLoggedIn()` - Whether an in-memory access token exists (`getAccessToken() !== null`; does not verify with the backend). `bootstrapSession` restores the token after a reload when the stored CSRF token says a cookie session may exist. Session state lives in `frontend/src/lib/authSession.ts` (in-memory token, single-flight refresh within a tab and across tabs via `navigator.locks` + `BroadcastChannel("cinna-auth")`, `getFreshAccessToken`, `bootstrapSession` with a 5 s timeout, `logoutSession` waiting up to 2 s) and `authSessionClient.ts` (transport and 401-refresh-retry). No user JWT is written to Web Storage; a legacy `localStorage["access_token"]` is discarded
 - `ensureSessionValid(returnTo)` - For use inside a route's `beforeLoad` on public consent/authorize pages. Verifies the token via `LoginService.testToken()`; on 401/403/404 clears the token and throws a TanStack `redirect({ to: "/login", search: { redirect: returnTo } })`. Re-throws other errors. Used by `oauth/mcp-consent.tsx` and `desktop-auth/consent.tsx`
 - `redirectToLoginPreservingTarget()` - Imperative variant for in-page error handlers (e.g. mutation `onError`). Clears the token and navigates the browser to `/login?redirect=<current-url>` after passing the current location through `safeRedirectPath`
 - `user` query - `useQuery(["currentUser"], UsersService.readUserMe())` with auto-logout on 401/404
 - `loginMutation` - Password login via `LoginService.loginAccessToken()`, stores token, then calls `navigateToPostAuthTarget(readRedirectFromUrl())`
 - `signUpMutation` - Registration via `UsersService.registerUser()`; on success navigates to `/login`, preserving the current `?redirect=` param
-- `logout()` - Removes token from localStorage, navigates to /login
+- `logout()` - Drops the in-memory session, calls `POST /login/session/logout` (waits up to 2 s), navigates to /login
+- `frontend/src/components/UserSettings/SignOutEverywhere.tsx` - confirm dialog in `PasswordCard`; calls `LoginService.sessionRevokeAll()` then `window.location.assign("/login")`
 - `readRedirectFromUrl()` - Private helper that reads `?redirect=` from `window.location.search` and runs it through `safeRedirectPath()`; returns null when absent or unsafe
 - `navigateToPostAuthTarget(target)` - Private helper that uses `window.location.assign()` so arbitrary same-origin paths (with their own query string) work regardless of TanStack Router's typed route registry
 
@@ -399,7 +416,18 @@ An anchor test asserts that every hand-written name the walk depends on still ex
 | Setting | Location | Purpose |
 |---------|----------|---------|
 | `SECRET_KEY` | `.env` / `config.py` | JWT signing secret (32-byte random) |
-| `ACCESS_TOKEN_EXPIRE_MINUTES` | `config.py` | Token lifetime (default: 8 days) |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | `config.py` | Access token lifetime (default: 15) |
+| `WEB_REFRESH_TOKEN_EXPIRE_DAYS` | `config.py` | Sliding browser-session lifetime (default 14) |
+| `WEB_REFRESH_TOKEN_REUSE_GRACE_SECONDS` | `config.py` | Window in which a rotated refresh token still yields an access token (default 60) |
+| `WEB_SESSION_COOKIE_SECURE` | `config.py` | `Secure` flag of `cinna_refresh`; unset = on unless `ENVIRONMENT=local` |
+| `SECURITY_HSTS_MAX_AGE_SECONDS` | `config.py` | HSTS max-age the backend sends on https responses (default 31536000; 0 disables) |
+| `LOGIN_RATE_LIMIT_ENABLED` | `config.py` | Master switch of the login throttle (default True; off in the test conftest) |
+| `LOGIN_RATE_LIMIT_PER_SOURCE_PER_MIN` | `config.py` | Password-login attempts per source per minute (default 30) |
+| `LOGIN_FAILURES_PER_ACCOUNT_SOURCE` / `LOGIN_FAILURES_PER_ACCOUNT` / `LOGIN_FAILURE_WINDOW_SECONDS` | `config.py` | Failures that trigger a lockout: 5 per account+source, 20 per account, inside 900 s |
+| `LOGIN_LOCKOUT_BASE_SECONDS` / `LOGIN_LOCKOUT_MAX_SECONDS` | `config.py` | Lockout length `BASE * 2^(failures - threshold)`, capped (30 s, 900 s) |
+| `NATIVE_TOKEN_RATE_LIMIT_PER_SOURCE_PER_MIN` | `config.py` | Calls per source per minute to `/desktop-auth/token` and `/app-auth/token` (default 60) |
+
+On the local stack every request shares one source, so `.env.example` carries commented-out loosened values for the two per-source limits (300 and 600); never use them in production.
 | `AUTH_WHITELIST_USER_DOMAINS` | `.env` / `config.py` | **Seed only** — converted to access-policy glob patterns on first boot and by migration `1d737d7ef0a0`. No live decision reads it; a startup warning names the admin page when it is still set |
 | `ACCESS_POLICY_RATE_LIMIT_PER_MIN` | `config.py` (default 120) | Per-IP budget for the public access-policy projection |
 | `INVITATION_EXPIRE_DAYS` | `config.py` (default 7) | Lifetime of an invitation **and** of its token — one number, since the token's `exp` is the row's `expires_at` |
@@ -411,7 +439,7 @@ An anchor test asserts that every hand-written name the walk depends on still ex
 
 ## Security
 
-- **JWT**: HS256 with 32-byte random SECRET_KEY, 8-day expiry
+- **JWT**: HS256 with 32-byte random SECRET_KEY, 15-minute expiry, `sv` revocation, in-memory in the SPA; refresh by `HttpOnly` `SameSite=Strict` cookie plus CSRF token and `Origin` allowlist
 - **Passwords**: Bcrypt hashing via passlib CryptContext
 - **Token validation**: `get_current_user()` verifies signature, expiration, and user active status
 - **Access policy**: Enforced at registration for both password and Google paths, and on every password path for sign-in method. Reason codes are stable machine-readable strings, never prose

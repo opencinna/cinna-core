@@ -88,6 +88,7 @@ Data scripts:
 4. Agent creates files in `/app/workspace/webapp/`
 5. Owner clicks "Web App" link in environment panel dropdown (opens in new tab)
 6. Owner preview URL: `GET /api/v1/agents/{agent_id}/webapp/{path}` with an empty `path` serves index.html
+7. The preview authenticates sub-resources with the `webapp_owner_token` cookie (`HttpOnly`, `SameSite=Strict`, scoped to that agent's webapp path). Its `Max-Age` is the remaining life of the owner's access token, so the preview needs a reload after at most 15 minutes; there is no scoped long-lived owner token
 
 ### Owner Shares Webapp
 

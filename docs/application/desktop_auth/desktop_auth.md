@@ -96,6 +96,10 @@ Desktop app silently refreshes the access token before it expires:
 4. Backend revokes the client and all its refresh tokens
 5. The next API call from that desktop app — even with a still-valid (unexpired) access token — is rejected with `401 Desktop session has been revoked`, because `get_current_user` checks `DesktopOAuthClient.is_revoked` on every request whose JWT carries `client_kind="desktop"`
 6. The refresh endpoint also rejects the refresh token with `invalid_grant`
+
+### Revocation by the account owner's password events
+
+The same revocation (client and refresh tokens flagged revoked, refresh answers `400 invalid_grant`, live access tokens 401) is applied to every desktop and mobile client of a user by a forgot-password reset, an admin password set, "Sign out everywhere" and the Google wipe-and-link. An ordinary password change or first password revokes every client **except** the one making the call (identified by its token's `external_client_id`). Native access tokens carry no `sv`, so a kept device is unaffected. See [Auth](../auth/auth.md).
 7. Desktop app shows "Session expired, please log in again"
 
 ## Security Model
@@ -151,6 +155,8 @@ Everything else (e.g. arbitrary `https://` URIs) is rejected with HTTP 400 `inva
 - On every request whose JWT carries `client_kind="desktop"`, `get_current_user` performs an indexed lookup on `DesktopOAuthClient` by `external_client_id`. If the row is missing or `is_revoked=True`, the request is rejected with `401 Desktop session has been revoked` — so a "Disconnect" from Settings takes effect immediately rather than waiting up to 15 minutes for the access token to expire
 - The same lookup also stamps `last_used_at` on success (throttled to once per minute) so the Settings UI reflects recent activity
 - Google OAuth users (no password) can authenticate via the browser-based authorize flow
+- The consent pages run under the browser's cookie session: the SPA obtains its access token from the refresh cookie, so consent works after a reload without a stored JWT
+- `POST /desktop-auth/token` and `POST /app-auth/token` are rate limited per source (`NATIVE_TOKEN_RATE_LIMIT_PER_SOURCE_PER_MIN`, default 60/min): 429 `{"detail":{"code":"rate_limited","message":"rate_limited"}}` with an integer `Retry-After`. The check runs before the DB session is taken, so a throttled call costs no connection. Clients should back off for `Retry-After` seconds
 
 ### CLI account-token exchange
 

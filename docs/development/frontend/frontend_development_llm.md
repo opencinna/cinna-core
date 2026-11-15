@@ -58,7 +58,8 @@ export const Route = createFileRoute("/_layout/path")({
 ## Auth
 - Hook: `useAuth()` from `@/hooks/useAuth`
 - Returns: `{ user, loginMutation, logoutMutation }`
-- Access token stored in localStorage: `access_token`
+- The access token lives **in memory only** (`frontend/src/lib/authSession.ts`); no user JWT may be written to localStorage or sessionStorage. A browser session is restored after a reload from the `HttpOnly` refresh cookie plus `localStorage["cinna_csrf"]`
+- Need a token for a non-generated call (fetch, WebSocket, EventSource)? `await getFreshAccessToken()`; never read storage. The generated client already does this, and retries once after refreshing on a 401
 - Check login: `isLoggedIn()` utility function
 
 ### Global 401/403 handling (`main.tsx handleApiError`)

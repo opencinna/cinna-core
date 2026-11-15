@@ -90,7 +90,7 @@ The `challenge_token` is held in memory by `MfaChallengeContext` in the frontend
 4. Preferred path: passkey button — browser shows native dialog; assertion POSTed to `/login/mfa/verify`.
 5. Fallback: TOTP form (6-digit code) or "Use a recovery code" link (raw code, case-insensitive, dashes ignored).
 6. The user may select a "Do not ask on this device" duration (1, 7, or 30 days) from the Select below the TOTP form. The selection applies to whichever factor the user completes.
-7. On success the final `LoginToken` is returned. If the user opted in, `trusted_device_token` is also returned (once) and the frontend stores it in `localStorage["mfa.trusted_device_token"]`. The frontend then stores `access_token` in `localStorage` and navigates to the post-login target.
+7. On success the final `LoginToken` is returned. If the user opted in, `trusted_device_token` is also returned (once) and the frontend stores it in `localStorage["mfa.trusted_device_token"]`. The frontend then keeps the access token in memory (the refresh cookie and CSRF token are set by the same response; the verify request sends `X-Cinna-Web-Session: 1`) and navigates to the post-login target.
 
 ### Login Challenge Form UX
 
@@ -118,7 +118,7 @@ The frontend reads the stored token and passes it to the backend. If the token i
 
 **Revoking trust:**
 
-There is currently no per-device revoke endpoint in Settings. The token expires naturally after the chosen window. Disabling 2FA (any path: explicit disable, last-factor removal) wipes all trusted-device rows immediately via `disable_all_factors`, making any live localStorage token inert.
+There is currently no per-device revoke endpoint in Settings. The token expires naturally after the chosen window. Disabling 2FA (any path: explicit disable, last-factor removal) wipes all trusted-device rows immediately via `disable_all_factors`, making any live localStorage token inert. So does every session-ending event: a password change, forgot-password reset, admin password set, "Sign out everywhere" and the Google wipe-and-link of an unconfirmed account (`UserSessionService.end_sessions`; the Google wipe also clears every MFA enrollment). The next login from that browser faces the challenge again.
 
 ### Rename or Delete a Passkey
 

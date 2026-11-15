@@ -111,7 +111,8 @@ It holds three locations:
 | `~ ^/(api/\|mcp/\|ws/\|acp/\|a/\|agent-hooks/\|agent-start(/\|$)\|\.well-known/(...))` | every backend path except git | one transport profile fits all of them (below) |
 | `/d/` | dashboard component frames: [Agent Components](../application/user_dashboards/agent_components.md) | content origin, never logged, see below |
 | `/git/` | desktop agent git smart HTTP | pushes need a 256 MiB body and no request buffering |
-| `/` | the SPA, `try_files $uri $uri/ /index.html`, plus `/robots.txt` | static files; carries `X-Robots-Tag` itself |
+| `/webapp/` | public webapp share pages (`/webapp/<token>?embed=1`) | iframed by third-party sites, so it carries the SPA headers minus `X-Frame-Options` and `frame-ancestors` |
+| `/` | the SPA, `try_files $uri $uri/ /index.html`, plus `/robots.txt` | static files; carries `X-Robots-Tag` and the security headers itself |
 
 **Backend block transport profile.** It is tuned to the most demanding route it carries, which is harmless for the rest:
 
@@ -121,6 +122,10 @@ It holds three locations:
 - `client_max_body_size 100m`, the largest upload (`UPLOAD_MAX_FILE_SIZE_MB`). Smaller per-route caps are enforced by the backend with a JSON 413: skill publish 17 MiB, artifacts `ARTIFACT_MAX_REVISION_BYTES + ARTIFACT_UPLOAD_OVERHEAD_BYTES` (55 MiB).
 - Forwarded headers: `Host`, `X-Real-IP`, `X-Forwarded-For`, `X-Forwarded-Proto`.
 - No `add_header`. The backend sets CSP, CORS, framing and `X-Robots-Tag` headers itself (see [Artifact content](#artifact-content-a)).
+
+**Security headers (local `frontend/nginx.conf`).** `location /` adds `X-Frame-Options SAMEORIGIN`, `Content-Security-Policy: frame-ancestors 'self'`, `X-Content-Type-Options nosniff`, `Referrer-Policy strict-origin-when-cross-origin` and `Strict-Transport-Security $hsts`. `$hsts` comes from a `map` on `X-Forwarded-Proto` at `http` level: `max-age=31536000` when the request arrived over https behind a TLS-terminating proxy, empty (not emitted) otherwise, so the plain-http localhost stack gets no HSTS. The rest of the CSP is a build-time `<meta>` injected by `frontend/vite.config.ts` (`buildContentSecurityPolicy`): `default-src 'self'`, `script-src` self plus Google sign-in, `object-src 'none'`, and `connect-src`, `img-src` and `frame-src` that add the API origin (`VITE_API_URL`, plus its `ws` form for `connect-src`) and `https:` (brand-theme assets and an artifacts content origin unknown at build time). The backend adds `nosniff`, `Referrer-Policy` and HSTS (https only, `SECURITY_HSTS_MAX_AGE_SECONDS`) itself where absent, never framing headers, because the SPA iframes backend content.
+
+**`/webapp/`.** A webapp share can be embedded in someone else's site, so this location repeats the SPA headers without `X-Frame-Options` and `frame-ancestors`. It serves the shell with `try_files /index.html =404`: a `try_files` file argument that is not the last one is served in place, whereas ending on a URI would internal-redirect to `location /` and bring the framing headers back. Because nginx stops inheriting `add_header` in a location that has its own, each location repeats the header set.
 
 **Search engines.** Nothing Cinna serves is meant to be indexed: share, webapp, guest and artifact links carry their credential in the URL. The backend stamps `X-Robots-Tag: noindex, nofollow, noarchive, nosnippet, noimageindex` on every response, `location /` adds the same header to the SPA and static files, and `index.html` carries the matching `<meta name="robots">`. The SPA ships a `/robots.txt` (served by `location /`) that allows crawling on purpose: a crawler only sees `noindex` on a page it may fetch, and a `Disallow: /` URL can still be listed bare. Keep the `add_header` line in `location /`. Note that nginx stops inheriting the `server` block's `add_header` lines in a location that has its own, so repeat any server-wide headers (HSTS and the like) inside `location /`.
 
