@@ -38,8 +38,18 @@ Scenarios:
   6. Creating multiple auto_execute tasks sequentially
        - Each task gets its own background job
        - Both complete independently after drain
+
+  7. auto_execute=True + file_ids (regression: files were never delivered)
+       - Files uploaded via POST /files/upload, task created with their ids
+       - Auto-execute job calls InputTaskService.execute_task with
+         file_ids == the uploaded file UUIDs (as UUID objects)
+
+  8. auto_execute=True without file_ids
+       - Auto-execute job calls execute_task with file_ids=None
 """
-from unittest.mock import patch
+import io
+import uuid
+from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -55,6 +65,9 @@ from tests.utils.input_task import (
 
 _BASE = f"{settings.API_V1_STR}/tasks"
 _AGENT_ENV_PATCH = "app.services.sessions.message_service.agent_env_connector"
+_EXECUTE_TASK_PATCH = (
+    "app.services.tasks.input_task_service.InputTaskService.execute_task"
+)
 
 
 def test_auto_execute_true_with_agent_triggers_execution(
@@ -338,3 +351,96 @@ def test_auto_execute_two_tasks_both_complete(
     assert refreshed2["status"] == "completed", (
         f"Task 2 expected 'completed', got '{refreshed2['status']}'"
     )
+
+
+def test_auto_execute_passes_uploaded_file_ids_to_execute_task(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+    tmp_path,
+) -> None:
+    """
+    Regression: files attached at creation reach the agent on auto-execute:
+      1. Create agent
+      2. Upload two files via POST /files/upload
+      3. Create task with auto_execute=True, selected_agent_id and file_ids
+      4. Drain with execute_task mocked
+      5. execute_task called once with file_ids == uploaded UUIDs (as UUID objects)
+    """
+    headers = superuser_token_headers
+
+    # ── Phase 1: Create agent ────────────────────────────────────────────────
+    agent = create_agent_via_api(client, headers, name="Auto Execute Files Agent")
+    drain_tasks()
+    agent_id = agent["id"]
+
+    with patch.object(settings, "UPLOAD_BASE_PATH", str(tmp_path / "uploads")):
+        # ── Phase 2: Upload files ────────────────────────────────────────────
+        uploaded_ids: list[str] = []
+        for name in ("first.txt", "second.txt"):
+            r = client.post(
+                f"{settings.API_V1_STR}/files/upload",
+                headers=headers,
+                files={"file": (name, io.BytesIO(f"content of {name}".encode()), "text/plain")},
+            )
+            assert r.status_code == 200, f"File upload failed: {r.text}"
+            uploaded_ids.append(r.json()["id"])
+
+        # ── Phase 3: Create task with file_ids + auto_execute ────────────────
+        with patch(_EXECUTE_TASK_PATCH, new_callable=AsyncMock) as execute_mock:
+            execute_mock.return_value = (True, None, None)
+            r = client.post(
+                _BASE + "/",
+                headers=headers,
+                json={
+                    "original_message": "Summarise the attached files.",
+                    "title": "Auto execute with files",
+                    "selected_agent_id": agent_id,
+                    "auto_execute": True,
+                    "file_ids": uploaded_ids,
+                },
+            )
+            assert r.status_code == 200, f"Task creation failed: {r.text}"
+            assert r.json()["auto_execute"] is True
+
+            # ── Phase 4: Drain — auto-execute job runs ───────────────────────
+            drain_tasks()
+
+        # ── Phase 5: execute_task received the uploaded files ────────────────
+        execute_mock.assert_called_once()
+        passed = execute_mock.call_args.kwargs["file_ids"]
+        assert passed is not None
+        assert all(isinstance(fid, uuid.UUID) for fid in passed)
+        assert set(passed) == {uuid.UUID(fid) for fid in uploaded_ids}
+        assert len(passed) == len(uploaded_ids)
+
+
+def test_auto_execute_without_files_passes_none_file_ids(
+    client: TestClient,
+    superuser_token_headers: dict[str, str],
+) -> None:
+    """
+    Auto-execute of a task with no files passes file_ids=None:
+      1. Create agent
+      2. Create task with auto_execute=True and no file_ids
+      3. Drain with execute_task mocked
+      4. execute_task called once with file_ids=None
+    """
+    headers = superuser_token_headers
+
+    agent = create_agent_via_api(client, headers, name="Auto Execute No Files Agent")
+    drain_tasks()
+
+    with patch(_EXECUTE_TASK_PATCH, new_callable=AsyncMock) as execute_mock:
+        execute_mock.return_value = (True, None, None)
+        task = create_task(
+            client, headers,
+            original_message="No files here.",
+            title="Auto execute without files",
+            selected_agent_id=agent["id"],
+            auto_execute=True,
+        )
+        assert task["auto_execute"] is True
+        drain_tasks()
+
+    execute_mock.assert_called_once()
+    assert execute_mock.call_args.kwargs["file_ids"] is None

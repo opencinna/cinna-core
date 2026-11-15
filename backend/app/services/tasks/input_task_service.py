@@ -3238,11 +3238,14 @@ class InputTaskService:
                 if not task:
                     return
                 user_id = task.owner_id
+                file_id_strings = InputTaskService.get_task_file_ids(db_session=db, task_id=task.id)
+                file_ids = [UUID(fid) for fid in file_id_strings] if file_id_strings else None
                 success, _, error = await InputTaskService.execute_task(
                     db_session=db,
                     task=task,
                     user_id=user_id,
                     message_to_send=task.current_description,
+                    file_ids=file_ids,
                 )
                 if not success:
                     logger.warning(f"Auto-execute task {task_ref.id} failed: {error}")
