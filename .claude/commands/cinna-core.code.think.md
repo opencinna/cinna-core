@@ -34,7 +34,7 @@ Before proposing anything, find out how the codebase already solves similar prob
 - **Existing patterns** — Is there already a service, model, or flow that does something analogous? (e.g. how credentials are encrypted, how OAuth refresh is scheduled, how env config is pushed, how events are dispatched.)
 - **Established conventions** — route/service separation, domain-specific exceptions, `SessionDep`/`CurrentUser` DI, owner-only access defaults, models organized by domain, migrations via alembic.
 - **Reusable components** — prefer extending an existing service/helper over creating a parallel one. Call out the specific file and method you'd build on.
-- **Prior art in memory** — many subsystems have documented patterns (single-chokepoint guards, snapshot→materialize→merge, pre-stream credential refresh). Reuse the shape, don't reinvent it.
+- **Prior art in the docs** — many subsystems have documented patterns in their feature and tech docs (single-chokepoint guards, snapshot→materialize→merge, pre-stream credential refresh). Reuse the shape, don't reinvent it.
 
 ### 3. Software Design Principles
 
@@ -76,7 +76,7 @@ Produce a focused architectural analysis, not code dumps.
 Restate the goal and the key constraints (2–4 sentences).
 
 ### Relevant Existing Solutions
-What the codebase already does that this should build on. Cite specific files, services, models, and patterns (`file_path:line` where useful). Note memory-documented patterns that apply.
+What the codebase already does that this should build on. Cite specific files, services, models, and patterns (`file_path:line` where useful). Note documented patterns that apply.
 
 ### Proposed Design
 The recommended approach, explained as logic and components first:

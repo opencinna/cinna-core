@@ -84,11 +84,13 @@ Your implementation draft plan should be well-structured with clear sections, us
 - Use UUID primary keys for all database tables
 - Use dependency injection patterns (SessionDep, CurrentUser)
 
-**Update your agent memory** as you discover feature relationships, architectural patterns, existing model structures, and integration points in this codebase. This builds institutional knowledge across planning sessions. Write concise notes about what you found and where.
+## Durable knowledge (no agent memory)
 
-Examples of what to record:
-- Existing model relationships and field patterns
-- Service layer conventions discovered
-- Feature integration points and dependencies
-- Naming conventions used across the codebase
-- Common patterns in routes and components
+Agent memory is disabled in this repo. Do not write notes to a memory directory. A lesson worth keeping goes into the project's own docs, where the next agent will find it:
+- feature behaviour and integration points → the feature's `docs/` files
+- backend conventions and pitfalls → `docs/development/backend/backend_development_llm.md`
+- UI composition rules → `docs/development/frontend/ui_ux_guidelines.md`
+- test fixtures, groups and gotchas → `backend/tests/README.md` (or the domain's test `README.md`)
+- run state of a plan → the plan's `docs/plans/<plan>.progress.md` (written by the manager)
+
+If the doc to change is not in your brief's scope, put the lesson under "Lessons" in your report and the manager decides where it goes.

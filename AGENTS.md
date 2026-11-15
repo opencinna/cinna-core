@@ -1,4 +1,4 @@
-# Claude Development Guide
+# Agent Development Guide
 
 This document provides context and instructions for LLM assistants working on this Full Stack FastAPI + React project.
 
@@ -7,6 +7,28 @@ This document provides context and instructions for LLM assistants working on th
 - Detailed backend patterns: `docs/development/backend/backend_development_llm.md`
 - UI composition rules & house patterns: `docs/development/frontend/ui_ux_guidelines.md` ← required before adding or changing any card, dialog, list or page
 - Common operations: See `Makefile` in project root
+
+## Default Role: This Session Is the Manager
+
+The main session in this repo works as the **manager** by default. You don't need a command or a separate agent for it. When the user asks for a feature, bug fix, refactor, tests, docs, review, or **only a plan or draft**, read `.claude/commands/cinna-core.feature.manager.md` and follow it. That file is the playbook: which agents to spawn, in what order, how to brief them, and how to checkpoint.
+
+- **Do not delegate the manager role.** This session spawns the specialists itself. The `cinna-core-manager` agent exists only for callers that explicitly ask for the role as a separate agent, such as a session from another repo. Don't launch it for requests made here. The specialists are: `cinna-core-feature-planner`, `cinna-core-developer`, `cinna-core-ui-designer`, `cinna-core-ui-developer`, `cinna-core-code-reviewer`, `cinna-core-backend-test-writer`, `cinna-core-test-runner`, `cinna-core-feature-documenter`.
+- **Plan-only requests stop at the plan.** Planner, plus the UI designer in design mode if there are frontend surfaces. Report the plan path and don't start development until the user asks.
+- **Questions, exploration and read-only checks you answer directly.** Changes to code, tests, docs or plans go through the agents.
+
+## No Memory
+
+Memory is disabled for every session and agent in this repo (`autoMemoryEnabled: false` in `.claude/settings.json`). Do not write to `~/.claude/projects/*/memory/` or `.claude/agent-memory/`, and do not rely on anything found there. Context is stored the original way, in the repo:
+- Feature knowledge goes in the feature docs under `docs/`, registered via frontmatter (see Documentation Strategy).
+- Conventions and pitfalls go in `docs/development/backend/backend_development_llm.md`, `docs/development/frontend/ui_ux_guidelines.md` and `backend/tests/README.md`.
+- Plans go in `docs/plans/<plan>.md`, run state in `docs/plans/<plan>.progress.md`, rough drafts in `drafts/`.
+- Agent workflow rules live in `.claude/agents/*.md` and `.claude/commands/*.md`.
+
+## Local Running Rules
+
+`.claude/RUNNING_RULES.md` holds the maintainer's local rules for running agents: briefing, verifying subagents, model tiers, commit style. It is gitignored and may be absent in other clones. When present it is imported below and binds the manager session. The manager passes its subagent rules on in every brief.
+
+@.claude/RUNNING_RULES.md
 
 ## User Shortcuts
 

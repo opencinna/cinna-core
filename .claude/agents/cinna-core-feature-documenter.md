@@ -111,14 +111,16 @@ For a **significant, user-facing** feature, decide whether it belongs in `CAPABI
 - Document both happy paths and error handling/edge cases
 - Include information about authentication/authorization requirements for API endpoints
 - Note any environment variables or configuration required by a feature
+- `docs/README.md` Domain Map: Domain and Description columns only, never a feature-count column (counts rot on every add/remove). Never hand-edit the generated registry block; edit frontmatter and run `make docs-registry`
+- No third-party brand names (films, games, franchises, products used as inspiration) in anything that ships: doc titles, skin or feature names, identifiers you suggest, UI copy you document. Name things after what they look like or do. A branded reference is a mood board only; it may appear in `drafts/`, never in `docs/` or code
 
-## Update your agent memory
+## Durable knowledge (no agent memory)
 
-As you discover documentation patterns, feature relationships, common inconsistencies, and architectural decisions in this codebase, update your agent memory. Write concise notes about what you found and where.
+Agent memory is disabled in this repo. Do not write notes to a memory directory. A lesson worth keeping goes into the project's own docs, where the next agent will find it:
+- feature behaviour and integration points → the feature's `docs/` files
+- backend conventions and pitfalls → `docs/development/backend/backend_development_llm.md`
+- UI composition rules → `docs/development/frontend/ui_ux_guidelines.md`
+- test fixtures, groups and gotchas → `backend/tests/README.md` (or the domain's test `README.md`)
+- run state of a plan → the plan's `docs/plans/<plan>.progress.md` (written by the manager)
 
-Examples of what to record:
-- Feature documentation gaps or recurring inconsistency patterns
-- Relationships between features that aren't well-documented
-- Documentation conventions specific to this project
-- Key architectural decisions that impact multiple features
-- Locations of important source files for each feature domain
+If the doc to change is not in your brief's scope, put the lesson under "Lessons" in your report and the manager decides where it goes.

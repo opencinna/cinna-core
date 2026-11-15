@@ -31,12 +31,12 @@ Before running this command, you must:
 Before creating the implementation plan, you MUST read the following documentation files to understand the existing architecture:
 
 ### Always Read (Core Architecture)
-1. **`CLAUDE.md`** - Project overview, technology stack, development patterns
+1. **`AGENTS.md`** - Project overview, technology stack, development patterns
 2. **`docs/README.md`** - Feature registry, domain map, glossary — use this to identify which features are relevant to the plan
 
 ### Conditionally Read (Based on Feature Requirements)
 
-After reading `docs/README.md`, identify which existing features the new feature touches and read their documentation. Follow the business-logic-first approach from CLAUDE.md:
+After reading `docs/README.md`, identify which existing features the new feature touches and read their documentation. Follow the business-logic-first approach from AGENTS.md:
 
 - Read the **business logic file** (`feature_name.md`) first to understand what each related feature does
 - Read the **tech file** (`feature_name_tech.md`) only when you need implementation details
@@ -82,7 +82,7 @@ c. **Determine scope**:
 ### 2. Read Required Documentation
 
 a. **Always read**:
-   - `CLAUDE.md` - For project structure and patterns
+   - `AGENTS.md` - For project structure and patterns
    - `docs/README.md` - For feature registry and domain map
 
 b. **Conditionally read** based on feature requirements:
@@ -127,7 +127,7 @@ b. **Look for similar existing features** (if relevant):
 
 c. **Make architectural decisions**:
    - Make informed decisions based on FastAPI + React best practices
-   - Follow existing patterns from the codebase (from CLAUDE.md and business_logic.md)
+   - Follow existing patterns from the codebase (from AGENTS.md and business_logic.md)
    - Document any assumptions made
 
 ### 5. Write the Architectural Plan
@@ -260,7 +260,7 @@ a. **Review against checklist**:
 
 b. **Ensure references to existing code**:
    - References similar files in the codebase
-   - Follows established patterns from CLAUDE.md
+   - Follows established patterns from AGENTS.md
    - Integrates with existing authentication/encryption/services
    - Considers workspace permissions (if applicable)
 

@@ -95,16 +95,19 @@ If the caller's prompt names a tier-3 scope for a change that is clearly confine
 tier 2 instead and say so in your summary. If you genuinely cannot tell which group a change belongs
 to, run tier 3 and note why.
 
-**Never run the full backend test suite (`make test-backend` or `docker compose exec backend python -m pytest` without a path) when called by another agent (e.g., `cinna-core-manager`, `cinna-core-backend-test-writer`).** The full suite takes several minutes and bottlenecks feature delivery. The end user runs it manually after the agent pipeline completes.
+**Never run the full backend test suite (`make test-backend` or `docker compose exec backend python -m pytest` without a path) when called by another agent (e.g., the manager session, `cinna-core-backend-test-writer`).** The full suite takes several minutes and bottlenecks feature delivery. The end user runs it manually after the agent pipeline completes.
 
 Your maximum default scope is tier 2 above — the affected feature's topic group (e.g. `tests/api/agents/bundles/`), or the domain directory when that domain is not split (e.g. `tests/api/mcp_integration/`).
 
 **Only exception:** if a human user directly and explicitly asks you to run the full suite (e.g., "run all backend tests", "run the full test suite", "run make test-backend"), then do so. If another agent's prompt asks for the full suite, treat that as a mistake — run only the requested file and its topic group instead, and note in your summary that the full-suite run was skipped per project policy (the user runs it manually).
 
-**Update your agent memory** as you discover test suite structure, common test locations, flaky tests, and typical test run times. This builds institutional knowledge across conversations. Write concise notes about what you found and where.
+## Durable knowledge (no agent memory)
 
-Examples of what to record:
-- Test directory structure and what features they cover — including which domains are split into topic groups and what each group covers
-- Tests that are known to be flaky or slow
-- Common test execution issues (e.g., Docker needs to be up)
-- Typical test counts per directory
+Agent memory is disabled in this repo. Do not write notes to a memory directory. A lesson worth keeping goes into the project's own docs, where the next agent will find it:
+- feature behaviour and integration points → the feature's `docs/` files
+- backend conventions and pitfalls → `docs/development/backend/backend_development_llm.md`
+- UI composition rules → `docs/development/frontend/ui_ux_guidelines.md`
+- test fixtures, groups and gotchas → `backend/tests/README.md` (or the domain's test `README.md`)
+- run state of a plan → the plan's `docs/plans/<plan>.progress.md` (written by the manager)
+
+If the doc to change is not in your brief's scope, put the lesson under "Lessons" in your report and the manager decides where it goes.

@@ -99,13 +99,13 @@ Post-mortems of long runs show that cost is dominated by re-reading large files 
 - After implementation, summarize what was done, what files were changed, and any follow-up actions needed.
 - Be explicit about any deviations from the plan and why.
 
-## Update your agent memory
-As you implement phases, update your agent memory with discoveries about:
-- Codebase patterns and conventions you encounter
-- Key file locations and their purposes
-- Architectural decisions and their rationale
-- Common pitfalls or gotchas in the codebase
-- Integration points between features
-- Test patterns and fixtures available
+## Durable knowledge (no agent memory)
 
-This builds institutional knowledge that helps with future phases.
+Agent memory is disabled in this repo. Do not write notes to a memory directory. A lesson worth keeping goes into the project's own docs, where the next agent will find it:
+- feature behaviour and integration points → the feature's `docs/` files
+- backend conventions and pitfalls → `docs/development/backend/backend_development_llm.md`
+- UI composition rules → `docs/development/frontend/ui_ux_guidelines.md`
+- test fixtures, groups and gotchas → `backend/tests/README.md` (or the domain's test `README.md`)
+- run state of a plan → the plan's `docs/plans/<plan>.progress.md` (written by the manager)
+
+If the doc to change is not in your brief's scope, put the lesson under "Lessons" in your report and the manager decides where it goes.

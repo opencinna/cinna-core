@@ -18,9 +18,11 @@ Determine review scope in this order:
 2. **Conversation History** - If recent implementation work exists, review those files
 3. **Git Changes** - If no context, run `git diff --name-only` to find modified files
 
-Focus on backend route and service files matching patterns:
+The layering checks (§1–§4) focus on backend route and service files:
 - `backend/app/api/routes/*.py`
-- `backend/app/services/*_service.py`
+- `backend/app/services/<domain>/*_service.py`
+
+The storage (§5) and guard-asymmetry (§6) checks apply to every changed file, backend or frontend, and to the code *surrounding* each change.
 
 ## Review Checklist
 
@@ -91,8 +93,8 @@ Focus on backend route and service files matching patterns:
 
 **New On-Disk Write Paths** - Whenever a change introduces or starts relying on a directory/file path the backend writes to (a new `settings.*_DIR`, a new subdirectory under `/app/data/`, a new snapshot/cache/upload/export location, etc.), verify:
 - The path is backed by a mounted volume in `docker-compose.yml` (and any override/prod compose files it should apply to) — NOT left on the container's ephemeral writable layer, where it is silently destroyed on the next container recreation/redeploy.
-- Compare against the existing mount list (`uploads`, `app-data`, `agent-environments`) as precedent — a new path meant to persist should follow the same `HOST_*_DIR` env-var pattern (see `docker-compose.yml` backend `volumes:`/`environment:` blocks).
-- The local bind-mount default directory (e.g. `./backend/data/<name>/`) is added to `.gitignore` alongside the existing `backend/data/uploads/`/`backend/data/agents/` entries — otherwise the folder's contents get accidentally tracked once it's created on disk.
+- Compare against the existing backend `volumes:` block in `docker-compose.yml` as precedent (bundles, skills, git, artifacts, app-data, agent-environments): a new path meant to persist follows the same `${HOST_<NAME>_DIR:-./backend/data/<name>}:/app/data/<name>` pattern, with the matching `HOST_*_DIR` entry in `environment:`.
+- The local bind-mount default directory (e.g. `./backend/data/<name>/`) is added to `.gitignore` alongside the existing `backend/data/*` entries — otherwise the folder's contents get accidentally tracked once it's created on disk.
 - Treat a missing mount for data meant to survive redeploys as a **Critical** finding, not a nit — this exact gap (a bundle-snapshot directory never mounted) caused a silent false-negative in the git-versioning dirty check after every backend redeploy.
 
 **Silent-Skip on Missing File/Directory** - Flag any code path where a file/directory that *should* exist (a referenced snapshot, a row's `snapshot_path`, a resolved-but-absent baseline) is missing and the code treats that as "nothing to compare / no changes / clean" instead of raising or self-healing. A missing-but-expected artifact is a corrupt/lost-state condition, not a legitimate empty/default state — silently defaulting to a negative/clean result there is a data-integrity bug, not a UX nicety.
@@ -140,7 +142,7 @@ For each issue:
 
 See the refactoring pattern in:
 - **Routes (thin controller):** `backend/app/api/routes/input_tasks.py`
-- **Service (business logic):** `backend/app/services/input_task_service.py` <!-- nocheck -->
+- **Service (business logic):** `backend/app/services/tasks/input_task_service.py`
 
 Key patterns from reference:
 - `_handle_service_error()` - Convert service exceptions to HTTP
@@ -156,7 +158,8 @@ Key patterns from reference:
 2. **Read Route File** - Analyze for business logic and duplication
 3. **Read Service File** - Check for missing abstractions
 4. **Compare Patterns** - Match against reference implementation
-5. **Check New Storage Paths** - If the diff introduces or reads/writes a new on-disk path (new config dir setting, new subdirectory under existing storage roots, etc.), check `docker-compose.yml`/override/prod compose for a matching volume mount (see §5 above)
+5. **Check New Storage Paths** - If the diff introduces or reads/writes a new on-disk path (new config dir setting, new subdirectory under existing storage roots, etc.), check `docker-compose.yml`/override/prod compose for a matching volume mount, and check the missing-file branch of any code that reads it (see §5 above)
+5a. **Check Guard Asymmetry** - For every conditional the diff adds or removes, look at the sibling statements doing the same job in the surrounding code, changed or not (see §6 above)
 5b. **Check Docs Impact** - Run `python3 .cinna-core-kit/scripts/docs_index.py impact`. If it lists docs that name changed files (or `affects` hops) and none of them is in the diff, report it as a finding: either the docs were updated, or the review states why no doc change is needed. A changed route path with a doc citation that `docs_index.py check` now flags is a Major finding.
 6. **Generate Report** - List issues and recommendations
 7. **Propose Changes** - Describe specific refactoring steps

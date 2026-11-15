@@ -73,6 +73,13 @@ List the files you will create or modify, one line each, and which spec surface 
 - Follow-ups: <anti-patterns left in touched files, contract gaps>
 ```
 
-## Update your agent memory
+## Durable knowledge (no agent memory)
 
-Record: reference components and the class names that make the skeletons; new primitives you created and where; host grids/tabs with constraints; findings the designer raised more than once (so you stop producing them); typecheck and screenshot pitfalls.
+Agent memory is disabled in this repo. Do not write notes to a memory directory. A lesson worth keeping goes into the project's own docs, where the next agent will find it:
+- feature behaviour and integration points → the feature's `docs/` files
+- backend conventions and pitfalls → `docs/development/backend/backend_development_llm.md`
+- UI composition rules → `docs/development/frontend/ui_ux_guidelines.md`
+- test fixtures, groups and gotchas → `backend/tests/README.md` (or the domain's test `README.md`)
+- run state of a plan → the plan's `docs/plans/<plan>.progress.md` (written by the manager)
+
+If the doc to change is not in your brief's scope, put the lesson under "Lessons" in your report and the manager decides where it goes.

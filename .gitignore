@@ -61,3 +61,6 @@ frontend/.tanstack/
 
 # Working plans and progress logs stay local
 docs/plans/
+
+# Maintainer's local agent-running rules (imported by AGENTS.md when present)
+.claude/RUNNING_RULES.md

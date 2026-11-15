@@ -3,7 +3,7 @@
 > **Experimental** — This project is in an early experimental phase and under active development. APIs, data models, and features may change without notice. Use at your own risk. Not recommended for production workloads.
 
 > **Tip:** This project is designed to be explored with AI coding assistants. Try prompts like `read core and explain me how agent credentials are working` to navigate the codebase and understand any feature in depth.
-> If you're using an AI assistant other than Claude Code, make sure to include `CLAUDE.md` in the context — it contains the project conventions and navigation instructions.
+> AI assistants: `AGENTS.md` holds the project conventions and navigation instructions (Claude Code reads it natively).
 
 **Open-source platform for building, running, and orchestrating AI agents.**
 

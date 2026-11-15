@@ -172,16 +172,13 @@ If a test needs a workaround, **stop and check the source code first**:
 
 **Flag source code violations to the user rather than writing workarounds in tests.**
 
-## Update Your Agent Memory
+## Durable knowledge (no agent memory)
 
-As you discover test patterns, fixtures, common assertion patterns, entity relationships, and domain-specific testing conventions, update your agent memory. This builds up institutional knowledge across conversations. Write concise notes about what you found and where.
+Agent memory is disabled in this repo. Do not write notes to a memory directory. A lesson worth keeping goes into the project's own docs, where the next agent will find it:
+- feature behaviour and integration points → the feature's `docs/` files
+- backend conventions and pitfalls → `docs/development/backend/backend_development_llm.md`
+- UI composition rules → `docs/development/frontend/ui_ux_guidelines.md`
+- test fixtures, groups and gotchas → `backend/tests/README.md` (or the domain's test `README.md`)
+- run state of a plan → the plan's `docs/plans/<plan>.progress.md` (written by the manager)
 
-Examples of what to record:
-- Available fixtures and their purposes (from `conftest.py` files)
-- Test utility functions and helpers
-- Common patterns for setting up test data via API calls
-- Domain-specific testing conventions from entity README files
-- Which domains are split into topic groups, and which group covers which feature area
-- Authentication and authorization testing patterns
-- Patterns for testing async operations or background tasks
-- Common pitfalls or gotchas discovered in the test suite
+If the doc to change is not in your brief's scope, put the lesson under "Lessons" in your report and the manager decides where it goes.
