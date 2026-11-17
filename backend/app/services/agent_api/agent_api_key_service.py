@@ -58,6 +58,9 @@ from app.models import (
     AgentApiToken,
     AgentApiTokenKind,
     CredentialCreate,
+    IssuedAgentApiKeyProducer,
+    IssuedAgentApiKeyPublic,
+    IssuedAgentApiKeysPublic,
     SecurityEventCreate,
     User,
 )
@@ -404,6 +407,119 @@ class AgentApiKeyService:
                 )
             )
         return entries
+
+    # ------------------------------------------------------------------ #
+    # Issuer view: keys I issued to other people, across producers         #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def list_issued_to_others(
+        session: Session,
+        issuer_id: uuid.UUID,
+        include_ended: bool = False,
+        filter_workspace: bool = False,
+        workspace_id: uuid.UUID | None = None,
+    ) -> IssuedAgentApiKeysPublic:
+        """Every key ``issuer_id`` issued to someone else, across producers.
+
+        Keys issued to the issuer themself are excluded (they are the caller's
+        own credentials); keys whose recipient was deleted are kept with
+        ``issued_to=None``. Terminal keys only with ``include_ended``. When
+        ``filter_workspace`` is set, only keys whose producer sits in
+        ``workspace_id`` (None = the default workspace) are returned. All
+        lookups are batched; never the value.
+        """
+        statement = (
+            select(AgentApiToken, Agent)
+            .outerjoin(Agent, Agent.id == AgentApiToken.agent_id)
+            .where(
+                AgentApiToken.owner_id == issuer_id,
+                AgentApiToken.kind == AgentApiTokenKind.EXTERNAL.value,
+                (AgentApiToken.subject_user_id.is_(None))
+                | (AgentApiToken.subject_user_id != issuer_id),
+            )
+            .order_by(AgentApiToken.created_at.desc())
+        )
+        if filter_workspace:
+            # Outer join: a deleted producer leaves Agent NULL, which would
+            # match ``IS NULL`` for the default workspace. Require it to exist.
+            statement = statement.where(
+                Agent.id.is_not(None), Agent.user_workspace_id == workspace_id
+            )
+        rows = session.exec(statement).all()
+
+        now = datetime.now(UTC)
+        keyed = [(token, agent, key_status(token, agent, now)) for token, agent in rows]
+        if not include_ended:
+            keyed = [row for row in keyed if not is_terminal(row[2])]
+
+        users = AgentApiKeyService._load_users(
+            session, [token.subject_user_id for token, _, _ in keyed]
+        )
+        scopes = AgentApiKeyService._grant_scopes(
+            session,
+            {
+                (token.agent_id, token.subject_user_id)
+                for token, _, _ in keyed
+                if token.agent_id and token.subject_user_id
+            },
+        )
+
+        data = [
+            IssuedAgentApiKeyPublic(
+                id=token.id,
+                label=token.label,
+                token_prefix=token.token_prefix,
+                status=status,
+                created_at=token.created_at,
+                expires_at=token.expires_at,
+                last_used_at=token.last_used_at,
+                revoked_at=token.revoked_at,
+                producer=IssuedAgentApiKeyProducer(
+                    id=agent.id,
+                    name=agent.name,
+                    ui_color_preset=agent.ui_color_preset,
+                    user_workspace_id=agent.user_workspace_id,
+                )
+                if agent is not None
+                else None,
+                issued_to=users.get(token.subject_user_id)
+                if token.subject_user_id
+                else None,
+                scopes=scopes.get((token.agent_id, token.subject_user_id)),
+            )
+            for token, agent, status in keyed
+        ]
+        # Rows arrive newest first; the stable sort keeps that inside each
+        # (producer, recipient) group. Removed producers / recipients sort last.
+        data.sort(
+            key=lambda row: (
+                row.producer is None,
+                (row.producer.name if row.producer else "").lower(),
+                row.issued_to is None,
+                ((row.issued_to.email if row.issued_to else None) or "").lower(),
+            )
+        )
+        return IssuedAgentApiKeysPublic(data=data, count=len(data))
+
+    @staticmethod
+    def _grant_scopes(
+        session: Session, pairs: set[tuple[uuid.UUID, uuid.UUID]]
+    ) -> dict[tuple[uuid.UUID, uuid.UUID], list[str]]:
+        """``(producer_id, user_id) -> scopes`` for the given pairs, one query."""
+        if not pairs:
+            return {}
+        grants = session.exec(
+            select(AgentApiAccessGrant).where(
+                AgentApiAccessGrant.producer_agent_id.in_({p for p, _ in pairs}),
+                AgentApiAccessGrant.user_id.in_({u for _, u in pairs}),
+            )
+        ).all()
+        return {
+            (g.producer_agent_id, g.user_id): list(g.scopes or [])
+            for g in grants
+            if (g.producer_agent_id, g.user_id) in pairs
+        }
 
     # ------------------------------------------------------------------ #
     # Revoke (issuer)                                                      #

@@ -7,6 +7,7 @@ import { AgentApiService, AgentsService } from "@/client"
 import { invalidateUserGroupShareLists } from "@/components/Admin/UserGroups/userGroupQueries"
 import { PreviewList } from "@/components/Common/PreviewList"
 import type { UserSelectValue } from "@/components/Common/UserSelectField"
+import type { AgentApiAccessMode } from "@/components/Credentials/AgentApiAccessModeInfo"
 import { AgentApiKeyDialog } from "@/components/Credentials/AgentApiKeyDialog"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
@@ -96,7 +97,8 @@ export function AgentApiAccessCard({
   const [give, setGive] = useState<{
     open: boolean
     recipient: UserSelectValue | null
-  }>({ open: false, recipient: null })
+    mode: AgentApiAccessMode
+  }>({ open: false, recipient: null, mode: "key" })
   const [scopesDialog, setScopesDialog] = useState<{
     open: boolean
     target: ApiAccessScopesTarget | null
@@ -200,7 +202,7 @@ export function AgentApiAccessCard({
     : undefined
 
   const openGive = (recipient: UserSelectValue | null) =>
-    setGive({ open: true, recipient })
+    setGive({ open: true, recipient, mode: "key" })
 
   const renderRow = (entry: AgentApiAccessEntry) => (
     <ApiAccessPersonRow
@@ -355,16 +357,30 @@ export function AgentApiAccessCard({
           </section>
         )}
 
-        {identityOn && (
+        {/* Secondary verbs, one link row under the lists. A connection is
+            not gated by External access (that pauses keys only). */}
+        <div className="flex flex-wrap gap-x-4">
+          {identityOn && (
+            <Button
+              variant="link"
+              size="sm"
+              className="px-0"
+              onClick={() => setScopesDialog({ open: true, target: null })}
+            >
+              Grant scopes without a key
+            </Button>
+          )}
           <Button
             variant="link"
             size="sm"
             className="px-0"
-            onClick={() => setScopesDialog({ open: true, target: null })}
+            onClick={() =>
+              setGive({ open: true, recipient: null, mode: "connection" })
+            }
           >
-            Grant scopes without a key
+            Create shareable connection
           </Button>
-        )}
+        </div>
       </CardContent>
 
       <AllApiAccessSheet
@@ -398,6 +414,7 @@ export function AgentApiAccessCard({
         onOpenChange={(open) => setGive((g) => ({ ...g, open }))}
         producerAgentId={agentId}
         initialRecipient={give.recipient}
+        initialMode={give.mode}
       />
 
       <ApiAccessScopesDialog

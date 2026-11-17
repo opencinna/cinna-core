@@ -1,24 +1,26 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Link, useNavigate } from "@tanstack/react-router"
-import { AlertTriangle, CheckCircle2 } from "lucide-react"
+import { useNavigate } from "@tanstack/react-router"
 import { useMemo, useState } from "react"
 
 import type { AgentPublic } from "@/client"
 import { AgentApiService, AgentsService } from "@/client"
-import { AgentApiScopeEditor } from "@/components/Common/AgentApiScopeEditor"
+import type { AgentOption } from "@/components/Common/AgentSelectorDialog"
+import type { UserSelectValue } from "@/components/Common/UserSelectField"
 import {
-  type AgentOption,
-  AgentSelectorList,
-} from "@/components/Common/AgentSelectorDialog"
-import { QueryErrorAlert } from "@/components/Common/QueryErrorAlert"
+  type AgentApiAccessMode,
+  AgentApiAccessModeInfo,
+} from "@/components/Credentials/AgentApiAccessModeInfo"
 import {
-  UserSelectField,
-  type UserSelectValue,
-} from "@/components/Common/UserSelectField"
+  AgentApiConnectionFields,
+  defaultAgentApiConnectionName,
+} from "@/components/Credentials/AgentApiConnectionFields"
+import { expiryDays } from "@/components/Credentials/AgentApiKeyAdvancedFields"
+import { AgentApiKeyFields } from "@/components/Credentials/AgentApiKeyFields"
 import {
-  AgentApiKeyAdvancedFields,
-  expiryDays,
-} from "@/components/Credentials/AgentApiKeyAdvancedFields"
+  AgentApiKeyIssuedPanel,
+  type IssuedToOther,
+} from "@/components/Credentials/AgentApiKeyIssuedPanel"
+import { AgentApiProducerField } from "@/components/Credentials/AgentApiProducerField"
 import { AGENT_API_KEY_LABEL } from "@/components/Credentials/agentApiKeyCopy"
 import { stashMintedAgentApiKey } from "@/components/Credentials/agentApiKeyMintHandoff"
 import { Button } from "@/components/ui/button"
@@ -30,11 +32,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Label } from "@/components/ui/label"
 import { LoadingButton } from "@/components/ui/loading-button"
-import { Skeleton } from "@/components/ui/skeleton"
-import useAuth from "@/hooks/useAuth"
 import { agentApiAccessQueryKey } from "@/hooks/useAgentApiKeys"
+import useAuth from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
 import { handleError } from "@/utils"
 
@@ -48,20 +48,26 @@ interface AgentApiKeyDialogProps {
   producerAgentId?: string
   /** Prefilled recipient ("Give another key" on a person). Defaults to me. */
   initialRecipient?: UserSelectValue | null
-}
-
-/** A key issued to someone else: the body swaps to this, no navigation. */
-interface IssuedToOther {
-  recipientName: string
-  keyLabel: string
-  producerName: string
+  /**
+   * With no `initialRecipient`, start on me (default) or leave the recipient
+   * empty so the user must pick someone — "Issued Credentials" uses false.
+   */
+  defaultRecipientToMe?: boolean
+  /**
+   * What the dialog opens on; the user can switch inside it. Defaults to a
+   * key. Re-applied on every open.
+   */
+  initialMode?: AgentApiAccessMode
 }
 
 /**
- * "Give API access" — issue a key on a producer to myself or to a colleague.
- * Behind the producer's API access card ("Give access", "Give another key")
- * and `/credentials` › New › {AGENT_API_KEY_LABEL}; the same form in both, the
- * second only adds the producer picker.
+ * "Give API access" — issue a key on a producer to myself or to a colleague,
+ * or (connection mode) create a shareable connection to it. Behind the
+ * producer's API access card ("Give access", "Give another key", "Create
+ * shareable connection") and `/credentials` › New › {AGENT_API_KEY_LABEL} /
+ * "Agent API connection"; the same form in both, the second only adds the
+ * producer picker. An info panel at the top says which of the two the user
+ * needs and switches between them.
  *
  * The key lands in the **recipient's** credentials. Issued to me, the flow
  * ends where the value is (the detail page, value shown once from the issue
@@ -79,6 +85,8 @@ export function AgentApiKeyDialog({
   onOpenChange,
   producerAgentId,
   initialRecipient,
+  defaultRecipientToMe = true,
+  initialMode = "key",
 }: AgentApiKeyDialogProps) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
@@ -96,6 +104,7 @@ export function AgentApiKeyDialog({
     [currentUser],
   )
 
+  const [mode, setMode] = useState<AgentApiAccessMode>(initialMode)
   const [selectedProducerId, setSelectedProducerId] = useState("")
   const [recipient, setRecipient] = useState<UserSelectValue | null>(null)
   const [label, setLabel] = useState("")
@@ -110,8 +119,9 @@ export function AgentApiKeyDialog({
   if (open !== lastOpen) {
     setLastOpen(open)
     if (open) {
+      setMode(initialMode)
       setSelectedProducerId("")
-      setRecipient(initialRecipient ?? me)
+      setRecipient(initialRecipient ?? (defaultRecipientToMe ? me : null))
       setLabel("")
       setSlot("")
       setScopes([])
@@ -219,169 +229,165 @@ export function AgentApiKeyDialog({
     onError: handleError.bind(showErrorToast),
   })
 
-  // Only knowable on the picker path: the producer card disables its button
-  // while external access is off.
+  // A connection has no consumer here: it lands in the producer's workspace
+  // and is shared from its own page, which is where this flow ends.
+  const connectMutation = useMutation({
+    mutationFn: () =>
+      AgentApiService.connectAgentApi({
+        agentId: producerId,
+        requestBody: {
+          credential_label:
+            label.trim() || defaultAgentApiConnectionName(producerName),
+          service_uri: slot.trim() || null,
+        },
+      }),
+    onSuccess: (created) => {
+      queryClient.invalidateQueries({ queryKey: ["credentials"] })
+      queryClient.invalidateQueries({
+        queryKey: ["agentApiConnections", producerId],
+      })
+      showSuccessToast(
+        "Connection created — turn on sharing here to let others use it",
+      )
+      onOpenChange(false)
+      navigate({
+        to: "/credential/$credentialId",
+        params: { credentialId: created.credential_id },
+      })
+    },
+    onError: handleError.bind(showErrorToast),
+  })
+
+  const isPending = createMutation.isPending || connectMutation.isPending
+  const isConnection = mode === "connection"
+
+  // External access gates keys only; a connection is not affected by it. The
+  // card's "Give access" is disabled while it is off, but switching from
+  // connection mode reaches key mode anyway, so the gate is re-derived here
+  // for the fixed producer too.
   const externalAccessOff =
-    !isProducerFixed &&
-    !!producer &&
-    !producer.agent_api_external_access_enabled
+    !isConnection && !!producer && !producer.agent_api_external_access_enabled
   const canSubmit =
     !!producerId &&
-    !!recipient &&
+    // `!!producer`: a fixed producer loads after open, and its External
+    // access must be known before a key is offered.
+    !!producer &&
+    (isConnection || !!recipient) &&
     !externalAccessOff &&
-    !createMutation.isPending
+    !isPending
 
   return (
     <Dialog
       open={open}
       onOpenChange={(next) => {
         // Escape / outside-click do nothing while the key is being issued.
-        if (createMutation.isPending) return
+        if (isPending) return
         onOpenChange(next)
       }}
     >
-      <DialogContent className="max-h-[85vh] overflow-y-auto overflow-x-hidden sm:max-w-lg [&>*]:min-w-0">
+      <DialogContent
+        className="max-h-[85vh] overflow-y-auto overflow-x-hidden sm:max-w-lg [&>*]:min-w-0"
+        // The first focusable is the info panel's mode switch; focused on
+        // open, an Enter would reshape the form. The body takes focus instead.
+        onOpenAutoFocus={(e) => {
+          e.preventDefault()
+          ;(e.currentTarget as HTMLElement).focus()
+        }}
+      >
         {issued ? (
-          <>
-            <DialogHeader>
-              <DialogTitle>Give API access</DialogTitle>
-            </DialogHeader>
-            <div className="flex items-start gap-3">
-              <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-success" />
-              <div className="min-w-0 space-y-1">
-                <p className="text-sm font-medium break-words">
-                  {issued.recipientName} has a new key
-                </p>
-                <p className="text-sm text-muted-foreground break-words">
-                  It is in their credentials as {issued.keyLabel}. You won't see
-                  its value. Revoke it from {issued.producerName}'s API access
-                  card.
-                </p>
-              </div>
-            </div>
-            <DialogFooter>
-              <Button onClick={() => onOpenChange(false)}>Done</Button>
-            </DialogFooter>
-          </>
+          <AgentApiKeyIssuedPanel
+            {...issued}
+            onDone={() => onOpenChange(false)}
+          />
         ) : (
           <>
             <DialogHeader>
-              <DialogTitle>Give API access</DialogTitle>
-              <DialogDescription>
-                Issue a key so code outside the platform can call{" "}
-                {producerName ? `${producerName}'s` : "an agent's"} REST API.
+              <DialogTitle>
+                {isConnection
+                  ? "Create shareable connection"
+                  : "Give API access"}
+              </DialogTitle>
+              {/* The panel below is the explanation; the description only
+                  names the API, for screen readers and for the fixed-producer
+                  case where no picker says it. */}
+              <DialogDescription className="break-words">
+                {producerName ? `${producerName}'s` : "An agent's"} REST API
               </DialogDescription>
             </DialogHeader>
 
             <div className="space-y-4">
+              <AgentApiAccessModeInfo
+                mode={mode}
+                onModeChange={setMode}
+                disabled={isPending}
+              />
+
               {!isProducerFixed && (
-                <fieldset className="space-y-1.5">
-                  <Label asChild>
-                    <legend>Producer</legend>
-                  </Label>
-                  {agentsQuery.isError ? (
-                    <QueryErrorAlert
-                      error={agentsQuery.error}
-                      fallback="Couldn't load your agents"
-                      onRetry={() => agentsQuery.refetch()}
-                      compact
-                    />
-                  ) : agentsQuery.isLoading ? (
-                    <Skeleton className="h-9 w-full rounded-md" />
-                  ) : producers.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">
-                      None of your agents expose a REST API yet.
-                    </p>
-                  ) : (
-                    <AgentSelectorList
-                      mode="single"
-                      agents={producerOptions}
-                      selectedAgentId={selectedProducerId || null}
-                      onSelect={setSelectedProducerId}
-                      placeholder="Pick an agent that exposes a REST API"
-                      active={open}
-                      disabled={createMutation.isPending}
-                    />
-                  )}
-                  {externalAccessOff && producer && (
-                    <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
-                      <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0 text-warning" />
-                      <span>
-                        External access is off for {producer.name}. Turn it on
-                        in its{" "}
-                        <Link
-                          to="/agent/$agentId"
-                          params={{ agentId: producer.id }}
-                          hash="integrations"
-                          className="text-primary hover:underline"
-                        >
-                          API access card
-                        </Link>{" "}
-                        first.
-                      </span>
-                    </p>
-                  )}
-                </fieldset>
+                <AgentApiProducerField
+                  options={producerOptions}
+                  selectedId={selectedProducerId}
+                  onSelect={setSelectedProducerId}
+                  isLoading={agentsQuery.isLoading}
+                  isError={agentsQuery.isError}
+                  error={agentsQuery.error}
+                  onRetry={() => agentsQuery.refetch()}
+                  active={open}
+                  disabled={isPending}
+                  externalAccessOffFor={
+                    externalAccessOff ? producer : undefined
+                  }
+                />
               )}
 
-              <div className="space-y-1.5">
-                <Label htmlFor="agent-api-key-recipient">Issued to</Label>
-                <UserSelectField
-                  id="agent-api-key-recipient"
-                  value={recipient}
-                  onChange={setRecipient}
-                  includeSelf
-                  disabled={createMutation.isPending}
+              {isConnection ? (
+                <AgentApiConnectionFields
+                  name={label}
+                  onNameChange={setLabel}
+                  slot={slot}
+                  onSlotChange={setSlot}
+                  producerName={producerName}
+                  disabled={isPending}
                 />
-                {recipient && !recipientIsMe && (
-                  <p className="text-xs text-muted-foreground break-words">
-                    The key goes to {recipientName}'s credentials. You won't see
-                    its value, and you can revoke it anytime.
-                  </p>
-                )}
-              </div>
-
-              <div className="space-y-1.5">
-                <Label>Scopes (optional)</Label>
-                <AgentApiScopeEditor
+              ) : (
+                <AgentApiKeyFields
+                  recipient={recipient}
+                  onRecipientChange={setRecipient}
+                  recipientIsMe={recipientIsMe}
                   scopes={scopes}
-                  onChange={setScopes}
+                  onScopesChange={setScopes}
                   catalogScopes={catalogData?.scopes ?? []}
-                  emptyHint="No scopes — the caller is identified but carries no capabilities."
-                  disabled={!producerId || createMutation.isPending}
+                  expiry={expiry}
+                  onExpiryChange={setExpiry}
+                  label={label}
+                  onLabelChange={setLabel}
+                  slot={slot}
+                  onSlotChange={setSlot}
+                  producerName={producerName}
+                  scopesDisabled={!producerId}
+                  externalAccessOffFixed={externalAccessOff && isProducerFixed}
+                  disabled={isPending}
                 />
-                <p className="text-xs text-muted-foreground">
-                  {recipientIsMe || !recipient
-                    ? "Shared by every key you hold on this agent. Leave empty to keep what you have."
-                    : `Shared by every key ${recipientName} holds on this agent. Leave empty to keep what they have.`}
-                </p>
-              </div>
-
-              <AgentApiKeyAdvancedFields
-                expiry={expiry}
-                onExpiryChange={setExpiry}
-                label={label}
-                onLabelChange={setLabel}
-                slot={slot}
-                onSlotChange={setSlot}
-                producerName={producerName}
-              />
+              )}
             </div>
 
             <DialogFooter>
               <Button
                 variant="outline"
                 onClick={() => onOpenChange(false)}
-                disabled={createMutation.isPending}
+                disabled={isPending}
               >
                 Cancel
               </Button>
               <LoadingButton
-                loading={createMutation.isPending}
+                loading={isPending}
                 disabled={!canSubmit}
-                onClick={() => createMutation.mutate()}
+                onClick={() =>
+                  isConnection
+                    ? connectMutation.mutate()
+                    : createMutation.mutate()
+                }
               >
-                Give access
+                {isConnection ? "Create connection" : "Give access"}
               </LoadingButton>
             </DialogFooter>
           </>

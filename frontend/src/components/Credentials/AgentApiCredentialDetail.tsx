@@ -95,24 +95,28 @@ export function AgentApiCredentialDetail({
 }
 
 /**
- * Plan D10 steering: a connection is how an *agent* calls a producer; a person
- * calling it from their own code needs a key from the producer's API access
- * card. Shown only when the viewer owns the producer — the server says so
+ * Plan D10 steering, both directions: sharing this connection (with bundle
+ * re-use allowed) is how other people's agents and the bundles they publish
+ * call the producer; a person calling it from their own code needs a key from
+ * the producer's API access card. Shown only when the viewer owns the producer — the server says so
  * (``producer_owned_by_viewer``); a 404 on the agent is never used to guess.
  * Shares the connection view's query, so it costs no request.
  */
 function ConnectionSharingHint({ credentialId }: { credentialId: string }) {
   const { data } = useQuery({
     queryKey: ["agentApiConnection", credentialId],
-    queryFn: () => CredentialsService.readAgentApiConnection({ id: credentialId }),
+    queryFn: () =>
+      CredentialsService.readAgentApiConnection({ id: credentialId }),
   })
 
   if (!data?.producer_owned_by_viewer || !data.producer_agent_id) return null
 
   return (
     <p className="text-sm text-muted-foreground">
-      To let a person call {data.producer_agent_name || "this agent"} from their
-      own code, give them a key.{" "}
+      Share this connection, and allow re-use inside bundles, to let other
+      people's agents and the bundles they publish call{" "}
+      {data.producer_agent_name || "this agent"}. For one person's own code,
+      give them a key instead.{" "}
       <Link
         to="/agent/$agentId"
         params={{ agentId: data.producer_agent_id }}

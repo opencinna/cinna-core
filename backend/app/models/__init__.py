@@ -606,6 +606,9 @@ from .agent_api.agent_api_token import (
     AgentApiProducerConnections,
     ConnectAgentApiRequest,
     ConnectAgentApiResponse,
+    IssuedAgentApiKeyProducer,
+    IssuedAgentApiKeyPublic,
+    IssuedAgentApiKeysPublic,
 )
 from .agent_api.agent_api_access_grant import (
     AgentApiAccessGrant,
@@ -1739,6 +1742,9 @@ __all__ = [
     "AgentApiScope",
     "AgentApiScopeCatalog",
     "ConnectAgentApiRequest",
+    "IssuedAgentApiKeyProducer",
+    "IssuedAgentApiKeyPublic",
+    "IssuedAgentApiKeysPublic",
     "ConnectAgentApiResponse",
     # Agent Guest Shares
     "AgentGuestShare",

@@ -37,10 +37,12 @@ export interface CredentialTypeOption {
    * Opt out of the picker's default "create a row with ``defaultName`` and open
    * its detail page" behaviour, because this type cannot exist as an empty
    * draft: an ``agent_api`` key is bound to a producer agent and a subject user
-   * at mint time, so it needs a dialog first. The picker branches on this and
-   * ``defaultName`` goes unused for such an entry.
+   * at mint time, so it needs a dialog first. The same goes for an
+   * ``agent_api`` connection, minted on a producer by the same dialog in its
+   * connection mode. The picker branches on this and ``defaultName`` goes
+   * unused for such an entry.
    */
-  action?: "agent_api_key"
+  action?: "agent_api_key" | "agent_api_connection"
 }
 
 export interface CredentialTypeGroup {
@@ -85,6 +87,20 @@ export const CREDENTIAL_TYPE_GROUPS: CredentialTypeGroup[] = [
         keywords: `agent api key external rest curl script ${AGENT_API_KEY_TAGLINE}`,
         icon: KeySquare,
         action: "agent_api_key",
+      },
+      {
+        // The shareable sibling of the key: what another user's agents and
+        // the bundles they publish call this producer through. Same dialog,
+        // opened in connection mode. Both options share type "agent_api",
+        // so META_BY_TYPE keeps the later one (this); that is harmless only
+        // because DISPLAY_ONLY_META then overrides "agent_api" anyway.
+        type: "agent_api",
+        label: "Agent API connection",
+        defaultName: "Agent API connection",
+        keywords:
+          "agent api connection share shareable bundle reuse re-use other people",
+        icon: Network,
+        action: "agent_api_connection",
       },
     ],
   },

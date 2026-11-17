@@ -377,6 +377,7 @@ export type AccountConnectAgentApiBody = {
     consumer_agent_id?: (string | null);
     credential_label?: (string | null);
     read_only_override?: boolean;
+    service_uri?: (string | null);
 };
 
 /**
@@ -4320,6 +4321,7 @@ export type ConnectAgentApiRequest = {
     credential_label?: (string | null);
     read_only_override?: boolean;
     consumer_agent_id?: (string | null);
+    service_uri?: (string | null);
 };
 
 /**
@@ -6402,6 +6404,45 @@ export type InviteUserResponse = {
     email_sent: boolean;
     provisioning: InviteProvisioningSummary;
     adopted_existing_account?: boolean;
+};
+
+/**
+ * The producer an issued key calls, as its ISSUER sees it.
+ */
+export type IssuedAgentApiKeyProducer = {
+    id: string;
+    name: string;
+    ui_color_preset?: (string | null);
+    user_workspace_id?: (string | null);
+};
+
+/**
+ * One key the caller issued to someone else, across all their producers.
+ *
+ * Never the value. ``issued_to`` is None when the recipient's account is gone;
+ * ``producer`` is None when the producer agent was deleted. ``scopes`` is the
+ * recipient's current grant on the producer, None when no grant row exists.
+ */
+export type IssuedAgentApiKeyPublic = {
+    id: string;
+    label: (string | null);
+    token_prefix: string;
+    status: AgentApiKeyStatus;
+    created_at: string;
+    expires_at: (string | null);
+    last_used_at: (string | null);
+    revoked_at?: (string | null);
+    producer?: (IssuedAgentApiKeyProducer | null);
+    issued_to?: (AgentApiKeyUser | null);
+    scopes?: (Array<(string)> | null);
+};
+
+/**
+ * ``GET /credentials/issued-keys`` response.
+ */
+export type IssuedAgentApiKeysPublic = {
+    data: Array<IssuedAgentApiKeyPublic>;
+    count: number;
 };
 
 export type KeyEnvelopeInput = {
@@ -12793,6 +12834,13 @@ export type CredentialsCreateCredentialData = {
 };
 
 export type CredentialsCreateCredentialResponse = (CredentialPublic);
+
+export type CredentialsReadIssuedAgentApiKeysData = {
+    includeEnded?: boolean;
+    userWorkspaceId?: (string | null);
+};
+
+export type CredentialsReadIssuedAgentApiKeysResponse = (IssuedAgentApiKeysPublic);
 
 export type CredentialsReadCredentialData = {
     id: string;

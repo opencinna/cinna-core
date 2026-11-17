@@ -22,6 +22,7 @@ from app.models import (
     CredentialsPublic,
     CredentialUpdate,
     CredentialWithData,
+    IssuedAgentApiKeysPublic,
     Message,
     UserWorkspace,
 )
@@ -140,6 +141,24 @@ def _agent_api_key_status(
     return key_status_value(session, credential, key_states)
 
 
+def _parse_workspace_filter(
+    user_workspace_id: str | None,
+) -> tuple[bool, uuid.UUID | None]:
+    """Parse the ``user_workspace_id`` query param into ``(apply, workspace_id)``.
+
+    None = no filter; "" = the default workspace (NULL); a UUID string = that
+    workspace; anything else is a 400.
+    """
+    if user_workspace_id is None:
+        return False, None
+    if user_workspace_id == "":
+        return True, None
+    try:
+        return True, uuid.UUID(user_workspace_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid workspace ID format")
+
+
 @router.get("/", response_model=CredentialsPublic)
 def read_credentials(
     session: SessionDep,
@@ -154,24 +173,7 @@ def read_credentials(
     - If user_workspace_id is empty string (""): filters for default workspace (NULL)
     - If user_workspace_id is a UUID string: filters for that workspace
     """
-    # Parse workspace filter
-    workspace_filter: uuid.UUID | None = None
-    apply_filter = False
-
-    if user_workspace_id is None:
-        # Parameter not provided - return all credentials
-        apply_filter = False
-    elif user_workspace_id == "":
-        # Empty string means default workspace (NULL in database)
-        workspace_filter = None
-        apply_filter = True
-    else:
-        # Parse as UUID
-        try:
-            workspace_filter = uuid.UUID(user_workspace_id)
-            apply_filter = True
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid workspace ID format")
+    apply_filter, workspace_filter = _parse_workspace_filter(user_workspace_id)
 
     # Credentials are always private - only return credentials owned by current user
     count_statement = (
@@ -232,6 +234,33 @@ def read_credentials(
     ]
 
     return CredentialsPublic(data=credentials_public, count=count)
+
+
+@router.get("/issued-keys", response_model=IssuedAgentApiKeysPublic)
+def read_issued_agent_api_keys(
+    session: SessionDep,
+    current_user: CurrentUser,
+    include_ended: bool = False,
+    user_workspace_id: str | None = None,
+) -> Any:
+    """
+    Agent API keys the caller issued to OTHER people, across all their producers.
+
+    Never the token value. Keys issued to the caller themself are excluded (they
+    are the caller's own credentials). Ended keys (revoked, expired, producer
+    removed) only with ``include_ended``. ``user_workspace_id`` filters by the
+    PRODUCER agent's workspace with the same None / "" / UUID semantics as
+    ``GET /credentials/``. Revoke via
+    ``POST /agents/{agent_id}/agent-api/keys/{key_id}/revoke``.
+    """
+    apply_filter, workspace_filter = _parse_workspace_filter(user_workspace_id)
+    return AgentApiKeyService.list_issued_to_others(
+        session=session,
+        issuer_id=current_user.id,
+        include_ended=include_ended,
+        filter_workspace=apply_filter,
+        workspace_id=workspace_filter,
+    )
 
 
 @router.get("/{id}", response_model=CredentialPublic)

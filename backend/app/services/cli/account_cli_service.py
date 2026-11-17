@@ -798,6 +798,7 @@ class AccountCLIService:
                 credential_label=body.credential_label,
                 read_only_override=body.read_only_override,
                 consumer_agent_id=body.consumer_agent_id,
+                service_uri=body.service_uri,
             ),
             is_superuser=user.is_superuser,
         )

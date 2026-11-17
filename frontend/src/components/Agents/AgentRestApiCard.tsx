@@ -338,7 +338,7 @@ export function AgentRestApiCard({
                     <div className="flex items-center gap-2 min-w-0 flex-wrap">
                       {conn.consumer_agents.length === 0 ? (
                         <span className="text-sm text-muted-foreground italic">
-                          Not linked to an agent
+                          Shareable, not linked to an agent
                         </span>
                       ) : (
                         conn.consumer_agents.map((a) => (

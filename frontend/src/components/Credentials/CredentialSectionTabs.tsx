@@ -10,17 +10,28 @@ import { cn } from "@/lib/utils"
  */
 export type CredentialSection = "mine" | "automatic" | "bundle"
 
-const SEGMENTS: { value: CredentialSection; label: string }[] = [
+/**
+ * The page's sections: the three server categories, plus "Issued Credentials" —
+ * keys the caller gave other people, which are not the caller's credentials
+ * at all and so are never a `category` value.
+ */
+export type CredentialsPageSection = CredentialSection | "issued"
+
+const SEGMENTS: { value: CredentialsPageSection; label: string }[] = [
   { value: "mine", label: "My Credentials" },
   { value: "automatic", label: "Automatic Credentials" },
   { value: "bundle", label: "Bundle Credentials" },
+  { value: "issued", label: "Issued Credentials" },
 ]
 
 interface CredentialSectionTabsProps {
-  value: CredentialSection
-  onChange: (next: CredentialSection) => void
-  /** Rows per section; `undefined` while the lists are loading. */
-  counts: Record<CredentialSection, number> | undefined
+  value: CredentialsPageSection
+  onChange: (next: CredentialsPageSection) => void
+  /**
+   * Rows per section. A missing entry is still loading (skeleton); `null`
+   * means the count is unknown (its list failed) and shows nothing.
+   */
+  counts: Partial<Record<CredentialsPageSection, number | null>>
 }
 
 /**
@@ -58,6 +69,7 @@ export function CredentialSectionTabs({
     >
       {SEGMENTS.map((segment, index) => {
         const checked = segment.value === value
+        const count = counts[segment.value]
         return (
           // biome-ignore lint/a11y/useSemanticElements: a segmented control on the shared track; native radios cannot carry this skin, and the roving tab stop is implemented here.
           <button
@@ -82,17 +94,17 @@ export function CredentialSectionTabs({
             )}
           >
             {segment.label}
-            {counts ? (
+            {count === undefined ? (
+              <Skeleton className="h-4 w-5" />
+            ) : count === null ? null : (
               <span
                 className={cn(
                   "tabular-nums",
                   checked ? "opacity-80" : "text-muted-foreground",
                 )}
               >
-                {counts[segment.value]}
+                {count}
               </span>
-            ) : (
-              <Skeleton className="h-4 w-5" />
             )}
           </button>
         )

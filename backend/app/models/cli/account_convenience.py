@@ -68,6 +68,8 @@ class AccountConnectAgentApiBody(SQLModel):
     consumer_agent_id: uuid.UUID | None = None
     credential_label: str | None = Field(default=None, max_length=255)
     read_only_override: bool = False
+    # Optional slot id; normalized by ``ConnectAgentApiRequest`` (blank -> None).
+    service_uri: str | None = Field(default=None, max_length=255)
 
 
 class AccountAgentApiEnableBody(SQLModel):

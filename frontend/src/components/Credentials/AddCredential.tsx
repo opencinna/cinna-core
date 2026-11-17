@@ -26,6 +26,7 @@ import {
   CREDENTIAL_TYPE_GROUPS,
   type CredentialTypeOption,
 } from "@/components/Credentials/credentialTypes"
+import type { AgentApiAccessMode } from "@/components/Credentials/AgentApiAccessModeInfo"
 import { AgentApiKeyDialog } from "@/components/Credentials/AgentApiKeyDialog"
 import { ConnectMcpProviderDialog } from "@/components/Credentials/ConnectMcpProviderDialog"
 
@@ -45,7 +46,10 @@ const AddCredential = ({ trigger }: AddCredentialProps = {}) => {
   const [isOpen, setIsOpen] = useState(false)
   const [query, setQuery] = useState("")
   const [pendingType, setPendingType] = useState<CredentialTypeKey | null>(null)
-  const [agentApiKeyOpen, setAgentApiKeyOpen] = useState(false)
+  const [agentApi, setAgentApi] = useState<{
+    open: boolean
+    mode: AgentApiAccessMode
+  }>({ open: false, mode: "key" })
   const [connectMcpOpen, setConnectMcpOpen] = useState(false)
   const queryClient = useQueryClient()
   const navigate = useNavigate()
@@ -58,7 +62,8 @@ const AddCredential = ({ trigger }: AddCredentialProps = {}) => {
     return CREDENTIAL_TYPE_GROUPS.map((group) => ({
       ...group,
       options: group.options.filter((opt) => {
-        const haystack = `${opt.label} ${opt.keywords} ${group.label}`.toLowerCase()
+        const haystack =
+          `${opt.label} ${opt.keywords} ${group.label}`.toLowerCase()
         return haystack.includes(q)
       }),
     })).filter((group) => group.options.length > 0)
@@ -90,10 +95,14 @@ const AddCredential = ({ trigger }: AddCredentialProps = {}) => {
     // ``agent_api`` key can't: it is bound to a producer agent and a subject
     // user at mint time, so it opens its dialog instead. It still lives in the
     // "API & Access" group — from the outside it is just an API key for
-    // external use, not an exceptional kind of access.
-    if (option.action === "agent_api_key") {
+    // external use, not an exceptional kind of access. A shareable connection
+    // is minted on a producer too, by the same dialog in connection mode.
+    if (option.action) {
       setIsOpen(false)
-      setAgentApiKeyOpen(true)
+      setAgentApi({
+        open: true,
+        mode: option.action === "agent_api_connection" ? "connection" : "key",
+      })
       return
     }
     handleSelect(option)
@@ -134,111 +143,115 @@ const AddCredential = ({ trigger }: AddCredentialProps = {}) => {
 
   return (
     <>
-    {/* The global picker offers the KEY, never "Connect Agent API": a connect
-        has no consumer agent to link to here, so it would only ever produce a
-        dangling "Not linked to an agent" credential. Connect stays on the
-        agent's own Credentials tab, where a consumer IS in context. */}
-    <AgentApiKeyDialog
-      open={agentApiKeyOpen}
-      onOpenChange={setAgentApiKeyOpen}
-    />
-    <ConnectMcpProviderDialog
-      open={connectMcpOpen}
-      onOpenChange={setConnectMcpOpen}
-      defaultWorkspaceId={workspaceFilter || undefined}
-    />
-    <Dialog open={isOpen} onOpenChange={handleOpenChange}>
-      <DialogTrigger asChild>
-        {trigger ?? (
-          <Button className="my-4">
-            <Plus className="mr-2" />
-            New Credential
-          </Button>
-        )}
-      </DialogTrigger>
-
-      <DialogContent className="sm:max-w-2xl p-0 gap-0 overflow-hidden">
-        <DialogHeader className="px-6 pt-6 pb-3">
-          <DialogTitle>Add Credential</DialogTitle>
-          <DialogDescription>
-            Pick a credential type. We'll create it with a default name so you
-            can fill in the details on the next page.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="px-6 pb-3 space-y-3">
-          <button
-            type="button"
-            onClick={() => {
-              setIsOpen(false)
-              setConnectMcpOpen(true)
-            }}
-            className="flex w-full items-center gap-2 rounded-md border border-dashed px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
-          >
-            <Plug className="h-4 w-4 shrink-0" />
-            <span>Connect MCP Provider</span>
-            <span className="ml-auto text-xs text-muted-foreground">
-              a platform agent or external MCP server
-            </span>
-          </button>
-          <div className="relative">
-            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-            <Input
-              autoFocus
-              placeholder="Search credential types…"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              className="pl-9"
-            />
-          </div>
-        </div>
-
-        <div className="max-h-[60vh] overflow-y-auto px-6 pb-6">
-          {filteredGroups.length === 0 ? (
-            <p className="text-sm text-muted-foreground py-6 text-center">
-              No credential types match "{query}"
-            </p>
-          ) : (
-            <div className="space-y-4">
-              {filteredGroups.map((group) => (
-                <div key={group.key}>
-                  <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
-                    {group.label}
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {group.options.map((option) => {
-                      const isPending =
-                        createMutation.isPending && pendingType === option.type
-                      const Icon = option.icon
-                      return (
-                        <button
-                          key={option.type}
-                          type="button"
-                          disabled={createMutation.isPending}
-                          onClick={() => handleOptionClick(option)}
-                          className={cn(
-                            "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-medium transition-colors",
-                            group.badgeClass,
-                            "disabled:opacity-50 disabled:cursor-not-allowed",
-                            isPending && "ring-2 ring-offset-1 ring-current/40",
-                          )}
-                        >
-                          <Icon className="h-3.5 w-3.5 shrink-0" />
-                          <span>{option.label}</span>
-                          {isPending && (
-                            <span className="ml-1 inline-block h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                          )}
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
-              ))}
-            </div>
+      {/* Both agent_api products open one dialog: the personal KEY, and the
+        shareable CONNECTION with no consumer agent — it lands in the
+        producer's workspace and is shared (with bundle re-use) from its own
+        page. Wiring a connection to one of the caller's own agents stays on
+        that agent's Credentials tab ("Connect Agent API"). */}
+      <AgentApiKeyDialog
+        open={agentApi.open}
+        onOpenChange={(open) => setAgentApi((d) => ({ ...d, open }))}
+        initialMode={agentApi.mode}
+      />
+      <ConnectMcpProviderDialog
+        open={connectMcpOpen}
+        onOpenChange={setConnectMcpOpen}
+        defaultWorkspaceId={workspaceFilter || undefined}
+      />
+      <Dialog open={isOpen} onOpenChange={handleOpenChange}>
+        <DialogTrigger asChild>
+          {trigger ?? (
+            <Button className="my-4">
+              <Plus className="mr-2" />
+              New Credential
+            </Button>
           )}
-        </div>
-      </DialogContent>
-    </Dialog>
+        </DialogTrigger>
+
+        <DialogContent className="sm:max-w-2xl p-0 gap-0 overflow-hidden">
+          <DialogHeader className="px-6 pt-6 pb-3">
+            <DialogTitle>Add Credential</DialogTitle>
+            <DialogDescription>
+              Pick a credential type. We'll create it with a default name so you
+              can fill in the details on the next page.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="px-6 pb-3 space-y-3">
+            <button
+              type="button"
+              onClick={() => {
+                setIsOpen(false)
+                setConnectMcpOpen(true)
+              }}
+              className="flex w-full items-center gap-2 rounded-md border border-dashed px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+            >
+              <Plug className="h-4 w-4 shrink-0" />
+              <span>Connect MCP Provider</span>
+              <span className="ml-auto text-xs text-muted-foreground">
+                a platform agent or external MCP server
+              </span>
+            </button>
+            <div className="relative">
+              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                autoFocus
+                placeholder="Search credential types…"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                className="pl-9"
+              />
+            </div>
+          </div>
+
+          <div className="max-h-[60vh] overflow-y-auto px-6 pb-6">
+            {filteredGroups.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-6 text-center">
+                No credential types match "{query}"
+              </p>
+            ) : (
+              <div className="space-y-4">
+                {filteredGroups.map((group) => (
+                  <div key={group.key}>
+                    <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
+                      {group.label}
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {group.options.map((option) => {
+                        const isPending =
+                          createMutation.isPending &&
+                          pendingType === option.type
+                        const Icon = option.icon
+                        return (
+                          <button
+                            key={`${option.type}:${option.action ?? ""}`}
+                            type="button"
+                            disabled={createMutation.isPending}
+                            onClick={() => handleOptionClick(option)}
+                            className={cn(
+                              "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-medium transition-colors",
+                              group.badgeClass,
+                              "disabled:opacity-50 disabled:cursor-not-allowed",
+                              isPending &&
+                                "ring-2 ring-offset-1 ring-current/40",
+                            )}
+                          >
+                            <Icon className="h-3.5 w-3.5 shrink-0" />
+                            <span>{option.label}</span>
+                            {isPending && (
+                              <span className="ml-1 inline-block h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                            )}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </>
   )
 }

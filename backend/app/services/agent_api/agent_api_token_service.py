@@ -292,6 +292,9 @@ class AgentApiTokenService:
                 type=CredentialType.AGENT_API,
                 notes=f"Proxy to agent {agent.name} (ID: {producer_agent_id}) REST API",
                 allow_sharing=False,
+                # Optional slot; already normalized (blank -> None) by the
+                # request model. No default for a connection.
+                service_uri=data.service_uri,
                 user_workspace_id=workspace_id,
                 credential_data={
                     "base_url": created.base_url,

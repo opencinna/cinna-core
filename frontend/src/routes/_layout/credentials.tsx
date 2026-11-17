@@ -1,16 +1,19 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router"
-import { AlertTriangle, Search, X } from "lucide-react"
+import { AlertTriangle, History, KeyRound, Search, X } from "lucide-react"
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react"
 
 import { type CredentialPublic, CredentialsService } from "@/client"
 import { DataTable } from "@/components/Common/DataTable"
+import { FilterMenu, type FilterOption } from "@/components/Common/FilterMenu"
 import { QueryErrorAlert } from "@/components/Common/QueryErrorAlert"
 import AddCredential from "@/components/Credentials/AddCredential"
 import {
   type CredentialSection,
   CredentialSectionTabs,
+  type CredentialsPageSection,
 } from "@/components/Credentials/CredentialSectionTabs"
+import { CredentialsEmptySection as EmptySection } from "@/components/Credentials/CredentialsEmptySection"
 import {
   type CredentialRowModel,
   getCredentialColumns,
@@ -19,6 +22,8 @@ import { getCredentialTypeMeta } from "@/components/Credentials/credentialTypes"
 import DeleteCredential, {
   deleteCredentialMutationKey,
 } from "@/components/Credentials/DeleteCredential"
+import { IssuedKeysSection } from "@/components/Credentials/IssuedKeysTable"
+import { useIssuedAgentApiKeys } from "@/components/Credentials/issuedKeys"
 import PendingCredentials from "@/components/Pending/PendingCredentials"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -46,18 +51,28 @@ export const Route = createFileRoute("/_layout/credentials")({
 // Hash deep-linking for the active section — the HashTabs idiom (hash
 // slice/assign + a hashchange listener). The token differs from the section
 // value only for "My Credentials" (#my ↔ "mine").
-const SECTION_TO_HASH: Record<CredentialSection, string> = {
+const SECTION_TO_HASH: Record<CredentialsPageSection, string> = {
   mine: "my",
   automatic: "automatic",
   bundle: "bundle",
+  issued: "issued",
 }
-const HASH_TO_SECTION: Record<string, CredentialSection> = {
+const HASH_TO_SECTION: Record<string, CredentialsPageSection> = {
   my: "mine",
   automatic: "automatic",
   bundle: "bundle",
+  issued: "issued",
 }
 
-function getInitialSection(): CredentialSection {
+type IssuedFilter = "live" | "all"
+
+/** "Show ended keys", as the page's one Filters menu (§2 Page toolbar). */
+const ISSUED_FILTERS: readonly FilterOption<IssuedFilter>[] = [
+  { value: "live", label: "Live keys", icon: KeyRound },
+  { value: "all", label: "With ended keys", icon: History },
+]
+
+function getInitialSection(): CredentialsPageSection {
   return HASH_TO_SECTION[window.location.hash.slice(1)] ?? "mine"
 }
 
@@ -101,7 +116,7 @@ const EMPTY_SECTION: Record<CredentialSection, () => ReactNode> = {
     </EmptySection>
   ),
   automatic: () => (
-    <EmptySection text="Connections you make with Connect Agent API or Connect MCP Provider, and credentials shared with you by skills you add, appear here.">
+    <EmptySection text="Connections you make with Connect Agent API, Connect MCP Provider or a shareable Agent API connection, and credentials shared with you by skills you add, appear here.">
       <AddCredential trigger={<Button size="sm">Add credential</Button>} />
     </EmptySection>
   ),
@@ -114,26 +129,13 @@ const EMPTY_SECTION: Record<CredentialSection, () => ReactNode> = {
   ),
 }
 
-function EmptySection({
-  text,
-  children,
-}: {
-  text: string
-  children?: ReactNode
-}) {
-  return (
-    <div className="flex flex-col items-center gap-3 py-6 whitespace-normal">
-      <p className="max-w-md text-sm text-muted-foreground">{text}</p>
-      {children}
-    </div>
-  )
-}
-
 function CredentialsList() {
   const { workspaceFilter } = useWorkspace()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const [section, setSection] = useState<CredentialSection>(getInitialSection)
+  const [section, setSection] =
+    useState<CredentialsPageSection>(getInitialSection)
+  const [issuedFilter, setIssuedFilter] = useState<IssuedFilter>("live")
   const [search, setSearch] = useState("")
   const searchRef = useRef<HTMLInputElement>(null)
   // Both clear controls unmount on click (the X and the no-match link), so
@@ -146,7 +148,7 @@ function CredentialsList() {
     null,
   )
 
-  const handleSectionChange = (next: CredentialSection) => {
+  const handleSectionChange = (next: CredentialsPageSection) => {
     setSection(next)
     window.location.hash = SECTION_TO_HASH[next]
   }
@@ -173,6 +175,10 @@ function CredentialsList() {
     queryKey: ["credentials-shared-with-me"],
     queryFn: () => CredentialsService.getCredentialsSharedWithMe(),
   })
+
+  // Keys the caller gave other people: not their credentials, so a list of
+  // its own, beside the owned + shared one rather than merged into it.
+  const issued = useIssuedAgentApiKeys(workspaceFilter, issuedFilter === "all")
 
   // Owned + shared as one list of row models, by name. The server-computed
   // `category` decides each row's section; the page never re-derives it.
@@ -211,7 +217,7 @@ function CredentialsList() {
     )
   }, [owned.data, shared.data])
 
-  const counts = useMemo(() => {
+  const categoryCounts = useMemo(() => {
     const result: Record<CredentialSection, number> = {
       mine: 0,
       automatic: 0,
@@ -253,6 +259,15 @@ function CredentialsList() {
   const loading =
     owned.data === undefined || (shared.data === undefined && !shared.isError)
 
+  const counts = {
+    ...(loading ? {} : categoryCounts),
+    ...(issued.isError
+      ? { issued: null }
+      : issued.data
+        ? { issued: issued.data.count }
+        : {}),
+  }
+
   const emptyState = query ? (
     <EmptySection text={`No credentials match "${search.trim()}".`}>
       <Button variant="link" size="sm" onClick={clearSearch}>
@@ -262,7 +277,7 @@ function CredentialsList() {
   ) : shared.isError ? (
     <EmptySection text="Nothing to show here until the credentials shared with you load." />
   ) : (
-    EMPTY_SECTION[section]()
+    section !== "issued" && EMPTY_SECTION[section]()
   )
 
   return (
@@ -271,47 +286,61 @@ function CredentialsList() {
         <CredentialSectionTabs
           value={section}
           onChange={handleSectionChange}
-          counts={loading ? undefined : counts}
+          counts={counts}
         />
-        <div className="relative min-w-40 max-w-64 flex-1">
-          <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            ref={searchRef}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search"
-            aria-label="Search credentials by name, notes, type or owner"
-            className="pl-9 pr-9"
-          />
-          {search && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="absolute top-1/2 right-1 h-7 w-7 -translate-y-1/2"
-                  onClick={clearSearch}
-                  aria-label="Clear search"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="top" className="text-xs">
-                Clear search
-              </TooltipContent>
-            </Tooltip>
+        <div className="flex min-w-40 max-w-80 flex-1 items-center justify-end gap-2">
+          {section === "issued" && (
+            <FilterMenu
+              options={ISSUED_FILTERS}
+              value={issuedFilter}
+              onChange={setIssuedFilter}
+              allValue="live"
+            />
           )}
+          <div className="relative min-w-40 max-w-64 flex-1">
+            <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              ref={searchRef}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search"
+              aria-label={
+                section === "issued"
+                  ? "Search issued keys by person, agent or key name"
+                  : "Search credentials by name, notes, type or owner"
+              }
+              className="pl-9 pr-9"
+            />
+            {search && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="absolute top-1/2 right-1 h-7 w-7 -translate-y-1/2"
+                    onClick={clearSearch}
+                    aria-label="Clear search"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="text-xs">
+                  Clear search
+                </TooltipContent>
+              </Tooltip>
+            )}
+          </div>
         </div>
       </div>
 
-      {shared.isError && (
+      {shared.isError && section !== "issued" && (
         <Alert className="border-warning/50 text-warning">
           <AlertTriangle />
           <AlertTitle>
             Credentials shared with you could not be loaded.
           </AlertTitle>
           <AlertDescription className="flex flex-wrap items-center gap-2">
-            <span>All three sections may be missing rows.</span>
+            <span>Every credential section may be missing rows.</span>
             <Button
               variant="outline"
               size="sm"
@@ -325,14 +354,21 @@ function CredentialsList() {
       )}
 
       {/* An empty section says the same thing in its empty state. */}
-      {section === "automatic" && !loading && counts.automatic > 0 && (
+      {section === "automatic" && !loading && categoryCounts.automatic > 0 && (
         <p className="text-sm text-muted-foreground">
-          These are made by Connect Agent API and Connect MCP Provider, or
-          shared with you by skills you add.
+          These are made by Connect Agent API, Connect MCP Provider and
+          shareable Agent API connections, or shared with you by skills you add.
         </p>
       )}
 
-      {loading ? (
+      {section === "issued" ? (
+        <IssuedKeysSection
+          issued={issued}
+          query={query}
+          search={search}
+          onClearSearch={clearSearch}
+        />
+      ) : loading ? (
         <PendingCredentials />
       ) : (
         <DataTable

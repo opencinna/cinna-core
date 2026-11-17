@@ -42,10 +42,13 @@ The single status function is ``agent_api_key_status.key_status``.
 import uuid
 from datetime import datetime, UTC
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 
 import sqlalchemy as sa
+from pydantic import field_validator
 from sqlmodel import Field, SQLModel
+
+from app.models.credentials.credential import normalize_service_uri
 
 
 class AgentApiTokenKind(str, Enum):
@@ -181,6 +184,15 @@ class ConnectAgentApiRequest(SQLModel):
     read_only_override: bool = Field(default=False)
     # Optional consumer agent to link the new credential to immediately.
     consumer_agent_id: uuid.UUID | None = None
+    # Optional slot id stamped on the credential. No default: unlike an issued
+    # key, a connection has no ``<slug>-api`` fallback (two connections with
+    # one slot linked to one agent would collide). Empty / blank = no slot.
+    service_uri: str | None = Field(default=None, max_length=255)
+
+    @field_validator("service_uri", mode="before")
+    @classmethod
+    def _normalize_service_uri(cls, value: Any) -> Any:
+        return normalize_service_uri(value)
 
 
 class ConnectAgentApiResponse(SQLModel):
@@ -420,3 +432,43 @@ class AgentApiKeyRevealResponse(SQLModel):
     """
 
     token: str
+
+
+# ── Issuer's cross-producer view: keys I issued to other people ──────────────
+
+
+class IssuedAgentApiKeyProducer(SQLModel):
+    """The producer an issued key calls, as its ISSUER sees it."""
+
+    id: uuid.UUID
+    name: str
+    ui_color_preset: str | None = None
+    user_workspace_id: uuid.UUID | None = None
+
+
+class IssuedAgentApiKeyPublic(SQLModel):
+    """One key the caller issued to someone else, across all their producers.
+
+    Never the value. ``issued_to`` is None when the recipient's account is gone;
+    ``producer`` is None when the producer agent was deleted. ``scopes`` is the
+    recipient's current grant on the producer, None when no grant row exists.
+    """
+
+    id: uuid.UUID
+    label: str | None
+    token_prefix: str
+    status: AgentApiKeyStatus
+    created_at: datetime
+    expires_at: datetime | None
+    last_used_at: datetime | None
+    revoked_at: datetime | None = None
+    producer: IssuedAgentApiKeyProducer | None = None
+    issued_to: AgentApiKeyUser | None = None
+    scopes: list[str] | None = None
+
+
+class IssuedAgentApiKeysPublic(SQLModel):
+    """``GET /credentials/issued-keys`` response."""
+
+    data: list[IssuedAgentApiKeyPublic]
+    count: int

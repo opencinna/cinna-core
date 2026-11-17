@@ -3340,6 +3340,18 @@ export const AccountConnectAgentApiBodySchema = {
             type: 'boolean',
             title: 'Read Only Override',
             default: false
+        },
+        service_uri: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Service Uri'
         }
     },
     type: 'object',
@@ -18799,6 +18811,18 @@ export const ConnectAgentApiRequestSchema = {
                 }
             ],
             title: 'Consumer Agent Id'
+        },
+        service_uri: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Service Uri'
         }
     },
     type: 'object',
@@ -27204,6 +27228,178 @@ would tell the admin "X now has an account waiting to be claimed" about an
 account that has been there for weeks. It was audit-only while the
 generated client lagged the schema; the field is the better home and this
 is it.`
+} as const;
+
+export const IssuedAgentApiKeyProducerSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        ui_color_preset: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Ui Color Preset'
+        },
+        user_workspace_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'User Workspace Id'
+        }
+    },
+    type: 'object',
+    required: ['id', 'name'],
+    title: 'IssuedAgentApiKeyProducer',
+    description: 'The producer an issued key calls, as its ISSUER sees it.'
+} as const;
+
+export const IssuedAgentApiKeyPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        label: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Label'
+        },
+        token_prefix: {
+            type: 'string',
+            title: 'Token Prefix'
+        },
+        status: {
+            '$ref': '#/components/schemas/AgentApiKeyStatus'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        expires_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Expires At'
+        },
+        last_used_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Used At'
+        },
+        revoked_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Revoked At'
+        },
+        producer: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/IssuedAgentApiKeyProducer'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        issued_to: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/AgentApiKeyUser'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        scopes: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Scopes'
+        }
+    },
+    type: 'object',
+    required: ['id', 'label', 'token_prefix', 'status', 'created_at', 'expires_at', 'last_used_at'],
+    title: 'IssuedAgentApiKeyPublic',
+    description: `One key the caller issued to someone else, across all their producers.
+
+Never the value. \`\`issued_to\`\` is None when the recipient's account is gone;
+\`\`producer\`\` is None when the producer agent was deleted. \`\`scopes\`\` is the
+recipient's current grant on the producer, None when no grant row exists.`
+} as const;
+
+export const IssuedAgentApiKeysPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/IssuedAgentApiKeyPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'IssuedAgentApiKeysPublic',
+    description: `\`\`GET /credentials/issued-keys\`\` response.`
 } as const;
 
 export const KeyEnvelopeInputSchema = {
