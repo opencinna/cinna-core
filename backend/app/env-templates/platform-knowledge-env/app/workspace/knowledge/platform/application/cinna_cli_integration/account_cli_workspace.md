@@ -267,6 +267,28 @@ the producer (consistent with the UI), not on the stricter `can_build` predicate
 (which additionally bars foreign installs). A foreign install the user owns can
 still be the target of a connect operation from the CLI.
 
+**Using a connection from the CLI (`cinna agent-api connections` / `request`; planned verb
+names, CLI >= next release).** A builder working on a *consumer* agent can see and use the
+`agent_api` connections that agent holds without ever seeing the token. All four routes are
+under `/cli/account/agents/{id}/agent-api-connections`, strictly for agents the caller owns
+(every miss is 404 `not_found`):
+
+- **List** the linked connections as the agent's environment sees them: `base_url`, `spec_url`
+  and `improvement_requests_url` on the environment-visible origin (`AGENT_ENV_BACKEND_URL`,
+  e.g. `http://backend:8000`, so not necessarily reachable from the host), `key_status` (stored
+  status for issued keys, `connection_status` for connections; null only when not delivered or a placeholder), the caller's live `scopes`, `usable` with an
+  `unavailable_reason` when not, and `sdk_lookup` (what to pass to `agent_api_session(...)`:
+  the slot, else the credential id). `improvement_requests_url` is null when not usable.
+- **Spec** of the producer through a connection (raw JSON).
+- **File** and **list** capability requests with the linked connection, server-side, so the
+  token never leaves core. Same validation, 64 KiB cap and per-requester rate limit as the
+  environment `_cinna` route. Filing is developer-gated; listing is not.
+
+Refusals: 404 `not_found`, 409 `connection_unusable`; spec: 403 `spec_not_exposed`, 400
+`api_disabled`, 502 `producer_error`, 503 `env_unavailable`; file: 413 `too_large`, 400
+`invalid_request`, 422 `invalid_capability_request` (with `errors`, `expected`), 429
+`rate_limited` + `Retry-After`. Details: [tech](account_cli_workspace_tech.md#agent-api-connections-of-a-consumer-agent).
+
 ### 4c. Building a Producer's Agent REST API (`cinna agent-api`)
 
 `cinna connect agent-api` (flow 4 above) only *wires* a consumer to a producer
@@ -481,6 +503,14 @@ verbs touch only *metadata and structure*:
   no values** — so the agent can see which drafts are still waiting on the user.
   Each `agent_api` row also carries `agent_api_key_status` (`active`, `revoked_by_issuer`,
   `expired`, `api_disabled`, ...) for issued keys; it is null for connections and other types.
+  The list also includes credentials **shared with you** (directly or through a group),
+  listed after the owned ones, one row per credential with owned winning. Ownership is
+  `is_shared` / `owner_email` (a shared row also has `access_level`, `share_source` (null for a
+  group-only share) and `via_groups`); `category` is only the web tab discriminator, not
+  ownership. Shared rows have `user_workspace_id: null` and `share_count: 0`, and the workspace
+  filter applies to owned rows only. A shared row is read-only here: `update` / `delete` answer
+  403 `not_owner` (also for a superuser who holds a share). `share-with-agent` on a shared row
+  still works.
 - `cinna account credentials update <id> [--name ...] [--notes ...]` →
   `PUT /account/credentials/{id}` edits **metadata only**; there is no field for
   the secret value, so the CLI structurally cannot set one.

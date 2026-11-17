@@ -38,14 +38,16 @@ write that ends the token's life.
 
 | Token | Feature | Carried by | Scope | Lifetime | Storage | Revocation |
 |---|---|---|---|---|---|---|
-| User access JWT | [auth](../application/auth/auth.md) | `backend/app/core/security.py` `create_access_token` | full `CurrentUser` | `ACCESS_TOKEN_EXPIRE_MINUTES` = 8 days | none (stateless); client keeps it in `localStorage["access_token"]` | none — expiry only (deactivate the user) |
+| User access JWT | [auth](../application/auth/auth.md) | `backend/app/services/users/auth_service.py` `create_user_access_token` (over `security.create_access_token`) | full `CurrentUser`; claims `sv` (session version) and `iat`, plus `sid` for a cookie session | `ACCESS_TOKEN_EXPIRE_MINUTES` = 15 min, for every login (bearer-only scripts included) | none (stateless); the SPA keeps it in memory only, never in Web Storage | stale `sv`: `UserSessionService.end_sessions` bumps `User.session_version`, which kills every outstanding JWT at once; otherwise expiry |
+| Web refresh cookie `cinna_refresh` | [auth](../application/auth/auth.md) | `backend/app/services/users/web_session_service.py` `WebSessionService.create` / `rotate`; cookie set in `backend/app/api/routes/_web_session_http.py` | renews the access JWT via `POST /login/session/refresh`; `HttpOnly`, `SameSite=Strict`, host-only, `Path=/api/v1/login/session` | `WEB_REFRESH_TOKEN_EXPIRE_DAYS` = 14, sliding (each rotation extends it) | **SHA-256** `user_web_refresh_token.token_hash`; session row `user_web_session` | `user_web_session.revoked_at` (logout, `end_sessions`, replay outside the 60 s grace); cleanup (every 15 min) of rows ended over a day ago |
+| Web CSRF token | [auth](../application/auth/auth.md) | `WebSessionService.create`; returned once as `LoginToken.csrf_token` | proves the caller is the SPA of this session on refresh/logout (header `X-CSRF-Token`) | session life | **SHA-256** `user_web_session.csrf_token_hash`; the SPA keeps the plaintext in `localStorage["cinna_csrf"]` (useless without the cookie) | dies with its session |
 | Google OAuth state | [auth](../application/auth/google_oauth.md) | `backend/app/services/users/auth_service.py` `generate_oauth_state` | one CSRF handshake | 600 s | in-process dict `AuthService._oauth_states` | consumed / swept |
 | Google ID token | [auth](../application/auth/google_oauth.md) | `backend/app/core/security.py` `verify_google_token` | proves the Google account | Google-set `exp` | never stored | n/a (Google-issued) |
 | Email-confirmation token | [email_confirmation](../application/auth/email_confirmation.md) | `backend/app/utils.py` `generate_email_confirmation_token` | sets `email_confirmed` | `EMAIL_CONFIRM_TOKEN_EXPIRE_HOURS` = 48 h | none (stateless JWT, `purpose="email_confirm"`) | none — expiry only |
 | Password-reset token | [auth](../application/auth/auth.md) | `backend/app/utils.py` `generate_password_reset_token` | sets a password | `EMAIL_RESET_TOKEN_EXPIRE_HOURS` = 48 h | none (stateless JWT, **no** `purpose`) | none — expiry only |
 | Invitation token | [server_configuration](../application/server_configuration/access_policy.md) | `backend/app/utils.py` `generate_invitation_token` | claims one pre-provisioned account | `INVITATION_EXPIRE_DAYS` = 7 | only the `jti` (`user_invitation.token_jti`) | `revoked_at = now`, or `jti` rotation on resend |
 | MFA challenge handle | [user_2fa](../application/user_2fa/user_2fa.md) | `backend/app/services/users/mfa_service.py` `issue_challenge` | one second-factor attempt | `MFA_CHALLENGE_TTL_SECONDS` = 300 | plaintext `user_mfa_challenge.challenge_token` | single-use (`consumed_at`) |
-| Trusted-device token | [user_2fa](../application/user_2fa/user_2fa.md) | `backend/app/services/users/mfa_service.py` `register_trusted_device` | skips the 2FA prompt | 1 / 7 / 30 days (`MFA_TRUSTED_DEVICE_ALLOWED_DAYS`) | **bcrypt hash** in `user_trusted_device.token_hash` | rows wiped when 2FA is disabled; hourly purge |
+| Trusted-device token | [user_2fa](../application/user_2fa/user_2fa.md) | `backend/app/services/users/mfa_service.py` `register_trusted_device` | skips the 2FA prompt | 1 / 7 / 30 days (`MFA_TRUSTED_DEVICE_ALLOWED_DAYS`) | **bcrypt hash** in `user_trusted_device.token_hash` | rows wiped when 2FA is disabled, and by every `end_sessions` (password change, reset, admin set, Google link wipe, sign out everywhere); hourly purge |
 
 ### B. Native clients and the CLI
 
@@ -92,14 +94,41 @@ write that ends the token's life.
 
 ### A. Human sessions
 
-1. **User access JWT.** `POST /api/v1/login/access-token` authenticates via
-   `UserService.authenticate`, runs `AccessPolicyService.require_password_auth`, then calls
-   `security.create_access_token(user.id, expires_delta=8 days)`
-   (`backend/app/api/routes/login.py`). The JWT carries `sub` and `exp` and **nothing else** — no
-   `aud`, no `token_type`, no `role`. `get_current_user` decodes it, rejects any `aud`, rejects
-   `token_type == "agent_env"`, loads the `User`, checks `AccessPolicyService.is_account_valid`, and
-   only then — when `client_kind == "desktop"` — consults `DesktopAuthService.verify_active_or_raise`.
-   There is no revocation: a web session dies when it expires or when the user row is deactivated.
+1. **User access JWT.** `POST /api/v1/login/access-token` first passes the login throttle
+   (`LoginThrottle.check_password_attempt`, 429 `rate_limited`), then authenticates via
+   `UserService.authenticate` and `AccessPolicyService.require_password_auth`, and mints through
+   `issue_login_token` (`backend/app/api/routes/_web_session_http.py`) →
+   `AuthService.create_user_access_token` (`backend/app/api/routes/login.py`). The JWT carries
+   `sub`, `exp`, `iat`, `sv` and — for a cookie session — `sid`; no `aud`, no `token_type`, no
+   `role`. It lives 15 minutes. `get_current_user` decodes it (expired → **401**, forged or
+   `aud`-bearing → **403**), then `_authenticate_user_payload` rejects `token_type == "agent_env"`,
+   loads the `User`, checks `AccessPolicyService.is_account_valid`, consults
+   `DesktopAuthService.verify_active_or_raise` for `client_kind == "desktop"`, and finally
+   `UserSessionService.is_token_current` (**401** when `sv` differs from `User.session_version`;
+   a token with no `sv` reads as 0, which no user has; desktop tokens are exempt). The same
+   function serves `get_current_user_or_guest` and the websocket platform-token resolver, so no
+   decode path skips a step.
+
+   **Browser session.** A login that sends `X-Cinna-Web-Session: 1` (the SPA always does) also
+   opens a `user_web_session`, sets the `cinna_refresh` cookie and returns `csrf_token` once. The
+   SPA holds the access token in memory and, 30 s before expiry or after a reload, calls
+   `POST /login/session/refresh` (cookie + `X-CSRF-Token` + allowed `Origin`). Refresh rotates the
+   token; a second tab re-presenting the old one inside
+   `WEB_REFRESH_TOKEN_REUSE_GRACE_SECONDS` (60) gets an access token without a second rotation,
+   outside it the whole session is revoked (401 `session_expired`, cookie cleared). `rotate` locks
+   the session row, then re-reads the token row, so `end_sessions` and a refresh serialise.
+   `POST /login/session/logout` (idempotent 204) ends one session; `POST /login/session/revoke-all`
+   is "Sign out everywhere".
+
+   **Revocation.** `UserSessionService.end_sessions(reason, keep_*, include_api_tokens)` bumps
+   `session_version`, revokes web sessions and desktop/mobile clients (except the caller's own
+   kept one), deletes trusted devices and writes a `SESSIONS_REVOKED` event. With
+   `include_api_tokens=True` it also soft-revokes CLI, CLI setup, A2A and MCP tokens. Callers: password
+   change and first `set_password` (keep the caller's session, API tokens stay), admin password set
+   (everything but API tokens), forgot-password reset, `revoke-all` and the Google wipe-and-link of
+   an unconfirmed account (all three include API tokens; the wipe also clears every MFA
+   enrollment). A kept web session recovers with one refresh; a kept desktop client is unaffected
+   because its token has no `sv`. Deploying this invalidated every existing web JWT once (no `sv`).
 
 2. **Google OAuth.** `GET /api/v1/auth/google/authorize` returns a `secrets.token_urlsafe(32)` state
    held in `AuthService._oauth_states` (in-process, 10 min). `POST /api/v1/auth/google/callback`
@@ -280,6 +309,10 @@ write that ends the token's life.
 | `backend/app/api/deps.py` `get_current_user` | presence of any `aud` claim (decode has no `audience=`) | env tokens and `owner_identity` tokens → 403; everything else continues |
 | `backend/app/api/deps.py` `get_current_user` | `token_type == "agent_env"` (secondary gate) | 401 |
 | `backend/app/api/deps.py` `get_current_user` | `client_kind == "desktop"` | consult `DesktopOAuthClient.is_revoked` → 401 if revoked |
+| `backend/app/api/deps.py` `get_current_user` | expired vs. forged decode | expired → 401 (the SPA refreshes and retries); forged / `aud`-bearing → 403 (never retried) |
+| `backend/app/api/deps.py` `_authenticate_user_payload` | `UserSessionService.is_token_current(user, payload)` (`sv` equals `User.session_version`; desktop exempt) | stale → 401 |
+| `backend/app/api/routes/login.py` `session_refresh` | cookie present / live, CSRF header, `Origin` | unknown, expired, revoked or replayed → 401 `session_expired` + cookie cleared; CSRF or `Origin` mismatch → 403 `csrf_failed` |
+| `backend/app/services/users/login_throttle_service.py` `LoginThrottle` | per-source rate; failures per account+source / per account | 429 `rate_limited` + `Retry-After` on `/login/access-token`, `/desktop-auth/token`, `/app-auth/token` |
 | `backend/app/api/deps.py` `get_current_user_or_guest` | `role`/`token_type` pair | `chat-guest`+`guest_share` → `GuestShareContext`; else user resolution |
 | `backend/app/api/deps.py` `get_webapp_chat_user` | `role != "webapp-viewer"` | 403 |
 | `backend/app/api/deps.py` `_resolve_cli_context` | `token_type != "cli"` | 401 "Account token cannot be used on a per-agent route" |
@@ -311,6 +344,8 @@ write that ends the token's life.
 | add an `agent_api` scope | `AgentApiGrantService` + `policy.yaml` handling in `agent_api_service.py` | `owner_identity_token` carries no scopes — grants are resolved live, so nothing in the token needs changing |
 | make a share expire sooner | the `expires_at` on the share row | the derived JWT is `min(share_expiry, now + 24 h)` — shortening the row shortens the JWT, but already-issued JWTs live out their cap |
 | shorten signed-URL exposure | `WORKSPACE_VIEW_TOKEN_EXPIRY` / `FILE_DOWNLOAD_TOKEN_EXPIRY` in `agent_workspace_token_service.py` | nothing else — but note these are the only tokens with no revocation at all |
+| end every session of a user (new password-like write, new compromise response) | `UserSessionService.end_sessions` in the same transaction as the write that caused it; mint any new token only after the commit | `include_api_tokens` (only reset, sign-out-everywhere and the Google wipe pass it), `kept_sessions_from_claims`, and `UserSessionService.is_token_current` |
+| change browser session lifetime or refresh behaviour | `WebSessionService.rotate` / `WEB_REFRESH_TOKEN_*` settings | the lock order (session row, then token row), `_reload_live`, and the SPA's `frontend/src/lib/authSession.ts` single-flight refresh |
 | add an MFA factor | `MfaService.verify_challenge` | `register_trusted_device` (the skip must not outlive a disabled 2FA) |
 
 ## Invariants and traps

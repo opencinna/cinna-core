@@ -124,6 +124,11 @@ the API:
    Anywhere else: `POST <base_url>/_cinna/improvement-requests` with the same
    bearer (a cloud entry also carries the URL as `improvement_requests_url`).
    Limits: 10 a day per API, 30 a day overall; a 429 carries `Retry-After`.
+   From the account workspace you can instead use the CLI, which files with the linked
+   connection so the token stays on the platform: `cinna agent-api connections <agent>`
+   shows each connection's `improvement_requests_url` and `sdk_lookup`, and
+   `cinna agent-api request file|list` files or lists requests (planned verb names,
+   CLI >= next release).
 4. Later, `api.capability_requests()` (or `GET` the same URL) lists your requests
    with `status` and the owner's `resolution_note`. When one is `completed`,
    re-read the spec before writing code against the new capability.

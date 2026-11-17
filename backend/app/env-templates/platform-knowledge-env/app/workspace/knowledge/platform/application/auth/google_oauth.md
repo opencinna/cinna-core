@@ -28,7 +28,7 @@ Enables users to authenticate with their Google account as an alternative to pas
 6. Backend verifies ID token signature and claims
 7. Backend resolves user:
    - **Known Google ID** -> existing user found
-   - **Unknown Google ID, known email** -> auto-links Google to existing user
+   - **Unknown Google ID, known email** -> auto-links Google to existing user. If that account was **unconfirmed** (its password was set by someone who never proved the address), the link is a wipe-and-link: see [Wipe-and-link](#wipe-and-link-of-an-unconfirmed-account)
    - **Unknown Google ID, unknown email** -> creates a new user (no password) **only if the access policy allows it**: open registration, `google_auto_register` on, and a match against the allowed email patterns. Otherwise 403 with the reason code
 8. Backend returns JWT access token
 9. Frontend stores token and navigates to the post-login target — the validated `?redirect=` URL param (stashed in `sessionStorage` before Google's popup opened) if present, otherwise the dashboard. See [Post-Login Redirect](auth.md#post-login-redirect)
@@ -61,6 +61,11 @@ Enables users to authenticate with their Google account as an alternative to pas
 - First lookup by `google_id` (direct match)
 - If no match, lookup by email - if found, auto-link Google to existing account
 - If neither match, create a new user — subject to the access policy. The auto-link branch is **not** gated: linking is not registration, and the account already exists
+
+### Wipe-and-link of an unconfirmed account
+- Auto-linking Google to an account whose `email_confirmed` is false drops its password, clears all MFA enrollment (passkeys, TOTP, recovery codes, pending challenges, `two_factor_enabled`) and ends every session **and** API token (web sessions, desktop/mobile clients, trusted devices, CLI, CLI setup, A2A, MCP) in the same commit as the link
+- The owner of the address gets a plain access token, not the pre-registrant's MFA challenge; the new token carries the bumped `sv`
+- A confirmed account is linked as before, nothing is wiped
 
 ### Linking Constraints
 - A Google ID can only be linked to one platform user

@@ -43,8 +43,8 @@ Routes marked *Not available via `cinna api`* are refused by the account CLI esc
 | Brand Theme | [brand_theme.md](./brand_theme.md) | 8 |
 | Bundles | [bundles.md](./bundles.md) | 9 |
 | Catalog | [catalog.md](./catalog.md) | 14 |
-| Cli | [cli.md](./cli.md) | 69 |
-| Credentials | [credentials.md](./credentials.md) | 27 |
+| Cli | [cli.md](./cli.md) | 73 |
+| Credentials | [credentials.md](./credentials.md) | 28 |
 | Desktop Auth | [desktop_auth.md](./desktop_auth.md) | 9 |
 | Desktop Download | [desktop_download.md](./desktop_download.md) | 1 |
 | Environments | [environments.md](./environments.md) | 17 |

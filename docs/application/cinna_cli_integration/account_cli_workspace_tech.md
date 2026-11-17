@@ -25,6 +25,15 @@
   - `AccountDesktopTokenBody` — `{client_id: str|None, device_name: str|None, platform: str|None, app_version: str|None}`. **No `origin` field** by design: provenance is set by the server, never claimed by the caller.
   - `AccountDesktopTokenResponse` — the `/desktop-auth/token` shape (`access_token`, `refresh_token`, `token_type`, `expires_in`, `client_id`) plus `email`, so the desktop can name the profile without calling `/desktop-auth/userinfo`.
 
+### Agent-API connections of a consumer agent
+
+Code: `AgentApiConsumerConnectionService` in `backend/app/services/agent_api/agent_api_consumer_connection_service.py`; routes in `cli.py`; models `AccountAgentApiConnection` / `AccountAgentApiConnectionsPublic` in `backend/app/models/cli/account_convenience.py`.
+
+- `list_connections(db, user, agent_id)`, `resolve_connection(db, user, agent_id, credential_id) -> ResolvedConnection`, `async get_spec(...)`, `async file_capability_request(db, user, resolved, body)`, `list_capability_requests(...)`. The consumer must be **owned** by the caller (no superuser bypass; the env's identity is the agent owner); anything else is `AgentApiError` 404 `not_found`; an unusable connection is 409 `connection_unusable`. Route helper `_raise_agent_api_coded` maps `AgentApiError` to `{code, message}`.
+- URLs come from `CredentialsService.agent_api_env_urls(credential_data, rewrite_origin, usable)`, the same function `prepare_credentials_for_environment` uses, so the listing matches `credentials.json` (origin = `AGENT_ENV_BACKEND_URL`). Status comes from `agent_api_key_status.key_status` for issued keys and the new `connection_status` (`active | revoked_by_issuer | producer_removed | api_disabled`) for connections. C2 `key_status` is populated for both from that status (connections use the `connection_status` subset) and is null only when the entry is not delivered or is a placeholder. `unavailable_reason` reuses `key_revoked | key_expired | key_paused` plus `not_delivered` and `placeholder`. `scopes` are the caller's live grant scopes on the producer, `[]` when identity is not enabled. A connection to an API-disabled producer is `usable=false` here although the env still receives the entry.
+- Capability request body: `parse_capability_request_body` / `reject_oversized_content_length` in `services/improvement/capability_request_body.py`, shared with the public `_cinna` route (route layer maps `CapabilityRequestBodyError` to 422 with `code`, `message`, `errors`, `expected`; 413 `too_large`; 400 `invalid_request`). Filing calls `ImprovementRequestService.create_from_agent_api` with `consumer_agent_id` = the consumer agent, so **an issued EXTERNAL key filed from the CLI records `source_agent_id`**, which the env `_cinna` route does not for EXTERNAL keys (deliberate, contract D5). `ImprovementRequestDenied` becomes `{code, message}` with `Retry-After` on 429 `rate_limited`.
+- Spec refusals: 403 `spec_not_exposed`, 400 `api_disabled`, 502 `producer_error`, 503 `env_unavailable`.
+
 ### Backend — Models (Phases 1–2)
 
 - `backend/app/models/cli/cli_token.py` — Extended with:
@@ -99,6 +108,7 @@
   **Credential drafting verbs** (metadata + structure only — the account token never reads or writes a credential's secret value; these expose the *safe* slice of an otherwise denylisted surface):
   - `GET /api/v1/cli/account/credentials/types` — `AccountCLIContextDep`; response `AccountCredentialTypesPublic`; static catalogue of `CredentialType` + per-type `required_fields` (from `CredentialsService.REQUIRED_FIELDS`). No `require_developer` (read).
   - `GET /api/v1/cli/account/credentials` — `AccountCLIContextDep`; query `?user_workspace_id=` (omitted = all, `""` = Default, UUID = that workspace); response `CredentialsPublic` (metadata only via the same projection as the credentials route — `share_count` + computed `status`, **never `credential_data`**). No `require_developer`.
+  - `GET /api/v1/cli/account/credentials` also returns **shared** rows (see `list_credentials` below). `PUT` / `DELETE` on a credential the caller only holds a share of answer 403 `{code: "not_owner", message}` (`CredentialNotOwnerError` → `_raise_not_owner`; a superuser holding a share is refused too).
   - `POST /api/v1/cli/account/credentials` — `AccountCLIContextDep` + `require_developer`; body `AccountCredentialCreateBody` (**no `credential_data` field**); response `AccountCredentialDraftResult` (`{credential: CredentialPublic, required_fields, setup_url}`). Creates an empty draft (`status="incomplete"`). 404 if `user_workspace_id` not owned. Emits `CLI_ACCOUNT_CREDENTIAL_CREATED`.
   - `PUT /api/v1/cli/account/credentials/{credential_id}` — `AccountCLIContextDep` + `require_developer`; body `AccountCredentialUpdateBody` (**metadata only — no `credential_data`**); response `CredentialPublic`; maps service `ValueError` → 404/400. Emits `CLI_ACCOUNT_CREDENTIAL_UPDATED`.
   - `DELETE /api/v1/cli/account/credentials/{credential_id}` — `AccountCLIContextDep` + `require_developer`; query `?force=`; response `Message`; reuses `CredentialsService.delete_credential` blast-radius gate (409 with `CredentialDeletionImpact` on Tier 2 unless force); `ValueError` → 404/400. Emits `CLI_ACCOUNT_CREDENTIAL_DELETED`.
@@ -176,7 +186,8 @@
   - **Credential drafting verbs** (secrets-safe — never read/write `credential_data`):
     - `_credential_public(db, credential) -> CredentialPublic` — owner projection (share_count + computed `status`); decrypts only to compute completeness server-side, plaintext never leaves the function.
     - `_required_fields_for(credential_type) -> list[str]` — per-type required fields from `CredentialsService.REQUIRED_FIELDS`.
-    - `list_credentials(db, user, user_workspace_id) -> CredentialsPublic` — owner-scoped, standard workspace-filter semantics; metadata only.
+    - `list_credentials(db, user, user_workspace_id) -> CredentialsPublic` — owned rows (standard workspace-filter semantics) then shared rows, each block sorted by name, one row per credential with owned winning; metadata only. Shared rows come from `CredentialShareService.resolve_shared_with` (the resolver the web shared-with-me list also uses) via `_shared_credential_public`: `is_shared=true`, `owner_email`, `access_level`, `share_source` (`CredentialShare.source`, null for group-only), `via_groups`, `user_workspace_id=null`, `share_count=0`, `category` from `classify_credential_category(is_owned=False, ...)` (web tab discriminator, not ownership). The new fields live on `CredentialPublic` (`access_level`, `share_source`, `via_groups`, `allow_bundle_reuse_effective`; web routes keep the defaults).
+    - `_refuse_if_shared_with_caller(...)` — raises `CredentialNotOwnerError(owner_email)` (defined in `account_cli_service.py`) from the update and delete verbs when the caller holds a share of the credential.
     - `list_credential_types() -> AccountCredentialTypesPublic` — static catalogue (notes the api_token custom-variant conditional).
     - `async create_credential_draft(db, user, body, request) -> AccountCredentialDraftResult` — validates workspace via `_resolve_owned_workspace_id`, calls `CredentialsService.create_credential` with `credential_data=None`, emits `CLI_ACCOUNT_CREDENTIAL_CREATED`.
     - `async update_credential_metadata(db, user, credential_id, body, request) -> CredentialPublic` — builds `CredentialUpdate` from provided safe fields only (defensively pops any `credential_data`), delegates to `CredentialsService.update_credential`, emits `CLI_ACCOUNT_CREDENTIAL_UPDATED`.
@@ -402,6 +413,10 @@
 
 ### Tests
 
+- `backend/tests/api/cli/test_account_cli_shared_credentials.py` — shared rows in `GET /account/credentials` (owned rows carry no shared fields; direct, group and both-paths shares give one row each; workspace filter applies to owned rows only), shared `agent_api` status and `share-with-agent`, `not_owner` on PUT/DELETE.
+- `backend/tests/api/cli/test_account_cli_agent_api_connections.py` — the four connection routes: listing ownership, URLs, `sdk_lookup`, no token; shared connection and revoked-key rows; filing (attribution, validation, scrub, listing); rate limit shared with the env route.
+- `backend/tests/unit/test_agent_api_env_urls.py` — `agent_api_env_urls` origin rewrite and `improvement_requests_url`.
+
 - `backend/tests/api/cli/test_account_desktop_token.py` — 5 scenario tests for the
   desktop-token exchange: full lifecycle (lazy registration → user-JWT session →
   App Sessions entry with `origin` → CLI token unspent → rotation through
@@ -549,6 +564,10 @@ Response:
 | `GET` | `/api/v1/cli/account/agents/{agent_id}/inspect` | 200 / 401 / 404 | Effective prompts / features / connected-credential metadata (no secrets); response `AccountAgentInspectResult` |
 | `GET` | `/api/v1/cli/account/credentials/types` | 200 | Credential-type catalogue + per-type `required_fields`; response `AccountCredentialTypesPublic` |
 | `GET` | `/api/v1/cli/account/credentials` | 200 | List the user's credentials (metadata only, `status` per row); `?user_workspace_id=` filter; response `CredentialsPublic` |
+| `GET` | `/api/v1/cli/account/agents/{agent_id}/agent-api-connections` | 200 / 404 | Connections linked to an owned consumer agent as its env sees them; response `AccountAgentApiConnectionsPublic` (`AccountAgentApiConnection` rows, never a token) |
+| `GET` | `/api/v1/cli/account/agents/{agent_id}/agent-api-connections/{credential_id}/spec` | 200 / 400 / 403 / 404 / 409 / 502 / 503 | Producer spec through the connection (raw JSON) |
+| `POST` | `/api/v1/cli/account/agents/{agent_id}/agent-api-connections/{credential_id}/capability-requests` | 201 / 400 / 403 / 404 / 409 / 413 / 422 / 429 | File a capability request; developer-gated (403 plain-string detail otherwise); body read raw (`openapi_extra`), response `AgentApiCapabilityRequestPublic` |
+| `GET` | `/api/v1/cli/account/agents/{agent_id}/agent-api-connections/{credential_id}/capability-requests` | 200 / 404 / 409 | The caller's own requests on that producer, newest first, max 50; not developer-gated |
 | `POST` | `/api/v1/cli/account/credentials` | 200 / 403 / 404 | Create a draft credential (no value); `require_developer`-gated; body `AccountCredentialCreateBody`; response `AccountCredentialDraftResult`; 404 on foreign workspace |
 | `PUT` | `/api/v1/cli/account/credentials/{credential_id}` | 200 / 400 / 403 / 404 | Update metadata only; `require_developer`-gated; body `AccountCredentialUpdateBody`; response `CredentialPublic` |
 | `DELETE` | `/api/v1/cli/account/credentials/{credential_id}` | 200 / 400 / 403 / 404 / 409 | Delete (blast-radius tier-gated; 409+impact on Tier 2 unless `?force=true`); `require_developer`-gated; response `Message` |

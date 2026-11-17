@@ -142,5 +142,5 @@ Admin creates user
 - [User Roles](../user_roles/user_roles.md) — `require_developer` is what actually decides whether the desktop's bootstrap call succeeds; `agent-user` gets a `403`.
 - [Public Landing Page](../server_configuration/landing_page.md) — owns `/start`, embeds `DesktopDownloadSection`, and is where the new-account mail's secondary browser link now goes. `desktop_enabled` gates the card it shows, nothing on this page.
 - [Local Agent Kit](../local_agent_kit/local_agent_kit.md) — the other unauthenticated onboarding surface. Distinct audiences: the kit serves a local coding assistant with no Cinna account; this page serves a person who has just been given one.
-- [System Notifications](../system_notifications/system_notifications.md) — shares the MJML email-template build convention (see the mjml-version note in the tech doc); the new-account email itself is not a catalog notification.
+- [System Notifications](../system_notifications/system_notifications.md) — shares the MJML email-template build convention (see the [mjml version pin](../system_notifications/system_notifications_tech.md#mjml-version-pin)); the new-account email itself is not a catalog notification.
 - [Nginx Setup](../../infrastructure/nginx_setup.md) — `/.well-known/cinna-desktop` must reach the backend at origin root through the reverse proxy for any of this to work.

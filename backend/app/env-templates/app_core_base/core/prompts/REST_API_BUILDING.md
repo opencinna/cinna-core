@@ -177,6 +177,8 @@ Requests, and in building mode you can work on them with the `cinna` tools:
   the new version; or `declined` with the reason. The caller reads the status and
   the note.
 
+Consumers can also file them from the account CLI; what you see here is unchanged.
+
 `/_cinna/` is reserved by the platform on every agent API (that is where callers
 file these requests): never define a route under it, it would be shadowed.
 

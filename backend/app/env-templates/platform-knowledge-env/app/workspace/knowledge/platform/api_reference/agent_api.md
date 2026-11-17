@@ -36,6 +36,7 @@ Auto-generated from OpenAPI spec. Tag: `agent-api`
   - `credential_label`: string | null
   - `read_only_override`: boolean
   - `consumer_agent_id`: string | null
+  - `service_uri`: string | null
 
 **Response:** `ConnectAgentApiResponse`
 

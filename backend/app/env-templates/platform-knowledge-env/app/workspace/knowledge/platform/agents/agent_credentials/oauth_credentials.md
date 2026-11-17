@@ -130,7 +130,7 @@ Technical details: [OAuth Credentials Tech](oauth_credentials_tech.md).
 ### CSRF Protection
 - State tokens generated for each OAuth flow initiation
 - Stored in the `credential_oauth_state` table with a 10-minute expiration, only as a SHA-256 hash
-- Row carries credential id, user id and origin (`web` | `desktop`)
+- Row carries credential id, user id and origin (`web` | `desktop` | `mobile`)
 - Single-use: the callback deletes the row (committed) before talking to Google, so a failed
   exchange cannot be replayed; expired rows are purged when a new flow starts
 - Callback validates state token ownership before saving tokens
@@ -156,6 +156,23 @@ that normally has no Cinna session, so the public callback cannot rely on a logi
   stored in the attacker's credential. The victim sees an account that is not theirs and can stop.
 - **503 vs 501.** Desktop endpoints answer 503 `oauth_not_configured` when Google OAuth is not
   configured; the web `authorize` endpoint answers 501.
+
+### Mobile-started authorization
+
+Cinna Mobile starts the same owner-only `POST /api/v1/credentials/{credential_id}/oauth/authorize`
+with an optional body `{"return_scheme": "cinna-mobile"}` (or a hyphenated variant such as
+`cinna-mobile-dev`). The scheme must fully match `cinna-mobile(-[a-z0-9]+)*`, at most 64 characters,
+otherwise 422. With a valid scheme the row's origin is `mobile` and the state is
+`mobile.<scheme>.<token>`; with no body the flow is the unchanged web flow. The response also
+carries `expires_at` (epoch seconds).
+
+- **Hand-back.** The callback page reads the scheme from the URL state (Google's `?error=` never
+  reaches the backend) and, on success, opens `<scheme>://oauth-done?credential_id=<id>` once
+  automatically, with a "Return to Cinna" button. On failure it does not navigate, shows the reason
+  and the button targets `<scheme>://oauth-done?status=error`. A scheme that fails the pattern falls
+  back to the plain web view. The link is only a nudge: the app re-reads setup-status.
+- **Placeholder.** A successful callback (any origin) clears `is_placeholder` in the same commit as
+  the tokens when the stored data is complete, so an install's setup banner clears once the install is ready.
 
 ### Token Exposure Control
 - Refresh tokens never exposed in API responses or to frontend

@@ -355,6 +355,7 @@ Rules:
 
 ## Changelog
 
+- 2026-11-17: the account CLI credential list (`GET /cli/account/credentials`) also lists credentials shared with you, directly or through a group, read-only (update/delete answer 403 `not_owner`; linking to your own agent works). See [Account CLI Workspace](../../application/cinna_cli_integration/account_cli_workspace.md).
 - 2026-11-17: **Issued Credentials** section (`#issued`) on `/credentials`, listing API keys, A2A tokens and ACP tokens you issued (`GET /credentials/issued`); the New credential picker offers a shareable "Agent API connection" whose credential page is where sharing and re-use are turned on.
 - 2026-11-12: **Allow re-use inside bundles** (`allow_bundle_reuse`, agent_api connections): a recipient can provide a shared connection from their own bundle or skill; re-share provenance, release cascade, re-sharer revoke; a credential you do not own is never template-provided.
 

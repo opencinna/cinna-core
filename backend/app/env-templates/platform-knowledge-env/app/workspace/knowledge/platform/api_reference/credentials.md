@@ -158,6 +158,20 @@ Auto-generated from OpenAPI spec. Tag: `credentials`
 
 ---
 
+## GET `/api/v1/credentials/issued`
+**Read Issued Credentials**
+
+> Not available via `cinna api` (excluded_path).
+
+**Query parameters:**
+- `include_ended`: boolean, default: `False`
+- `user_workspace_id`: string | null
+- `kind`: array | null
+
+**Response:** `IssuedCredentialsPublic`
+
+---
+
 ## GET `/api/v1/credentials/{id}`
 **Read Credential**
 
@@ -326,6 +340,7 @@ Auto-generated from OpenAPI spec. Tag: `credentials`
 
 **Path parameters:**
 - `credential_id`: uuid
+
 
 **Response:** `OAuthAuthorizeResponse`
 

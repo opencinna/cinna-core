@@ -148,7 +148,7 @@ The same row, inbox, events and archive also carry a second kind of request: a *
 | Action | Requester | Recipient (agent owner) | Anyone else |
 |---|---|---|---|
 | Preview eligibility / submit (session kind) | own session only | — | 403 / 404 |
-| File a capability request (`agent_api` kind) | the identified API caller, through the producer's API proxy | — | 401 anonymous / 429 over limit |
+| File a capability request (`agent_api` kind) | the identified API caller, through the producer's API proxy; or a developer owning the consumer agent, from the account CLI through a connection linked to it | — | 401 anonymous / 429 over limit; CLI: 403 non-developer, 404 not the agent owner |
 | List own submitted requests | ✅ | — | — |
 | List requests on an agent | — | ✅ (owns agent) | 404 |
 | View one request's detail / download archive | ✅ | ✅ (download audited) | 404 |

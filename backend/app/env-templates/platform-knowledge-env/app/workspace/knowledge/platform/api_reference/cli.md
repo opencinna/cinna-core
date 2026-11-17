@@ -316,6 +316,7 @@ Auto-generated from OpenAPI spec. Tag: `cli`
   - `consumer_agent_id`: string | null
   - `credential_label`: string | null
   - `read_only_override`: boolean
+  - `service_uri`: string | null
 
 **Response:** `ConnectAgentApiResponse`
 
@@ -422,6 +423,63 @@ Auto-generated from OpenAPI spec. Tag: `cli`
   - `scopes`: array | null (required)
 
 **Response:** `AccountAgentApiScopesResult`
+
+---
+
+## GET `/api/v1/cli/account/agents/{agent_id}/agent-api-connections`
+**Account List Agent Api Connections**
+
+> Not available via `cinna api` (excluded_path).
+
+**Path parameters:**
+- `agent_id`: uuid
+
+**Response:** `AccountAgentApiConnectionsPublic`
+
+---
+
+## GET `/api/v1/cli/account/agents/{agent_id}/agent-api-connections/{credential_id}/spec`
+**Account Agent Api Connection Spec**
+
+> Not available via `cinna api` (excluded_path).
+
+**Path parameters:**
+- `agent_id`: uuid
+- `credential_id`: uuid
+
+---
+
+## POST `/api/v1/cli/account/agents/{agent_id}/agent-api-connections/{credential_id}/capability-requests`
+**Account File Capability Request**
+
+> Not available via `cinna api` (excluded_path).
+
+**Path parameters:**
+- `agent_id`: uuid
+- `credential_id`: uuid
+
+**Request body:**
+  - `title`: string (required)
+  - `need`: string (required)
+  - `proposed_endpoint`: object | null
+  - `example_request`: string | null
+  - `example_response`: string | null
+  - `spec_version_seen`: string | null
+
+**Response:** `AgentApiCapabilityRequestPublic`
+
+---
+
+## GET `/api/v1/cli/account/agents/{agent_id}/agent-api-connections/{credential_id}/capability-requests`
+**Account List Capability Requests**
+
+> Not available via `cinna api` (excluded_path).
+
+**Path parameters:**
+- `agent_id`: uuid
+- `credential_id`: uuid
+
+**Response:** `AgentApiCapabilityRequestsPublic`
 
 ---
 

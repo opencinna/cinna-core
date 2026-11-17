@@ -104,6 +104,7 @@ Auto-generated from OpenAPI spec. Tag: `external`
 **Request body** (`DesktopOAuthCredentialCreate`):
   - `type`: CredentialType (required)
   - `name`: string | null
+  - `service_uri`: string | null
 
 **Response:** `DesktopOAuthAuthorizeResponse`
 

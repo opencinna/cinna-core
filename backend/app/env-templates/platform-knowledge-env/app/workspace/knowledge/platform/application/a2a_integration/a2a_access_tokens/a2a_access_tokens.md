@@ -1,6 +1,7 @@
 ---
 feature: a2a_access_tokens
 domain: application
+affects: [agent_credentials]
 one_liner: "Scoped JWT tokens that let an external A2A client access one agent's conversation or building mode without full user credentials."
 docs:
   tech: a2a_access_tokens_tech.md
@@ -139,6 +140,12 @@ Token in Header --> get_a2a_auth_context() --> Decode JWT
 
 Pre-issued A2A access tokens are scoped machine credentials that authenticate independently of the owning user's web session. Enabling two-factor authentication on a user account has **no effect** on existing A2A tokens for that user's agents — those tokens continue to work as before. The 2FA challenge flow applies only to interactive login sessions (password and Google OAuth). See [Two-Factor Authentication](../../user_2fa/user_2fa.md) for details.
 
+Tokens you issued also appear in **/credentials › Issued Credentials** (as "A2A token" rows, with status, agent and a Revoke action); see [Credential Sharing — Issued Credentials](../../../agents/agent_credentials/credential_sharing.md#issued-credentials-issued).
+
+## Changelog
+
+- 2026-11-17: A2A access tokens are listed in /credentials › Issued Credentials.
+
 ---
 
-*Last updated: 2026-06-06*
+*Last updated: 2026-11-17*

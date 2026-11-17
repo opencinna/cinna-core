@@ -56,7 +56,7 @@ Template sharing is designed for bundle publishers who want to pre-configure par
 3. The installer is directed to `/agent/{id}/setup-credentials` — the setup page surfaces the credential via `GET /agents/{agent_id}/setup-credentials`, which returns `SetupCredentialSummary` items including:
    - `template_private_fields` — the list of fields to fill
    - `template_prefilled_data` — the non-private values already present, shown as read-only context
-4. When the installer fills in the private fields via `PUT /agents/{agent_id}/setup-credentials/{credential_id}`, `CredentialsService.update_credential` runs a completeness check: if all required fields for the credential type now pass, `is_placeholder` is flipped to `False`. The runtime gate then re-runs; if the install is ready, `INSTALL_SETUP_COMPLETED` fires over WebSocket and the setup banner clears
+4. When the installer fills in the private fields via `PUT /agents/{agent_id}/setup-credentials/{credential_id}`, `CredentialsService.update_credential` runs a completeness check: if all required fields for the credential type now pass, `is_placeholder` is flipped to `False` (the same flip happens when the owner completes Google authorization for an OAuth placeholder in `handle_oauth_callback`). The runtime gate then re-runs; if the install is ready, `INSTALL_SETUP_COMPLETED` fires over WebSocket and the setup banner clears
 
 **If the installer already owns a suitable credential:**
 
@@ -227,11 +227,20 @@ AI credentials (LLM provider keys) follow the same 409 / force pattern but have 
 
 ## Credentials Page: Filter Tabs and Category Assignment
 
-The `/credentials` page is a table (the manage-list pattern, `DataTable`) organised by a segmented control with per-section counts: **My Credentials** (default), **Automatic Credentials**, and **Bundle Credentials**. The old stacked "My Credentials / Automatic Credentials / Shared with Me" sections are replaced by this single control.
+The `/credentials` page is a table (the manage-list pattern, `DataTable`) organised by a segmented control with per-section counts: **My Credentials** (default), **Automatic Credentials**, **Bundle Credentials**, and **Issued Credentials**. The last is not a credential category: it is the issuer's view of the access tokens you issued for your agents, described in [Issued Credentials](#issued-credentials-issued) below. The old stacked "My Credentials / Automatic Credentials / Shared with Me" sections are replaced by this single control.
 
 The table has two content columns plus a row menu (Copy ID; Delete on owned rows): Name (type glyph, name, key-status badge, incomplete and bundle icons) and a right-aligned badge cluster — a type badge, a share count and an agent count. Each count badge opens a popover (on hover, click, keyboard or tap) that loads its details lazily: shares from `GET /credentials/{id}/shares`, agents from the deletion-impact `affected_own_agents` on owned rows ("Used by N of your agents" on rows shared with you; a shared row's share badge shows the owner). Each list shows 5 names, then "and N more". Below 1024 px only the type badge shows. The column header row is visually hidden (kept for screen readers). Clicking a row opens `/credential/$id`. A search box filters by name, notes, type and owner; paging is client-side at 30 rows per page; loading, error, empty and no-match states are shown in place of the table. The owned list is fetched in full (all pages), no longer capped at 100.
 
 Tab membership is driven by a server-computed `category` field (`"mine"` | `"automatic"` | `"bundle"`) returned on every `CredentialPublic` and `SharedCredentialPublic` response. The frontend filters the merged owned+shared list purely on this field — no client-side re-derivation.
+
+### Issued Credentials (`#issued`)
+
+The section lists every access token you issued for your agents, one row each, never the token value. Three kinds: **API keys** (Agent REST API keys given to *other* people; a key issued to yourself is your own credential and is left out; see [Agent REST API — Issued Keys](../agent_api/agent_api.md#issued-keys)), **A2A tokens** (see [A2A Access Tokens](../../application/a2a_integration/a2a_access_tokens/a2a_access_tokens.md)) and **ACP tokens** (see [ACP Integration](../../application/acp_integration/acp_integration.md)).
+
+- **Columns of meaning.** Kind, label, agent, holder (a person for an API key; "External client" for A2A and ACP tokens, "Deleted user" if the account is gone), a normalized status, created, expires and last used. Rows are ordered by agent name (removed agents last), kind, holder, newest first.
+- **Status** is one vocabulary across the kinds: active, paused, expired, revoked, agent removed. The last three are ended and hidden by default. An ACP token reads *paused* when its connector is inactive or the connection would currently be rejected (agent or owner inactive, or a building-mode connector whose owner is no longer a developer). A2A tokens and ACP tokens cascade away with their agent, so only API keys can show *agent removed*.
+- **Filters menu.** Two radio groups: **Show** (Live only / With ended) and **Type** (All types / API keys / A2A tokens / ACP tokens). The workspace filter applies to the agent's workspace; rows whose agent was deleted drop out while it is active.
+- **Row actions.** Each row has a ⋯ row actions menu (`RowActionsMenu`, like the other credential rows): **Open in agent** (only when the row has an agent; opens its integrations tab), **Copy ID** (always), then a separator and a destructive **Revoke API key** / **Revoke A2A token** / **Revoke ACP token** (live rows with an agent only; confirmed). A spinner replaces the menu while a revoke runs. Revoke calls each kind's existing revoke route, so permissions are unchanged.
 
 ### Categorization rules
 
@@ -252,11 +261,11 @@ A received share is categorised by its **provenance alone**, never by its type. 
 
 `agent_api` **connection** credentials and **agent2agent** `mcp_provider` credentials are always owned (a shared `agent_api` connection still belongs to the recipient as an owned credential after connect); they appear under Automatic Credentials regardless of whether they are shared further. An **external** `mcp_provider` server, and an `agent_api` **issued key**, are manually/hand-issued credentials and appear under My Credentials instead — the same automatic-vs-manual split applied to two different credential types. The `mcp_auth_mode` discriminator is a cheap non-secret column on `Credential` (mirrored out of the encrypted blob); the `agent_api` split instead requires one batched lookup of the bound `AgentApiToken.kind` (`AgentApiTokenService.get_kinds_by_credential`) since `kind` lives on a separate table, not on `Credential` itself. Either way the classifier never decrypts `credential_data` to decide the tab.
 
-An `agent_api` **issued key** is **owned by the person it was issued to, never by the issuer, and is never shareable**: `allow_sharing` is forced `False` at creation (and rejected on any later attempt via `assert_sharing_allowed`) — sharing an identity-bound key would mean "here, act as user X"; cross-user access to a producer is given by issuing that person their own key (plus the `agent_api_access_grant` scope grant), not by credential sharing. An issued key syncs into `credentials.json` only for environments whose agent owner is its recipient (`CredentialsService._shape_agent_api_keys_for_env`); a non-active key ships token-less with `unavailable_reason` / `key_status`. The producer owner's `agent_api` **connection** Sharing card points them to "Give API access" instead of sharing. See [Agent REST API — Issued Keys](../agent_api/agent_api.md#issued-keys) for the full model.
+An `agent_api` **issued key** is **owned by the person it was issued to, never by the issuer, and is never shareable**: `allow_sharing` is forced `False` at creation (and rejected on any later attempt via `assert_sharing_allowed`) — sharing an identity-bound key would mean "here, act as user X"; cross-user access to a producer is given by issuing that person their own key (plus the `agent_api_access_grant` scope grant), not by credential sharing. An issued key syncs into `credentials.json` only for environments whose agent owner is its recipient (`CredentialsService._shape_agent_api_keys_for_env`); a non-active key ships token-less with `unavailable_reason` / `key_status`. The producer owner's `agent_api` **connection** Sharing card shows a hint naming both paths: share the connection (with bundle re-use allowed) so other people's agents and published bundles can call the producer, or give one person a key from the producer's "Give API access" card for their own code. See [Agent REST API — Issued Keys](../agent_api/agent_api.md#issued-keys) for the full model.
 
 ### URL hash navigation
 
-The active tab is reflected in the URL hash: `#my`, `#automatic`, or `#bundle`. Absent or unknown hash defaults to My Credentials. Changing tabs updates the hash; back/forward navigation restores the tab.
+The active tab is reflected in the URL hash: `#my`, `#automatic`, `#bundle`, or `#issued`. Absent or unknown hash defaults to My Credentials. Changing tabs updates the hash; back/forward navigation restores the tab.
 
 ## `CredentialShare.source` Provenance Marker
 
@@ -346,6 +355,8 @@ Rules:
 
 ## Changelog
 
+- 2026-11-17: the account CLI credential list (`GET /cli/account/credentials`) also lists credentials shared with you, directly or through a group, read-only (update/delete answer 403 `not_owner`; linking to your own agent works). See [Account CLI Workspace](../../application/cinna_cli_integration/account_cli_workspace.md).
+- 2026-11-17: **Issued Credentials** section (`#issued`) on `/credentials`, listing API keys, A2A tokens and ACP tokens you issued (`GET /credentials/issued`); the New credential picker offers a shareable "Agent API connection" whose credential page is where sharing and re-use are turned on.
 - 2026-11-12: **Allow re-use inside bundles** (`allow_bundle_reuse`, agent_api connections): a recipient can provide a shared connection from their own bundle or skill; re-share provenance, release cascade, re-sharer revoke; a credential you do not own is never template-provided.
 
 - Credentials can be shared with user groups (`credential_group_share`); unlink narrows to users without any remaining path.
