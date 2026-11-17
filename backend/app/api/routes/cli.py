@@ -1319,8 +1319,10 @@ async def account_agent_api_set_scopes(
 # ``agent_api`` credentials (never a token), the producer's spec, and filing /
 # listing capability requests with the linked connection (server-side, same
 # service, limits and attribution as the env's ``_cinna`` route). Strictly the
-# caller's own consumer agents; every 404 is ``not_found`` (no leak); 409
-# ``connection_unusable`` when the connection would not work in the env.
+# caller's own consumer agents; every 404 is ``not_found`` ("Agent not found"
+# for a missing or foreign agent alike, or "No agent API connection <id> is
+# linked to this agent"); 409 ``connection_unusable`` when the connection would
+# not work in the env (listing capability requests only needs the producer).
 
 
 @router.get(
@@ -1461,7 +1463,9 @@ def account_list_capability_requests(
 ) -> Any:
     """
     The caller's own capability requests on the connection's producer, newest
-    first (≤ 50). Refusals: 404 ``not_found``, 409 ``connection_unusable``.
+    first (≤ 50). Works on an unusable connection so earlier requests stay
+    visible. Refusals: 404 ``not_found``, 409 ``connection_unusable`` only when
+    the producer agent no longer exists.
     """
     from app.services.agent_api.agent_api_consumer_connection_service import (
         AgentApiConsumerConnectionService,

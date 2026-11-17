@@ -271,20 +271,25 @@ still be the target of a connect operation from the CLI.
 names, CLI >= next release).** A builder working on a *consumer* agent can see and use the
 `agent_api` connections that agent holds without ever seeing the token. All four routes are
 under `/cli/account/agents/{id}/agent-api-connections`, strictly for agents the caller owns
-(every miss is 404 `not_found`):
+(every miss is 404 `not_found`: "Agent not found" for a missing agent and for someone else's
+alike, "No agent API connection <id> is linked to this agent" when the credential is not
+linked):
 
 - **List** the linked connections as the agent's environment sees them: `base_url`, `spec_url`
   and `improvement_requests_url` on the environment-visible origin (`AGENT_ENV_BACKEND_URL`,
   e.g. `http://backend:8000`, so not necessarily reachable from the host), `key_status` (stored
-  status for issued keys, `connection_status` for connections; null only when not delivered or a placeholder), the caller's live `scopes`, `usable` with an
+  status for issued keys, `connection_status` for connections; null only when not delivered or a placeholder), the live `scopes` of the agent's owner (the identity the environment's calls carry, also through a connection shared with them, so a recipient sees their own grant, not the sharer's), `usable` with an
   `unavailable_reason` when not, and `sdk_lookup` (what to pass to `agent_api_session(...)`:
-  the slot, else the credential id). `improvement_requests_url` is null when not usable.
+  the slot, or the credential id when there is no slot or another linked credential carries
+  the same slot, since the SDK would pick the first match). `improvement_requests_url` is null when not usable.
 - **Spec** of the producer through a connection (raw JSON).
 - **File** and **list** capability requests with the linked connection, server-side, so the
   token never leaves core. Same validation, 64 KiB cap and per-requester rate limit as the
-  environment `_cinna` route. Filing is developer-gated; listing is not.
+  environment `_cinna` route. Filing is developer-gated; listing is not. Listing also works on
+  an unusable connection (revoked or expired key, API disabled, placeholder) so earlier
+  requests stay visible, as long as the producer agent still exists.
 
-Refusals: 404 `not_found`, 409 `connection_unusable`; spec: 403 `spec_not_exposed`, 400
+Refusals: 404 `not_found`, 409 `connection_unusable` (listing requests: only when the producer is gone); spec: 403 `spec_not_exposed`, 400
 `api_disabled`, 502 `producer_error`, 503 `env_unavailable`; file: 413 `too_large`, 400
 `invalid_request`, 422 `invalid_capability_request` (with `errors`, `expected`), 429
 `rate_limited` + `Retry-After`. Details: [tech](account_cli_workspace_tech.md#agent-api-connections-of-a-consumer-agent).

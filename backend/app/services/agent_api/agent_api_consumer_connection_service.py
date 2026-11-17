@@ -16,12 +16,15 @@ token. Everything here is keyed by a consumer agent the caller owns.
   connection. A filed request is indistinguishable from an env-filed one.
 
 Errors are ``AgentApiError`` with a ``code`` (the account CLI's coded refusal).
-Every 404 is ``not_found`` / "Not found", so "no agent", "not yours" and "not
-linked" cannot be told apart. The token value never leaves this module: it
+Every 404 is ``not_found``; the message names what is missing ("Agent not
+found" vs "No agent API connection <id> is linked to this agent"), but a
+foreign agent and a missing one read the same, so ownership never leaks. The
+token value never leaves this module: it
 lives only on ``ResolvedConnection`` (excluded from its ``repr``) to feed the
 secret scrubber, and is never returned, logged or put on an exception.
 """
 import uuid
+from collections import Counter
 from dataclasses import dataclass, field
 
 from sqlmodel import Session, col, select
@@ -69,8 +72,24 @@ _UNUSABLE_PLACEHOLDER = "placeholder"
 _UNUSABLE_NOT_DELIVERED = "not_delivered"
 
 
-def _not_found() -> AgentApiError:
-    return AgentApiError("Not found", status_code=404, code=NOT_FOUND_CODE)
+def _agent_not_found() -> AgentApiError:
+    return AgentApiError("Agent not found", status_code=404, code=NOT_FOUND_CODE)
+
+
+def _connection_not_linked(credential_id: uuid.UUID) -> AgentApiError:
+    return AgentApiError(
+        f"No agent API connection {credential_id} is linked to this agent",
+        status_code=404,
+        code=NOT_FOUND_CODE,
+    )
+
+
+def _connection_unusable(reason: str | None) -> AgentApiError:
+    return AgentApiError(
+        f"This connection is not usable: {reason or 'unavailable'}",
+        status_code=409,
+        code=CONNECTION_UNUSABLE_CODE,
+    )
 
 
 @dataclass(frozen=True)
@@ -106,16 +125,17 @@ class AgentApiConsumerConnectionService:
         the env's identity is the agent owner)."""
         agent = db.get(Agent, agent_id)
         if agent is None or agent.owner_id != user.id:
-            raise _not_found()
+            raise _agent_not_found()
         return agent
 
     @staticmethod
     def _entries(db: Session, user: User, agent: Agent) -> list[_ConnectionEntry]:
         """Every ``agent_api`` credential linked to ``agent``, as its env sees it."""
+        all_linked = CredentialsService.get_agent_credentials(db, agent.id)
         linked = sorted(
             (
                 credential
-                for credential in CredentialsService.get_agent_credentials(db, agent.id)
+                for credential in all_linked
                 if credential.type == CredentialType.AGENT_API
             ),
             key=lambda c: (c.name.lower(), str(c.id)),
@@ -158,6 +178,7 @@ class AgentApiConsumerConnectionService:
             if current is None or (current[0].revoked_at and not token.revoked_at):
                 connection_tokens[token.credential_id] = (token, producer)
         key_states = key_states_by_credential(db, credential_ids)
+        ambiguous_slots = _ambiguous_slots(all_linked)
 
         owner_ids = {c.owner_id for c in linked if c.owner_id != user.id}
         owner_emails: dict[uuid.UUID, str] = (
@@ -181,6 +202,7 @@ class AgentApiConsumerConnectionService:
                 connection=connection_tokens.get(credential.id),
                 key_state=key_states.get(credential.id),
                 owner_email=owner_emails.get(credential.owner_id),
+                ambiguous_slots=ambiguous_slots,
             )
             for credential in linked
         ]
@@ -197,6 +219,7 @@ class AgentApiConsumerConnectionService:
         connection: tuple[AgentApiToken, Agent | None] | None,
         key_state,
         owner_email: str | None,
+        ambiguous_slots: set[str],
     ) -> _ConnectionEntry:
         """Project one linked credential (first matching status rule wins)."""
         token: AgentApiToken | None = None
@@ -265,7 +288,9 @@ class AgentApiConsumerConnectionService:
             scopes=list(scopes),
             usable=usable,
             unavailable_reason=None if usable else reason,
-            sdk_lookup=slot or str(credential.id),
+            sdk_lookup=(
+                slot if slot and slot not in ambiguous_slots else str(credential.id)
+            ),
         )
         token_value = (stored.get("credential_data") or {}).get("token")
         return _ConnectionEntry(
@@ -289,11 +314,13 @@ class AgentApiConsumerConnectionService:
         return AccountAgentApiConnectionsPublic(data=rows, count=len(rows))
 
     @staticmethod
-    def resolve_connection(
+    def _linked_entry(
         db: Session, user: User, agent_id: uuid.UUID, credential_id: uuid.UUID
-    ) -> ResolvedConnection:
-        """One usable connection: 404 ``not_found`` unless linked to an agent the
-        caller owns; 409 ``connection_unusable`` when it would not work in the env.
+    ) -> tuple[Agent, _ConnectionEntry]:
+        """The consumer agent and one of its linked connections, usable or not.
+
+        404 ``not_found``: "Agent not found" unless the caller owns the agent,
+        then "No agent API connection ... is linked" unless the credential is.
         """
         agent = AgentApiConsumerConnectionService._owned_consumer(db, user, agent_id)
         entry = next(
@@ -305,14 +332,21 @@ class AgentApiConsumerConnectionService:
             None,
         )
         if entry is None:
-            raise _not_found()
+            raise _connection_not_linked(credential_id)
+        return agent, entry
+
+    @staticmethod
+    def resolve_connection(
+        db: Session, user: User, agent_id: uuid.UUID, credential_id: uuid.UUID
+    ) -> ResolvedConnection:
+        """One usable connection: 404 ``not_found`` unless linked to an agent the
+        caller owns; 409 ``connection_unusable`` when it would not work in the env.
+        """
+        agent, entry = AgentApiConsumerConnectionService._linked_entry(
+            db, user, agent_id, credential_id
+        )
         if not entry.row.usable or entry.token is None or entry.producer is None:
-            raise AgentApiError(
-                "This connection is not usable: "
-                f"{entry.row.unavailable_reason or 'unavailable'}",
-                status_code=409,
-                code=CONNECTION_UNUSABLE_CODE,
-            )
+            raise _connection_unusable(entry.row.unavailable_reason)
         return ResolvedConnection(
             consumer=agent,
             credential=entry.credential,
@@ -378,17 +412,40 @@ class AgentApiConsumerConnectionService:
     def list_capability_requests(
         db: Session, user: User, agent_id: uuid.UUID, credential_id: uuid.UUID
     ) -> AgentApiCapabilityRequestsPublic:
-        """C4: the caller's own capability requests on the connection's producer."""
-        resolved = AgentApiConsumerConnectionService.resolve_connection(
+        """C4: the caller's own capability requests on the connection's producer.
+
+        Works on an unusable connection too (revoked / expired key, API
+        disabled, placeholder) so requests filed earlier stay visible; only a
+        connection whose producer agent is gone (or unknown) answers 409
+        ``connection_unusable``.
+        """
+        _, entry = AgentApiConsumerConnectionService._linked_entry(
             db, user, agent_id, credential_id
         )
+        producer = entry.producer
+        if producer is None and entry.row.producer_agent_id is not None:
+            producer = db.get(Agent, entry.row.producer_agent_id)
+        if producer is None:
+            raise _connection_unusable(entry.row.unavailable_reason)
         rows, count = ImprovementRequestService.list_for_requester_on_target(
-            db, user.id, resolved.producer.id
+            db, user.id, producer.id
         )
         return AgentApiCapabilityRequestsPublic(
             data=[ImprovementRequestService.to_capability_public(r) for r in rows],
             count=count,
         )
+
+
+def _ambiguous_slots(credentials: list[Credential]) -> set[str]:
+    """Slots (``service_uri``) carried by more than one linked credential.
+
+    The env SDK's ``_find_slot`` returns the first match for a slot across every
+    linked credential, so a shared slot (e.g. the user's own connection and one
+    shared with them) cannot pick a specific row; those rows are reached by
+    credential id instead.
+    """
+    counts = Counter(c.service_uri for c in credentials if c.service_uri)
+    return {slot for slot, count in counts.items() if count > 1}
 
 
 def _as_uuid(value: object) -> uuid.UUID | None:

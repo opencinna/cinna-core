@@ -87,9 +87,16 @@ def _issue_external_key(client, owner_h, producer_id, recipient, recipient_h):
     return key, rv.json()["token"]
 
 
-def _assert_not_found(r) -> None:
+_AGENT_NOT_FOUND = "Agent not found"
+
+
+def _not_linked(credential_id: object) -> str:
+    return f"No agent API connection {credential_id} is linked to this agent"
+
+
+def _assert_not_found(r, message: str = _AGENT_NOT_FOUND) -> None:
     assert r.status_code == 404, r.text
-    assert r.json()["detail"] == {"code": "not_found", "message": "Not found"}
+    assert r.json()["detail"] == {"code": "not_found", "message": message}
 
 
 def test_connections_listing_ownership_urls_sdk_lookup_and_no_token(
@@ -202,18 +209,21 @@ def test_shared_connection_and_revoked_key_rows(
         _cap_url(agent["id"], key["credential_id"]), headers=acc, json=valid_body()
     )
     assert r.status_code == 409 and r.json()["detail"]["code"] == "connection_unusable"
+    # Listing stays available on an unusable connection (earlier requests).
     r = client.get(_cap_url(agent["id"], key["credential_id"]), headers=acc)
-    assert r.status_code == 409 and r.json()["detail"]["code"] == "connection_unusable"
+    assert r.status_code == 200, r.text
 
     unlinked = create_random_credential(client, rh, credential_type="api_token")
-    for method, url in (
-        ("get", f"{_list_url(agent['id'])}/{unlinked['id']}/spec"),
-        ("get", _cap_url(agent["id"], unlinked["id"])),
-        ("get", f"{_list_url(agent['id'])}/{uuid.uuid4()}/spec"),
+    ghost_id = uuid.uuid4()
+    for url, missing in (
+        (f"{_list_url(agent['id'])}/{unlinked['id']}/spec", unlinked["id"]),
+        (_cap_url(agent["id"], unlinked["id"]), unlinked["id"]),
+        (f"{_list_url(agent['id'])}/{ghost_id}/spec", ghost_id),
     ):
-        _assert_not_found(getattr(client, method)(url, headers=acc))
+        _assert_not_found(client.get(url, headers=acc), _not_linked(missing))
     _assert_not_found(
-        client.post(_cap_url(agent["id"], unlinked["id"]), headers=acc, json=valid_body())
+        client.post(_cap_url(agent["id"], unlinked["id"]), headers=acc, json=valid_body()),
+        _not_linked(unlinked["id"]),
     )
     # Another user's consumer agent: 404 on every route.
     _, other_h = make_developer(client, su)
@@ -440,3 +450,147 @@ def test_capability_request_malformed_inputs_400_vs_422(
 
     # nothing was filed by the refused attempts
     assert client.get(url, headers=acc).json()["count"] == 0
+
+
+def test_ambiguous_slot_falls_back_to_credential_id_for_sdk_lookup(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """C2: a slot carried by more than one linked credential is not a usable lookup."""
+    su = superuser_token_headers
+    _, oh = make_developer(client, su)
+    rec, rh = make_developer(client, su)
+    owner_pid = setup_producer(client, oh, name="Slot Owner Producer")["id"]
+    rec_pid = setup_producer(client, rh, name="Slot Recipient Producer")["id"]
+
+    # A: owner's connection, shared with the recipient, carrying a slot.
+    r = client.post(f"{API}/agents/{owner_pid}/agent-api/connect", headers=oh, json={})
+    assert r.status_code == 200, r.text
+    a_id = r.json()["credential_id"]
+    update_credential(client, oh, a_id, allow_sharing=True, service_uri="shared-slot")
+    share_credential_via_api(client, oh, a_id, rec["email"])
+
+    agent = create_agent_via_api(client, rh, name="Slot Consumer")
+    drain_tasks()
+    link_credential_to_agent(client, rh, agent["id"], a_id)
+    drain_tasks()
+    acc = _acc(client, rh)
+
+    # ── control: a unique slot is the lookup ──
+    row = _rows(client, acc, agent["id"])[a_id]
+    assert row["slot"] == "shared-slot"
+    assert row["sdk_lookup"] == "shared-slot"
+
+    # ── B: recipient's own connection with the same slot -> both fall back to ids ──
+    r = client.post(f"{API}/agents/{rec_pid}/agent-api/connect", headers=rh, json={})
+    assert r.status_code == 200, r.text
+    b_id = r.json()["credential_id"]
+    update_credential(client, rh, b_id, service_uri="shared-slot")
+    link_credential_to_agent(client, rh, agent["id"], b_id)
+    drain_tasks()
+    rows = _rows(client, acc, agent["id"])
+    for cid in (a_id, b_id):
+        assert rows[cid]["slot"] == "shared-slot"
+        assert rows[cid]["sdk_lookup"] == cid
+
+    # ── a distinct slot on B makes both unambiguous again ──
+    update_credential(client, rh, b_id, service_uri="own-slot")
+    rows = _rows(client, acc, agent["id"])
+    assert rows[a_id]["sdk_lookup"] == "shared-slot"
+    assert rows[b_id]["sdk_lookup"] == "own-slot"
+
+    # ── a non-agent_api credential sharing the slot also triggers the fallback ──
+    other = create_random_credential(client, rh, credential_type="api_token")
+    update_credential(client, rh, other["id"], service_uri="own-slot")
+    link_credential_to_agent(client, rh, agent["id"], other["id"])
+    drain_tasks()
+    rows = _rows(client, acc, agent["id"])
+    assert other["id"] not in rows
+    assert rows[b_id]["slot"] == "own-slot"
+    assert rows[b_id]["sdk_lookup"] == b_id
+    assert rows[a_id]["sdk_lookup"] == "shared-slot"
+
+
+def test_capability_request_listing_survives_unusable_connection_but_post_is_409(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """C4 GET keeps earlier requests visible once the connection is unusable."""
+    su = superuser_token_headers
+    _, oh = make_developer(client, su)
+    rec, rh = make_developer(client, su)
+    pid = setup_producer(client, oh, name="Unusable List Producer")["id"]
+    agent = create_agent_via_api(client, rh, name="Unusable List Consumer")
+    drain_tasks()
+    key, _ = _issue_external_key(client, oh, pid, rec, rh)
+    cred_id = key["credential_id"]
+    link_credential_to_agent(client, rh, agent["id"], cred_id)
+    drain_tasks()
+    acc = _acc(client, rh)
+    url = _cap_url(agent["id"], cred_id)
+
+    r = client.post(url, headers=acc, json=valid_body(title="Filed while usable"))
+    assert r.status_code == 201, r.text
+    filed_id = r.json()["id"]
+
+    def _assert_listing_visible_post_refused() -> None:
+        listing = client.get(url, headers=acc)
+        assert listing.status_code == 200, listing.text
+        assert listing.json()["count"] == 1
+        assert [x["id"] for x in listing.json()["data"]] == [filed_id]
+        refused = client.post(url, headers=acc, json=valid_body(title="Too late"))
+        assert refused.status_code == 409, refused.text
+        assert refused.json()["detail"]["code"] == "connection_unusable"
+
+    # ── producer API disabled ──
+    update_agent(client, oh, pid, agent_api_enabled=False)
+    assert _rows(client, acc, agent["id"])[cred_id]["usable"] is False
+    _assert_listing_visible_post_refused()
+    update_agent(client, oh, pid, agent_api_enabled=True)
+    assert _rows(client, acc, agent["id"])[cred_id]["usable"] is True
+
+    # ── revoked key ──
+    rv = client.post(f"{API}/agents/{pid}/agent-api/keys/{key['id']}/revoke", headers=oh)
+    assert rv.status_code == 200, rv.text
+    row = _rows(client, acc, agent["id"])[cred_id]
+    assert row["usable"] is False and row["unavailable_reason"] == "key_revoked"
+    _assert_listing_visible_post_refused()
+
+    # ── an unlinked credential is still a 404, listing or not ──
+    unlinked = create_random_credential(client, rh, credential_type="api_token")
+    _assert_not_found(
+        client.get(_cap_url(agent["id"], unlinked["id"]), headers=acc),
+        _not_linked(unlinked["id"]),
+    )
+
+
+def test_not_found_messages_distinguish_agent_from_connection_but_not_foreign_from_missing(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    su = superuser_token_headers
+    _, h = make_developer(client, su)
+    pid = setup_producer(client, h, name="NF Producer")["id"]
+    c = connected_consumer(client, h, pid, name="NF Consumer")
+    consumer_id, cred_id = c["agent"]["id"], c["connection"]["credential_id"]
+    _, other_h = make_developer(client, su)
+    other_acc = _acc(client, other_h)
+    acc = _acc(client, h)
+
+    # ── foreign agent and random uuid answer byte-identically ──
+    foreign = client.get(_list_url(consumer_id), headers=other_acc)
+    missing = client.get(_list_url(uuid.uuid4()), headers=other_acc)
+    _assert_not_found(foreign)
+    _assert_not_found(missing)
+    assert foreign.json() == missing.json()
+    # also on the connection routes, even for a credential that is linked
+    for url in (_spec_url(consumer_id, cred_id), _cap_url(consumer_id, cred_id)):
+        _assert_not_found(client.get(url, headers=other_acc))
+    _assert_not_found(
+        client.get(_cap_url(uuid.uuid4(), cred_id), headers=other_acc)
+    )
+
+    # ── own agent, unlinked credential: message carries the lowercase uuid ──
+    unlinked = create_random_credential(client, h, credential_type="api_token")
+    for url in (_spec_url(consumer_id, unlinked["id"]), _cap_url(consumer_id, unlinked["id"])):
+        r = client.get(url, headers=acc)
+        _assert_not_found(r, _not_linked(unlinked["id"]))
+        assert unlinked["id"] == unlinked["id"].lower()
+        assert unlinked["id"] in r.json()["detail"]["message"]
