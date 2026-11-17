@@ -240,7 +240,7 @@ The section lists every access token you issued for your agents, one row each, n
 - **Columns of meaning.** Kind, label, agent, holder (a person for an API key; "External client" for A2A and ACP tokens, "Deleted user" if the account is gone), a normalized status, created, expires and last used. Rows are ordered by agent name (removed agents last), kind, holder, newest first.
 - **Status** is one vocabulary across the kinds: active, paused, expired, revoked, agent removed. The last three are ended and hidden by default. An ACP token reads *paused* when its connector is inactive or the connection would currently be rejected (agent or owner inactive, or a building-mode connector whose owner is no longer a developer). A2A tokens and ACP tokens cascade away with their agent, so only API keys can show *agent removed*.
 - **Filters menu.** Two radio groups: **Show** (Live only / With ended) and **Type** (All types / API keys / A2A tokens / ACP tokens). The workspace filter applies to the agent's workspace; rows whose agent was deleted drop out while it is active.
-- **Row actions.** Clicking a row opens the agent's integrations tab; **Revoke** (confirmed) is the one inline action and calls each kind's existing revoke route, so permissions are unchanged.
+- **Row actions.** Each row has a ⋯ row actions menu (`RowActionsMenu`, like the other credential rows): **Open in agent** (only when the row has an agent; opens its integrations tab), **Copy ID** (always), then a separator and a destructive **Revoke API key** / **Revoke A2A token** / **Revoke ACP token** (live rows with an agent only; confirmed). A spinner replaces the menu while a revoke runs. Revoke calls each kind's existing revoke route, so permissions are unchanged.
 
 ### Categorization rules
 

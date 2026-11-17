@@ -1,27 +1,32 @@
 import { useIsMutating } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import type { ColumnDef } from "@tanstack/react-table"
-import { Ban, Loader2 } from "lucide-react"
+import { Ban, Copy, ExternalLink, Loader2 } from "lucide-react"
 
 import type { IssuedCredentialPublic } from "@/client"
 import { AgentBadge } from "@/components/Common/AgentBadge"
 import { RelativeTime } from "@/components/Common/RelativeTime"
+import { RowActionsMenu } from "@/components/Common/RowActionsMenu"
 import { agentApiKeyStatusLabel } from "@/components/Credentials/agentApiKeyCopy"
 import {
   canRevokeIssued,
   ISSUED_KIND_LABEL,
-  issuedCredentialLabel,
   issuedHolderLabel,
   issuedKindHint,
   revokeIssuedCredentialMutationKey,
 } from "@/components/Credentials/issuedCredentials"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
+import {
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu"
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard"
+import useCustomToast from "@/hooks/useCustomToast"
 import { cn } from "@/lib/utils"
 
 /** Pending revokes of this row, read from the list-level mutation. */
@@ -138,7 +143,11 @@ function ActionsCell({
   onRevoke: (row: IssuedCredentialPublic) => void
 }) {
   const revoking = useRevoking(row.id)
-  if (!canRevokeIssued(row)) return null
+  const [, copy] = useCopyToClipboard()
+  const { showSuccessToast, showErrorToast } = useCustomToast()
+  const noun = ISSUED_KIND_LABEL[row.kind]
+  // Unlabelled rows are named by their prefix, never the noun twice.
+  const name = row.label || `${row.token_prefix}…`
 
   if (revoking) {
     return (
@@ -149,7 +158,7 @@ function ActionsCell({
             aria-live="polite"
           >
             <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
-            <span className="sr-only">Revoking…</span>
+            <span className="sr-only">Revoking {name}…</span>
           </span>
         </TooltipTrigger>
         <TooltipContent side="top" className="text-xs">
@@ -159,27 +168,51 @@ function ActionsCell({
     )
   }
 
-  const noun = ISSUED_KIND_LABEL[row.kind]
-  // The row's only action, and destructive: hover-revealed (§2 Row actions).
+  const copyId = async () => {
+    if (await copy(row.id)) {
+      showSuccessToast(`${noun} ID copied`)
+    } else {
+      showErrorToast(`Couldn't copy the ${noun} ID`)
+    }
+  }
+  const agent = row.agent
+
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7 text-muted-foreground opacity-0 transition-opacity hover:text-destructive focus-visible:opacity-100 group-hover/row:opacity-100"
-          aria-label={`Revoke ${issuedCredentialLabel(row)}${
-            row.holder_kind === "person" ? ` for ${issuedHolderLabel(row)}` : ""
-          }`}
-          onClick={() => onRevoke(row)}
-        >
-          <Ban className="h-3.5 w-3.5" />
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent side="top" className="text-xs">
-        Revoke {noun}
-      </TooltipContent>
-    </Tooltip>
+    <RowActionsMenu
+      label={`the ${noun} ${name}${
+        row.holder_kind === "person" ? ` for ${issuedHolderLabel(row)}` : ""
+      }`}
+    >
+      {agent && (
+        <DropdownMenuItem asChild>
+          <Link
+            to="/agent/$agentId"
+            params={{ agentId: agent.id }}
+            hash="integrations"
+          >
+            <ExternalLink />
+            Open in agent
+          </Link>
+        </DropdownMenuItem>
+      )}
+      <DropdownMenuItem onSelect={() => void copyId()}>
+        <Copy />
+        Copy ID
+      </DropdownMenuItem>
+      {canRevokeIssued(row) && (
+        <>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            variant="destructive"
+            // No preventDefault: the confirm lives at list level.
+            onSelect={() => onRevoke(row)}
+          >
+            <Ban />
+            Revoke {noun}
+          </DropdownMenuItem>
+        </>
+      )}
+    </RowActionsMenu>
   )
 }
 

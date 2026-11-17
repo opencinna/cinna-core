@@ -155,8 +155,8 @@ interface IssuedCredentialsTableProps {
 /**
  * "Issued Credentials" on `/credentials`: keys and tokens the caller issued for
  * their agents, one row each. A row opens the agent's Integrations tab, where
- * every kind is managed; Revoke is the one inline action (confirmed,
- * list-level target so the confirm outlives the row's hover-revealed button).
+ * every kind is managed; The row's ⋯ menu offers Open in agent, Copy ID and
+ * Revoke (confirmed, list-level target so the confirm outlives the menu).
  * No reveal or rotate — the issuer does not hold the value here.
  */
 export function IssuedCredentialsTable({
