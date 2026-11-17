@@ -1,6 +1,6 @@
 """
 Integration tests: issuer's cross-producer view of issued keys
-(``GET /credentials/issued-keys``) and the optional ``service_uri`` slot on the
+(``GET /credentials/issued``, ``agent_api_key`` rows) and the optional ``service_uri`` slot on the
 connect helper (``POST /agents/{id}/agent-api/connect``).
 
 Cast: **A** = issuer (a developer who owns several producers), **B**/**C** =
@@ -28,7 +28,7 @@ from tests.utils.user import create_random_user_with_headers
 from tests.utils.workspace import create_random_workspace
 
 API = settings.API_V1_STR
-ISSUED_URL = f"{API}/credentials/issued-keys"
+ISSUED_URL = f"{API}/credentials/issued"
 
 
 def _issue(
@@ -131,15 +131,18 @@ def test_issued_keys_lists_only_keys_issued_to_others_without_token_value(
     assert [row["id"] for row in body["data"]] == [to_b["id"]]
     row = body["data"][0]
     assert row["label"] == "for-b"
+    assert row["kind"] == "agent_api_key"
     assert row["status"] == "active"
+    assert row["raw_status"] == "active"
+    assert row["holder_kind"] == "person"
     assert row["token_prefix"] == to_b["token_prefix"]
     assert row["created_at"]
     assert row["revoked_at"] is None
-    assert row["producer"]["id"] == producer["id"]
-    assert row["producer"]["name"] == "Listing Producer"
-    assert row["producer"]["user_workspace_id"] is None
-    assert row["issued_to"]["id"] == b["id"]
-    assert row["issued_to"]["email"] == b["email"]
+    assert row["agent"]["id"] == producer["id"]
+    assert row["agent"]["name"] == "Listing Producer"
+    assert row["agent"]["user_workspace_id"] is None
+    assert row["holder"]["id"] == b["id"]
+    assert row["holder"]["email"] == b["email"]
     assert "token" not in row
     assert self_key["token"] not in str(body)
 
@@ -177,7 +180,8 @@ def test_issued_keys_hides_revoked_by_default_and_shows_with_include_ended(
     everything = _issued(client, a_headers, include_ended=True)
     by_id = {r["id"]: r for r in everything["data"]}
     assert set(by_id) == {keep["id"], gone["id"]}
-    assert by_id[gone["id"]]["status"] == "revoked_by_issuer"
+    assert by_id[gone["id"]]["status"] == "revoked"
+    assert by_id[gone["id"]]["raw_status"] == "revoked_by_issuer"
     assert by_id[gone["id"]]["revoked_at"] is not None
     assert by_id[keep["id"]]["status"] == "active"
 
@@ -221,7 +225,7 @@ def test_issued_keys_workspace_filter_semantics_and_invalid_id(
 
     ws_rows = _issued(client, a_headers, user_workspace_id=ws["id"])
     assert [r["id"] for r in ws_rows["data"]] == [k_ws["id"]]
-    assert ws_rows["data"][0]["producer"]["user_workspace_id"] == ws["id"]
+    assert ws_rows["data"][0]["agent"]["user_workspace_id"] == ws["id"]
 
     r = client.get(ISSUED_URL, headers=a_headers, params={"user_workspace_id": "not-a-uuid"})
     assert r.status_code == 400
@@ -231,7 +235,7 @@ def test_issued_keys_workspace_filter_semantics_and_invalid_id(
 def test_issued_keys_workspace_filter_excludes_deleted_producer_keys(
     client: TestClient, superuser_token_headers: dict[str, str]
 ) -> None:
-    """A deleted producer's key is producer_removed unfiltered, absent when a workspace filter is set."""
+    """A deleted producer's key is agent_removed (raw producer_removed) unfiltered, absent when a workspace filter is set."""
     a, a_headers = make_developer(client, superuser_token_headers)
     b, _ = create_random_user_with_headers(client)
     producer = setup_producer(client, a_headers, name="Soon Deleted Producer")
@@ -243,7 +247,9 @@ def test_issued_keys_workspace_filter_excludes_deleted_producer_keys(
     rows = _issued(client, a_headers, include_ended="true")
     match = [row for row in rows["data"] if row["id"] == key["id"]]
     assert len(match) == 1
-    assert match[0]["status"] == "producer_removed"
+    assert match[0]["status"] == "agent_removed"
+    assert match[0]["raw_status"] == "producer_removed"
+    assert match[0]["agent"] is None
 
     assert _issued(client, a_headers, user_workspace_id="", include_ended="true")["data"] == []
 
@@ -276,4 +282,4 @@ def test_issued_keys_scopes_reflect_grant_and_ordering_is_producer_then_email_th
         k_zeta["id"],
     ]
     by_id = {r["id"]: r for r in rows}
-    assert by_id[k_first["id"]]["scopes"] == ["orders.read"]
+    assert by_id[k_first["id"]]["details"]["scopes"] == ["orders.read"]

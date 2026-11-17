@@ -148,6 +148,10 @@
 - Soft revoke option (keeps for audit trail)
 - `last_used_at` updated on successful validation
 
+## Issued Credentials listing
+
+`AccessTokenService.list_issued_by` returns the caller's tokens as `IssuedCredentialPublic` rows (kind `a2a_token`, `details`: `mode`, `scope`; status revoked > expired > active; `holder_kind` `external_client`) for `GET /credentials/issued`; see [Credential Sharing (tech)](../../../agents/agent_credentials/credential_sharing_tech.md). Revoking stays `PUT /agents/{agent_id}/access-tokens/{id}` with `is_revoked`.
+
 ---
 
-*Last updated: 2026-06-06*
+*Last updated: 2026-11-17*

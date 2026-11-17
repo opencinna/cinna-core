@@ -27230,7 +27230,84 @@ generated client lagged the schema; the field is the better home and this
 is it.`
 } as const;
 
-export const IssuedAgentApiKeyProducerSchema = {
+export const IssuedA2ATokenDetailsSchema = {
+    properties: {
+        kind: {
+            type: 'string',
+            const: 'a2a_token',
+            title: 'Kind',
+            default: 'a2a_token'
+        },
+        mode: {
+            type: 'string',
+            title: 'Mode'
+        },
+        scope: {
+            type: 'string',
+            title: 'Scope'
+        }
+    },
+    type: 'object',
+    required: ['mode', 'scope'],
+    title: 'IssuedA2ATokenDetails'
+} as const;
+
+export const IssuedACPTokenDetailsSchema = {
+    properties: {
+        kind: {
+            type: 'string',
+            const: 'acp_token',
+            title: 'Kind',
+            default: 'acp_token'
+        },
+        connector_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Connector Id'
+        },
+        connector_name: {
+            type: 'string',
+            title: 'Connector Name'
+        },
+        mode: {
+            type: 'string',
+            title: 'Mode'
+        }
+    },
+    type: 'object',
+    required: ['connector_id', 'connector_name', 'mode'],
+    title: 'IssuedACPTokenDetails'
+} as const;
+
+export const IssuedAgentApiKeyDetailsSchema = {
+    properties: {
+        kind: {
+            type: 'string',
+            const: 'agent_api_key',
+            title: 'Kind',
+            default: 'agent_api_key'
+        },
+        scopes: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Scopes'
+        }
+    },
+    type: 'object',
+    title: 'IssuedAgentApiKeyDetails',
+    description: `\`\`scopes\`\`: the holder's current grant on the agent; None without a grant.`
+} as const;
+
+export const IssuedCredentialAgentSchema = {
     properties: {
         id: {
             type: 'string',
@@ -27267,12 +27344,65 @@ export const IssuedAgentApiKeyProducerSchema = {
     },
     type: 'object',
     required: ['id', 'name'],
-    title: 'IssuedAgentApiKeyProducer',
-    description: 'The producer an issued key calls, as its ISSUER sees it.'
+    title: 'IssuedCredentialAgent',
+    description: 'The agent the token grants access to, as its owner sees it.'
 } as const;
 
-export const IssuedAgentApiKeyPublicSchema = {
+export const IssuedCredentialHolderSchema = {
     properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Email'
+        },
+        full_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Full Name'
+        }
+    },
+    type: 'object',
+    required: ['id'],
+    title: 'IssuedCredentialHolder',
+    description: 'The platform user holding an ``agent_api_key``.'
+} as const;
+
+export const IssuedCredentialHolderKindSchema = {
+    type: 'string',
+    enum: ['person', 'external_client'],
+    title: 'IssuedCredentialHolderKind',
+    description: 'Who holds the token: a platform user, or a client outside the platform.'
+} as const;
+
+export const IssuedCredentialKindSchema = {
+    type: 'string',
+    enum: ['agent_api_key', 'a2a_token', 'acp_token'],
+    title: 'IssuedCredentialKind',
+    description: 'Which token product a row belongs to. Declaration order is sort order.'
+} as const;
+
+export const IssuedCredentialPublicSchema = {
+    properties: {
+        kind: {
+            '$ref': '#/components/schemas/IssuedCredentialKind'
+        },
         id: {
             type: 'string',
             format: 'uuid',
@@ -27292,9 +27422,6 @@ export const IssuedAgentApiKeyPublicSchema = {
         token_prefix: {
             type: 'string',
             title: 'Token Prefix'
-        },
-        status: {
-            '$ref': '#/components/schemas/AgentApiKeyStatus'
         },
         created_at: {
             type: 'string',
@@ -27337,56 +27464,84 @@ export const IssuedAgentApiKeyPublicSchema = {
             ],
             title: 'Revoked At'
         },
-        producer: {
+        agent: {
             anyOf: [
                 {
-                    '$ref': '#/components/schemas/IssuedAgentApiKeyProducer'
+                    '$ref': '#/components/schemas/IssuedCredentialAgent'
                 },
                 {
                     type: 'null'
                 }
             ]
         },
-        issued_to: {
+        holder: {
             anyOf: [
                 {
-                    '$ref': '#/components/schemas/AgentApiKeyUser'
+                    '$ref': '#/components/schemas/IssuedCredentialHolder'
                 },
                 {
                     type: 'null'
                 }
             ]
         },
-        scopes: {
-            anyOf: [
+        holder_kind: {
+            '$ref': '#/components/schemas/IssuedCredentialHolderKind'
+        },
+        status: {
+            '$ref': '#/components/schemas/IssuedCredentialStatus'
+        },
+        raw_status: {
+            type: 'string',
+            title: 'Raw Status'
+        },
+        details: {
+            oneOf: [
                 {
-                    items: {
-                        type: 'string'
-                    },
-                    type: 'array'
+                    '$ref': '#/components/schemas/IssuedAgentApiKeyDetails'
                 },
                 {
-                    type: 'null'
+                    '$ref': '#/components/schemas/IssuedA2ATokenDetails'
+                },
+                {
+                    '$ref': '#/components/schemas/IssuedACPTokenDetails'
                 }
             ],
-            title: 'Scopes'
+            title: 'Details',
+            discriminator: {
+                propertyName: 'kind',
+                mapping: {
+                    a2a_token: '#/components/schemas/IssuedA2ATokenDetails',
+                    acp_token: '#/components/schemas/IssuedACPTokenDetails',
+                    agent_api_key: '#/components/schemas/IssuedAgentApiKeyDetails'
+                }
+            }
         }
     },
     type: 'object',
-    required: ['id', 'label', 'token_prefix', 'status', 'created_at', 'expires_at', 'last_used_at'],
-    title: 'IssuedAgentApiKeyPublic',
-    description: `One key the caller issued to someone else, across all their producers.
+    required: ['kind', 'id', 'token_prefix', 'created_at', 'holder_kind', 'status', 'raw_status', 'details'],
+    title: 'IssuedCredentialPublic',
+    description: `One access token the caller issued for one of their agents.
 
-Never the value. \`\`issued_to\`\` is None when the recipient's account is gone;
-\`\`producer\`\` is None when the producer agent was deleted. \`\`scopes\`\` is the
-recipient's current grant on the producer, None when no grant row exists.`
+\`\`agent\`\` is None when the agent was deleted (only possible for
+\`\`agent_api_key\`\`; A2A and ACP tokens cascade with their agent).
+\`\`holder\`\` is set only for \`\`agent_api_key\`\` and is None when that account
+is gone; \`\`holder_kind\`\` says which case applies so the UI need not infer it.
+\`\`last_used_at\`\` / \`\`revoked_at\`\` are None where the product has no such
+timestamp (A2A and ACP record revocation as a flag only).`
 } as const;
 
-export const IssuedAgentApiKeysPublicSchema = {
+export const IssuedCredentialStatusSchema = {
+    type: 'string',
+    enum: ['active', 'paused', 'expired', 'revoked', 'agent_removed'],
+    title: 'IssuedCredentialStatus',
+    description: 'Normalized status. The last three are terminal (hidden by default).'
+} as const;
+
+export const IssuedCredentialsPublicSchema = {
     properties: {
         data: {
             items: {
-                '$ref': '#/components/schemas/IssuedAgentApiKeyPublic'
+                '$ref': '#/components/schemas/IssuedCredentialPublic'
             },
             type: 'array',
             title: 'Data'
@@ -27398,8 +27553,8 @@ export const IssuedAgentApiKeysPublicSchema = {
     },
     type: 'object',
     required: ['data', 'count'],
-    title: 'IssuedAgentApiKeysPublic',
-    description: `\`\`GET /credentials/issued-keys\`\` response.`
+    title: 'IssuedCredentialsPublic',
+    description: `\`\`GET /credentials/issued\`\` response.`
 } as const;
 
 export const KeyEnvelopeInputSchema = {

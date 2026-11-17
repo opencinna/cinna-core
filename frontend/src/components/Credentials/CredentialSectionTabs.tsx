@@ -12,8 +12,9 @@ export type CredentialSection = "mine" | "automatic" | "bundle"
 
 /**
  * The page's sections: the three server categories, plus "Issued Credentials" —
- * keys the caller gave other people, which are not the caller's credentials
- * at all and so are never a `category` value.
+ * keys and tokens the caller issued for their agents (API keys, A2A and ACP
+ * tokens), which are not the caller's credentials at all and so are never a
+ * `category` value.
  */
 export type CredentialsPageSection = CredentialSection | "issued"
 

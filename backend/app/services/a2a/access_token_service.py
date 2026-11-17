@@ -20,9 +20,17 @@ from app.models import (
     AccessTokenMode,
     AccessTokenScope,
     A2ATokenPayload,
+    IssuedA2ATokenDetails,
+    IssuedCredentialAgent,
+    IssuedCredentialHolderKind,
+    IssuedCredentialKind,
+    IssuedCredentialPublic,
+    IssuedCredentialStatus,
 )
 from app.core.config import settings
 from app.core.security import ALGORITHM
+from app.models.credentials.issued_credential import TERMINAL_ISSUED_STATUSES
+from app.utils import as_utc
 
 logger = logging.getLogger(__name__)
 
@@ -487,3 +495,59 @@ class AccessTokenService:
             return requested_mode == "conversation"
 
         return False
+
+    @staticmethod
+    def list_issued_by(
+        session: Session,
+        owner_id: uuid.UUID,
+        include_ended: bool = False,
+        filter_workspace: bool = False,
+        workspace_id: uuid.UUID | None = None,
+    ) -> list[IssuedCredentialPublic]:
+        """Every A2A token ``owner_id`` created, as issued-credential rows.
+
+        Rows for ``GET /credentials/issued`` (unsorted; the aggregator orders).
+        The token cascades with its agent, so ``agent`` is always set. Status:
+        revoked > expired > active; ended rows only with ``include_ended``.
+        ``filter_workspace`` / ``workspace_id`` filter by the agent's workspace
+        (None = the default workspace). One query; never the value.
+        """
+        statement = (
+            select(AgentAccessToken, Agent)
+            .join(Agent, Agent.id == AgentAccessToken.agent_id)
+            .where(AgentAccessToken.owner_id == owner_id)
+        )
+        if filter_workspace:
+            statement = statement.where(Agent.user_workspace_id == workspace_id)
+
+        now = datetime.now(UTC)
+        result: list[IssuedCredentialPublic] = []
+        for token, agent in session.exec(statement).all():
+            if token.is_revoked:
+                status = IssuedCredentialStatus.REVOKED
+            elif as_utc(token.expires_at) <= now:
+                status = IssuedCredentialStatus.EXPIRED
+            else:
+                status = IssuedCredentialStatus.ACTIVE
+            if not include_ended and status in TERMINAL_ISSUED_STATUSES:
+                continue
+            result.append(
+                IssuedCredentialPublic(
+                    kind=IssuedCredentialKind.A2A_TOKEN,
+                    id=token.id,
+                    label=token.name,
+                    token_prefix=token.token_prefix,
+                    created_at=token.created_at,
+                    expires_at=token.expires_at,
+                    last_used_at=token.last_used_at,
+                    agent=IssuedCredentialAgent.from_agent(agent),
+                    holder_kind=IssuedCredentialHolderKind.EXTERNAL_CLIENT,
+                    status=status,
+                    raw_status=status.value,
+                    details=IssuedA2ATokenDetails(
+                        mode=AccessTokenMode(token.mode).value,
+                        scope=AccessTokenScope(token.scope).value,
+                    ),
+                )
+            )
+        return result

@@ -23,8 +23,18 @@ from app.models.acp.acp_token import (
     ACPTokenPublic,
 )
 from app.models.agents.agent import Agent
+from app.models.credentials.issued_credential import (
+    TERMINAL_ISSUED_STATUSES,
+    IssuedACPTokenDetails,
+    IssuedCredentialAgent,
+    IssuedCredentialHolderKind,
+    IssuedCredentialKind,
+    IssuedCredentialPublic,
+    IssuedCredentialStatus,
+)
 from app.models.users.user import User
 from app.services.users.role_service import RoleService
+from app.utils import as_utc
 
 
 @dataclass(frozen=True)
@@ -138,6 +148,11 @@ class ACPConnectorService:
         )
 
     @staticmethod
+    def _mode_allowed(connector: ACPConnector, owner: User) -> bool:
+        """Building-mode connectors need an owner who is still a developer."""
+        return connector.mode != "building" or RoleService.is_developer(owner)
+
+    @staticmethod
     def authenticate(
         connector_id: uuid.UUID, raw_token: str, db: Session
     ) -> ACPAuthentication | None:
@@ -171,7 +186,7 @@ class ACPConnectorService:
         if rows is None:
             return None
         connector, token, agent, owner = rows
-        if connector.mode == "building" and not RoleService.is_developer(owner):
+        if not ACPConnectorService._mode_allowed(connector, owner):
             return None
         return ACPAuthentication(
             connector=connector, token=token, agent=agent, owner=owner
@@ -183,3 +198,72 @@ class ACPConnectorService:
         token.last_used_at = datetime.now(UTC)
         db.add(token)
         db.commit()
+
+    @staticmethod
+    def list_issued_by(
+        db: Session,
+        owner_id: uuid.UUID,
+        include_ended: bool = False,
+        filter_workspace: bool = False,
+        workspace_id: uuid.UUID | None = None,
+    ) -> list[IssuedCredentialPublic]:
+        """Every token under a connector ``owner_id`` owns, as issued rows.
+
+        Rows for ``GET /credentials/issued`` (unsorted; the aggregator orders).
+        Issuer = the connector's ``owner_id`` AND the agent's owner, the same
+        pair the owner routes gate on, so every row returned is revocable by
+        the caller. Status: revoked > expired > paused (``authenticate`` would
+        reject it: connector/agent/owner inactive, or building mode without the
+        developer role) > active; ended rows only with ``include_ended``. One
+        query plus one owner lookup.
+        """
+        statement = (
+            select(ACPToken, ACPConnector, Agent)
+            .join(ACPConnector, ACPConnector.id == ACPToken.connector_id)
+            .join(Agent, Agent.id == ACPConnector.agent_id)
+            .where(ACPConnector.owner_id == owner_id, Agent.owner_id == owner_id)
+        )
+        if filter_workspace:
+            statement = statement.where(Agent.user_workspace_id == workspace_id)
+
+        owner = db.get(User, owner_id)
+        owner_active = owner is not None and owner.is_active
+        now = datetime.now(UTC)
+        result: list[IssuedCredentialPublic] = []
+        for token, connector, agent in db.exec(statement).all():
+            if token.revoked:
+                status = IssuedCredentialStatus.REVOKED
+            elif as_utc(token.expires_at) <= now:
+                status = IssuedCredentialStatus.EXPIRED
+            elif (
+                not connector.is_active
+                or not agent.is_active
+                or not owner_active
+                or not ACPConnectorService._mode_allowed(connector, owner)
+            ):
+                status = IssuedCredentialStatus.PAUSED
+            else:
+                status = IssuedCredentialStatus.ACTIVE
+            if not include_ended and status in TERMINAL_ISSUED_STATUSES:
+                continue
+            result.append(
+                IssuedCredentialPublic(
+                    kind=IssuedCredentialKind.ACP_TOKEN,
+                    id=token.id,
+                    label=token.label,
+                    token_prefix=token.prefix,
+                    created_at=token.created_at,
+                    expires_at=token.expires_at,
+                    last_used_at=token.last_used_at,
+                    agent=IssuedCredentialAgent.from_agent(agent),
+                    holder_kind=IssuedCredentialHolderKind.EXTERNAL_CLIENT,
+                    status=status,
+                    raw_status=status.value,
+                    details=IssuedACPTokenDetails(
+                        connector_id=connector.id,
+                        connector_name=connector.name,
+                        mode=connector.mode,
+                    ),
+                )
+            )
+        return result

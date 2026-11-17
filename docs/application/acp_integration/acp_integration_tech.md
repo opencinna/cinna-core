@@ -142,8 +142,13 @@ Run `npm run test:acp:ui` from `frontend` to exercise the real components with m
 
 For a stdio ACP client, configure its agent command as `uv run` with the absolute path to `backend/clients/acp/stdio_bridge.py`, supplying the same two environment variables. The bridge emits only JSON-RPC on stdout, reports generic failures on stderr, and rewrites new/load cwd to the remote workspace. It leaves nonempty client MCP lists intact for the server to reject. The POSIX bridge supports macOS/Linux pipes with asynchronous stdout backpressure and a 15-second drain timeout. The backend image includes the client scripts and the development override mounts them for tests. Bridge/client URL validation requires WSS except for loopback WS and rejects embedded credentials, queries, and fragments.
 
+## Issued Credentials listing
+
+`ACPConnectorService.list_issued_by` returns tokens under connectors the caller owns (on agents the caller owns) as `IssuedCredentialPublic` rows (kind `acp_token`, `details`: `connector_id`, `connector_name`, `mode`) for `GET /credentials/issued`. Status: revoked > expired > paused > active; paused when the connector, agent or owner is inactive or `_mode_allowed` fails, the same check `authenticate` applies. See [Credential Sharing (tech)](../../agents/agent_credentials/credential_sharing_tech.md).
+
 ## Changelog
 
 - 2026-09-12: Sized the shared DB pool explicitly (`DB_POOL_SIZE`/`DB_MAX_OVERFLOW`/`DB_POOL_TIMEOUT`/`DB_POOL_RECYCLE`, `pool_pre_ping=True`) and derived the prompt-admission budget from it instead of a fixed constant; added a per-connector sub-quota beneath the global cap; memoized per-chunk streaming authorization for 1s behind the unchanged 5s watchdog guarantee; let the watchdog tolerate up to 2 consecutive unexpected (non-authorization) failures before stopping a turn; clarified the revocation copy on token revoke/delete.
+- 2026-11-17: Added `list_issued_by` and the shared `_mode_allowed` check.
 
 See the [official ACP transport specification](https://agentclientprotocol.com/protocol/v1/transports) and [Python SDK remote transport documentation](https://agentclientprotocol.github.io/python-sdk/web-transport/) for upstream transport status. Cinna's text-only hosted profile deliberately rejects local MCP-server injection and does not claim unrestricted ACP filesystem/terminal conformance.

@@ -4,7 +4,7 @@ domain: application
 one_liner: "Exposes agents to external Agent Client Protocol clients through authenticated WebSocket connectors with persistent conversations, streamed replies, and cancellation."
 docs:
   tech: acp_integration_tech.md
-affects: [agent_sessions, flow_message_ingress, flow_auth_token_taxonomy]
+affects: [agent_credentials, agent_sessions, flow_message_ingress, flow_auth_token_taxonomy]
 ---
 # Agent Client Protocol integration
 
@@ -81,7 +81,10 @@ Remote ACP transport is still experimental in the [official ACP transport docume
 - [Message ingress](../../flows/message_ingress.md) describes the shared streaming pipeline and ACP's distinct authenticated ingress.
 - [Token taxonomy](../../flows/auth_token_taxonomy.md) distinguishes ACP bearer credentials from platform, A2A, and MCP tokens.
 
+Tokens you issue under your connectors also appear in **/credentials › Issued Credentials** (as "ACP token" rows; a row reads *paused* while the connector is inactive or the connection would be rejected for agent, owner or building-mode reasons); see [Credential Sharing — Issued Credentials](../../agents/agent_credentials/credential_sharing.md#issued-credentials-issued).
+
 ## Changelog
 
 - 2026-09-11: Added owner-managed ACP connectors, hashed access tokens, hosted WebSocket sessions, and an external-client stdio bridge.
 - 2026-09-12: Tied the concurrent prompt/replay budget to server database capacity (was a fixed number) and added a per-connector share of it, so capacity errors can arrive sooner under load and one connector can no longer exhaust the whole server's budget; clarified the revoke/delete-token copy shown to owners.
+- 2026-11-17: ACP connector tokens are listed in /credentials › Issued Credentials.

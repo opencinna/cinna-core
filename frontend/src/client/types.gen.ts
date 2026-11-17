@@ -6406,10 +6406,31 @@ export type InviteUserResponse = {
     adopted_existing_account?: boolean;
 };
 
+export type IssuedA2ATokenDetails = {
+    kind?: "a2a_token";
+    mode: string;
+    scope: string;
+};
+
+export type IssuedACPTokenDetails = {
+    kind?: "acp_token";
+    connector_id: string;
+    connector_name: string;
+    mode: string;
+};
+
 /**
- * The producer an issued key calls, as its ISSUER sees it.
+ * ``scopes``: the holder's current grant on the agent; None without a grant.
  */
-export type IssuedAgentApiKeyProducer = {
+export type IssuedAgentApiKeyDetails = {
+    kind?: "agent_api_key";
+    scopes?: (Array<(string)> | null);
+};
+
+/**
+ * The agent the token grants access to, as its owner sees it.
+ */
+export type IssuedCredentialAgent = {
     id: string;
     name: string;
     ui_color_preset?: (string | null);
@@ -6417,33 +6438,63 @@ export type IssuedAgentApiKeyProducer = {
 };
 
 /**
- * One key the caller issued to someone else, across all their producers.
- *
- * Never the value. ``issued_to`` is None when the recipient's account is gone;
- * ``producer`` is None when the producer agent was deleted. ``scopes`` is the
- * recipient's current grant on the producer, None when no grant row exists.
+ * The platform user holding an ``agent_api_key``.
  */
-export type IssuedAgentApiKeyPublic = {
+export type IssuedCredentialHolder = {
     id: string;
-    label: (string | null);
-    token_prefix: string;
-    status: AgentApiKeyStatus;
-    created_at: string;
-    expires_at: (string | null);
-    last_used_at: (string | null);
-    revoked_at?: (string | null);
-    producer?: (IssuedAgentApiKeyProducer | null);
-    issued_to?: (AgentApiKeyUser | null);
-    scopes?: (Array<(string)> | null);
+    email?: (string | null);
+    full_name?: (string | null);
 };
 
 /**
- * ``GET /credentials/issued-keys`` response.
+ * Who holds the token: a platform user, or a client outside the platform.
  */
-export type IssuedAgentApiKeysPublic = {
-    data: Array<IssuedAgentApiKeyPublic>;
+export type IssuedCredentialHolderKind = 'person' | 'external_client';
+
+/**
+ * Which token product a row belongs to. Declaration order is sort order.
+ */
+export type IssuedCredentialKind = 'agent_api_key' | 'a2a_token' | 'acp_token';
+
+/**
+ * One access token the caller issued for one of their agents.
+ *
+ * ``agent`` is None when the agent was deleted (only possible for
+ * ``agent_api_key``; A2A and ACP tokens cascade with their agent).
+ * ``holder`` is set only for ``agent_api_key`` and is None when that account
+ * is gone; ``holder_kind`` says which case applies so the UI need not infer it.
+ * ``last_used_at`` / ``revoked_at`` are None where the product has no such
+ * timestamp (A2A and ACP record revocation as a flag only).
+ */
+export type IssuedCredentialPublic = {
+    kind: IssuedCredentialKind;
+    id: string;
+    label?: (string | null);
+    token_prefix: string;
+    created_at: string;
+    expires_at?: (string | null);
+    last_used_at?: (string | null);
+    revoked_at?: (string | null);
+    agent?: (IssuedCredentialAgent | null);
+    holder?: (IssuedCredentialHolder | null);
+    holder_kind: IssuedCredentialHolderKind;
+    status: IssuedCredentialStatus;
+    raw_status: string;
+    details: (IssuedAgentApiKeyDetails | IssuedA2ATokenDetails | IssuedACPTokenDetails);
+};
+
+/**
+ * ``GET /credentials/issued`` response.
+ */
+export type IssuedCredentialsPublic = {
+    data: Array<IssuedCredentialPublic>;
     count: number;
 };
+
+/**
+ * Normalized status. The last three are terminal (hidden by default).
+ */
+export type IssuedCredentialStatus = 'active' | 'paused' | 'expired' | 'revoked' | 'agent_removed';
 
 export type KeyEnvelopeInput = {
     wrap_method: 'device' | 'recovery' | 'passphrase';
@@ -12835,12 +12886,13 @@ export type CredentialsCreateCredentialData = {
 
 export type CredentialsCreateCredentialResponse = (CredentialPublic);
 
-export type CredentialsReadIssuedAgentApiKeysData = {
+export type CredentialsReadIssuedCredentialsData = {
     includeEnded?: boolean;
+    kind?: (Array<IssuedCredentialKind> | null);
     userWorkspaceId?: (string | null);
 };
 
-export type CredentialsReadIssuedAgentApiKeysResponse = (IssuedAgentApiKeysPublic);
+export type CredentialsReadIssuedCredentialsResponse = (IssuedCredentialsPublic);
 
 export type CredentialsReadCredentialData = {
     id: string;

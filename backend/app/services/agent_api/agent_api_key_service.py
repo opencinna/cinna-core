@@ -58,13 +58,18 @@ from app.models import (
     AgentApiToken,
     AgentApiTokenKind,
     CredentialCreate,
-    IssuedAgentApiKeyProducer,
-    IssuedAgentApiKeyPublic,
-    IssuedAgentApiKeysPublic,
+    IssuedAgentApiKeyDetails,
+    IssuedCredentialAgent,
+    IssuedCredentialHolder,
+    IssuedCredentialHolderKind,
+    IssuedCredentialKind,
+    IssuedCredentialPublic,
+    IssuedCredentialStatus,
     SecurityEventCreate,
     User,
 )
 from app.models.credentials.credential import Credential, CredentialType
+from app.models.credentials.issued_credential import TERMINAL_ISSUED_STATUSES
 from app.models.credentials.link_models import AgentCredentialLink
 from app.models.events.security_event import (
     AGENT_API_EXTERNAL_KEY_CREATED,
@@ -89,6 +94,19 @@ from app.services.agent_api.agent_api_token_service import AgentApiTokenService
 from app.services.events.security_event_service import SecurityEventService
 
 logger = logging.getLogger(__name__)
+
+# The issuer's cross-agent list (GET /credentials/issued) speaks one status
+# vocabulary for every token product; this folds the key's own into it.
+_ISSUED_STATUS_BY_KEY_STATUS: dict[AgentApiKeyStatus, IssuedCredentialStatus] = {
+    AgentApiKeyStatus.ACTIVE: IssuedCredentialStatus.ACTIVE,
+    AgentApiKeyStatus.API_DISABLED: IssuedCredentialStatus.PAUSED,
+    AgentApiKeyStatus.EXTERNAL_ACCESS_PAUSED: IssuedCredentialStatus.PAUSED,
+    AgentApiKeyStatus.EXPIRED: IssuedCredentialStatus.EXPIRED,
+    AgentApiKeyStatus.REVOKED_BY_ISSUER: IssuedCredentialStatus.REVOKED,
+    # Unreachable here (the issuer is the caller) but terminal all the same.
+    AgentApiKeyStatus.ISSUER_REMOVED: IssuedCredentialStatus.REVOKED,
+    AgentApiKeyStatus.PRODUCER_REMOVED: IssuedCredentialStatus.AGENT_REMOVED,
+}
 
 # D23: slug of the producer name, capped, then "-api".
 _SLUG_SEPARATORS = re.compile(r"[^a-z0-9]+")
@@ -419,12 +437,13 @@ class AgentApiKeyService:
         include_ended: bool = False,
         filter_workspace: bool = False,
         workspace_id: uuid.UUID | None = None,
-    ) -> IssuedAgentApiKeysPublic:
+    ) -> list[IssuedCredentialPublic]:
         """Every key ``issuer_id`` issued to someone else, across producers.
 
+        Rows for ``GET /credentials/issued`` (unsorted; the aggregator orders).
         Keys issued to the issuer themself are excluded (they are the caller's
         own credentials); keys whose recipient was deleted are kept with
-        ``issued_to=None``. Terminal keys only with ``include_ended``. When
+        ``holder=None``. Terminal keys only with ``include_ended``. When
         ``filter_workspace`` is set, only keys whose producer sits in
         ``workspace_id`` (None = the default workspace) are returned. All
         lookups are batched; never the value.
@@ -438,7 +457,6 @@ class AgentApiKeyService:
                 (AgentApiToken.subject_user_id.is_(None))
                 | (AgentApiToken.subject_user_id != issuer_id),
             )
-            .order_by(AgentApiToken.created_at.desc())
         )
         if filter_workspace:
             # Outer join: a deleted producer leaves Agent NULL, which would
@@ -449,58 +467,56 @@ class AgentApiKeyService:
         rows = session.exec(statement).all()
 
         now = datetime.now(UTC)
-        keyed = [(token, agent, key_status(token, agent, now)) for token, agent in rows]
-        if not include_ended:
-            keyed = [row for row in keyed if not is_terminal(row[2])]
+        keyed: list[
+            tuple[AgentApiToken, Agent | None, AgentApiKeyStatus, IssuedCredentialStatus]
+        ] = []
+        for token, agent in rows:
+            raw = key_status(token, agent, now)
+            status = _ISSUED_STATUS_BY_KEY_STATUS[raw]
+            if include_ended or status not in TERMINAL_ISSUED_STATUSES:
+                keyed.append((token, agent, raw, status))
 
         users = AgentApiKeyService._load_users(
-            session, [token.subject_user_id for token, _, _ in keyed]
+            session, [token.subject_user_id for token, *_ in keyed]
         )
         scopes = AgentApiKeyService._grant_scopes(
             session,
             {
                 (token.agent_id, token.subject_user_id)
-                for token, _, _ in keyed
+                for token, *_ in keyed
                 if token.agent_id and token.subject_user_id
             },
         )
 
-        data = [
-            IssuedAgentApiKeyPublic(
+        def holder(user_id: uuid.UUID | None) -> IssuedCredentialHolder | None:
+            user = users.get(user_id) if user_id else None
+            if user is None:
+                return None
+            return IssuedCredentialHolder(
+                id=user.id, email=user.email, full_name=user.full_name
+            )
+
+        return [
+            IssuedCredentialPublic(
+                kind=IssuedCredentialKind.AGENT_API_KEY,
                 id=token.id,
                 label=token.label,
                 token_prefix=token.token_prefix,
-                status=status,
                 created_at=token.created_at,
                 expires_at=token.expires_at,
                 last_used_at=token.last_used_at,
                 revoked_at=token.revoked_at,
-                producer=IssuedAgentApiKeyProducer(
-                    id=agent.id,
-                    name=agent.name,
-                    ui_color_preset=agent.ui_color_preset,
-                    user_workspace_id=agent.user_workspace_id,
-                )
-                if agent is not None
-                else None,
-                issued_to=users.get(token.subject_user_id)
-                if token.subject_user_id
-                else None,
-                scopes=scopes.get((token.agent_id, token.subject_user_id)),
+                agent=IssuedCredentialAgent.from_agent(agent),
+                holder=holder(token.subject_user_id),
+                holder_kind=IssuedCredentialHolderKind.PERSON,
+                status=status,
+                raw_status=raw.value,
+                details=IssuedAgentApiKeyDetails(
+                    scopes=scopes.get((token.agent_id, token.subject_user_id))
+                ),
             )
-            for token, agent, status in keyed
+            for token, agent, raw, status in keyed
         ]
-        # Rows arrive newest first; the stable sort keeps that inside each
-        # (producer, recipient) group. Removed producers / recipients sort last.
-        data.sort(
-            key=lambda row: (
-                row.producer is None,
-                (row.producer.name if row.producer else "").lower(),
-                row.issued_to is None,
-                ((row.issued_to.email if row.issued_to else None) or "").lower(),
-            )
-        )
-        return IssuedAgentApiKeysPublic(data=data, count=len(data))
 
     @staticmethod
     def _grant_scopes(

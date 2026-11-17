@@ -2,7 +2,7 @@ import uuid
 import xmlrpc.client
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlmodel import func, select
@@ -22,7 +22,8 @@ from app.models import (
     CredentialsPublic,
     CredentialUpdate,
     CredentialWithData,
-    IssuedAgentApiKeysPublic,
+    IssuedCredentialKind,
+    IssuedCredentialsPublic,
     Message,
     UserWorkspace,
 )
@@ -31,6 +32,9 @@ from app.services.credentials.credentials_service import (
     CredentialInUseError,
 )
 from app.services.credentials.credential_share_service import CredentialShareService
+from app.services.credentials.issued_credentials_service import (
+    IssuedCredentialsService,
+)
 from app.services.agent_api.agent_api_key_service import (
     AgentApiKeyError,
     AgentApiKeyService,
@@ -236,30 +240,37 @@ def read_credentials(
     return CredentialsPublic(data=credentials_public, count=count)
 
 
-@router.get("/issued-keys", response_model=IssuedAgentApiKeysPublic)
-def read_issued_agent_api_keys(
+@router.get("/issued", response_model=IssuedCredentialsPublic)
+def read_issued_credentials(
     session: SessionDep,
     current_user: CurrentUser,
     include_ended: bool = False,
     user_workspace_id: str | None = None,
+    kind: list[IssuedCredentialKind] | None = Query(default=None),
 ) -> Any:
     """
-    Agent API keys the caller issued to OTHER people, across all their producers.
+    Access tokens the caller issued for their agents, across all agents.
 
-    Never the token value. Keys issued to the caller themself are excluded (they
-    are the caller's own credentials). Ended keys (revoked, expired, producer
-    removed) only with ``include_ended``. ``user_workspace_id`` filters by the
-    PRODUCER agent's workspace with the same None / "" / UUID semantics as
-    ``GET /credentials/``. Revoke via
-    ``POST /agents/{agent_id}/agent-api/keys/{key_id}/revoke``.
+    Three kinds: ``agent_api_key`` (Agent REST API keys issued to OTHER people;
+    keys issued to the caller themself are their own credentials and left out),
+    ``a2a_token`` (A2A access tokens) and ``acp_token`` (ACP connector tokens).
+    Never a token value. Ended rows (expired, revoked, agent removed) only with
+    ``include_ended``. ``user_workspace_id`` filters by the AGENT's workspace
+    with the same None / "" / UUID semantics as ``GET /credentials/``; a
+    workspace filter drops rows whose agent was deleted. ``kind`` (repeatable)
+    restricts the kinds. Revoke per kind:
+    ``POST /agents/{agent_id}/agent-api/keys/{id}/revoke``,
+    ``PUT /agents/{agent_id}/access-tokens/{id}`` with ``{"is_revoked": true}``,
+    ``POST /agents/{agent_id}/acp-connectors/{connector_id}/tokens/{id}/revoke``.
     """
     apply_filter, workspace_filter = _parse_workspace_filter(user_workspace_id)
-    return AgentApiKeyService.list_issued_to_others(
+    return IssuedCredentialsService.list_issued(
         session=session,
         issuer_id=current_user.id,
         include_ended=include_ended,
         filter_workspace=apply_filter,
         workspace_id=workspace_filter,
+        kinds=kind,
     )
 
 

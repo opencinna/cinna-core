@@ -227,11 +227,20 @@ AI credentials (LLM provider keys) follow the same 409 / force pattern but have 
 
 ## Credentials Page: Filter Tabs and Category Assignment
 
-The `/credentials` page is a table (the manage-list pattern, `DataTable`) organised by a segmented control with per-section counts: **My Credentials** (default), **Automatic Credentials**, **Bundle Credentials**, and **Issued Credentials**. The last is not a credential category: it lists the agent API keys you issued to other people (`GET /credentials/issued-keys`, see [Agent REST API — Issued Keys](../agent_api/agent_api.md#issued-keys)). The old stacked "My Credentials / Automatic Credentials / Shared with Me" sections are replaced by this single control.
+The `/credentials` page is a table (the manage-list pattern, `DataTable`) organised by a segmented control with per-section counts: **My Credentials** (default), **Automatic Credentials**, **Bundle Credentials**, and **Issued Credentials**. The last is not a credential category: it is the issuer's view of the access tokens you issued for your agents, described in [Issued Credentials](#issued-credentials-issued) below. The old stacked "My Credentials / Automatic Credentials / Shared with Me" sections are replaced by this single control.
 
 The table has two content columns plus a row menu (Copy ID; Delete on owned rows): Name (type glyph, name, key-status badge, incomplete and bundle icons) and a right-aligned badge cluster — a type badge, a share count and an agent count. Each count badge opens a popover (on hover, click, keyboard or tap) that loads its details lazily: shares from `GET /credentials/{id}/shares`, agents from the deletion-impact `affected_own_agents` on owned rows ("Used by N of your agents" on rows shared with you; a shared row's share badge shows the owner). Each list shows 5 names, then "and N more". Below 1024 px only the type badge shows. The column header row is visually hidden (kept for screen readers). Clicking a row opens `/credential/$id`. A search box filters by name, notes, type and owner; paging is client-side at 30 rows per page; loading, error, empty and no-match states are shown in place of the table. The owned list is fetched in full (all pages), no longer capped at 100.
 
 Tab membership is driven by a server-computed `category` field (`"mine"` | `"automatic"` | `"bundle"`) returned on every `CredentialPublic` and `SharedCredentialPublic` response. The frontend filters the merged owned+shared list purely on this field — no client-side re-derivation.
+
+### Issued Credentials (`#issued`)
+
+The section lists every access token you issued for your agents, one row each, never the token value. Three kinds: **API keys** (Agent REST API keys given to *other* people; a key issued to yourself is your own credential and is left out; see [Agent REST API — Issued Keys](../agent_api/agent_api.md#issued-keys)), **A2A tokens** (see [A2A Access Tokens](../../application/a2a_integration/a2a_access_tokens/a2a_access_tokens.md)) and **ACP tokens** (see [ACP Integration](../../application/acp_integration/acp_integration.md)).
+
+- **Columns of meaning.** Kind, label, agent, holder (a person for an API key; "External client" for A2A and ACP tokens, "Deleted user" if the account is gone), a normalized status, created, expires and last used. Rows are ordered by agent name (removed agents last), kind, holder, newest first.
+- **Status** is one vocabulary across the kinds: active, paused, expired, revoked, agent removed. The last three are ended and hidden by default. An ACP token reads *paused* when its connector is inactive or the connection would currently be rejected (agent or owner inactive, or a building-mode connector whose owner is no longer a developer). A2A tokens and ACP tokens cascade away with their agent, so only API keys can show *agent removed*.
+- **Filters menu.** Two radio groups: **Show** (Live only / With ended) and **Type** (All types / API keys / A2A tokens / ACP tokens). The workspace filter applies to the agent's workspace; rows whose agent was deleted drop out while it is active.
+- **Row actions.** Clicking a row opens the agent's integrations tab; **Revoke** (confirmed) is the one inline action and calls each kind's existing revoke route, so permissions are unchanged.
 
 ### Categorization rules
 
@@ -346,7 +355,7 @@ Rules:
 
 ## Changelog
 
-- 2026-11-17: **Issued Credentials** section (`#issued`) on `/credentials`; the New credential picker offers a shareable "Agent API connection" whose credential page is where sharing and re-use are turned on.
+- 2026-11-17: **Issued Credentials** section (`#issued`) on `/credentials`, listing API keys, A2A tokens and ACP tokens you issued (`GET /credentials/issued`); the New credential picker offers a shareable "Agent API connection" whose credential page is where sharing and re-use are turned on.
 - 2026-11-12: **Allow re-use inside bundles** (`allow_bundle_reuse`, agent_api connections): a recipient can provide a shared connection from their own bundle or skill; re-share provenance, release cascade, re-sharer revoke; a credential you do not own is never template-provided.
 
 - Credentials can be shared with user groups (`credential_group_share`); unlink narrows to users without any remaining path.

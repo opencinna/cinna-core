@@ -1,6 +1,16 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router"
-import { AlertTriangle, History, KeyRound, Search, X } from "lucide-react"
+import {
+  AlertTriangle,
+  Bot,
+  History,
+  KeyRound,
+  KeySquare,
+  Layers,
+  Network,
+  Search,
+  X,
+} from "lucide-react"
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react"
 
 import { type CredentialPublic, CredentialsService } from "@/client"
@@ -22,8 +32,12 @@ import { getCredentialTypeMeta } from "@/components/Credentials/credentialTypes"
 import DeleteCredential, {
   deleteCredentialMutationKey,
 } from "@/components/Credentials/DeleteCredential"
-import { IssuedKeysSection } from "@/components/Credentials/IssuedKeysTable"
-import { useIssuedAgentApiKeys } from "@/components/Credentials/issuedKeys"
+import { IssuedCredentialsSection } from "@/components/Credentials/IssuedCredentialsTable"
+import {
+  ISSUED_KIND_LABEL_PLURAL,
+  type IssuedKindFilter,
+  useIssuedCredentials,
+} from "@/components/Credentials/issuedCredentials"
 import PendingCredentials from "@/components/Pending/PendingCredentials"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -66,10 +80,26 @@ const HASH_TO_SECTION: Record<string, CredentialsPageSection> = {
 
 type IssuedFilter = "live" | "all"
 
-/** "Show ended keys", as the page's one Filters menu (§2 Page toolbar). */
+/** Live / with ended, as the page's one Filters menu (§2 Page toolbar). */
 const ISSUED_FILTERS: readonly FilterOption<IssuedFilter>[] = [
-  { value: "live", label: "Live keys", icon: KeyRound },
-  { value: "all", label: "With ended keys", icon: History },
+  { value: "live", label: "Live only", icon: KeyRound },
+  { value: "all", label: "With ended", icon: History },
+]
+
+/** The same menu's second group: which kind of token. */
+const ISSUED_KIND_FILTERS: readonly FilterOption<IssuedKindFilter>[] = [
+  { value: "all", label: "All types", icon: Layers },
+  {
+    value: "agent_api_key",
+    label: ISSUED_KIND_LABEL_PLURAL.agent_api_key,
+    icon: KeySquare,
+  },
+  { value: "a2a_token", label: ISSUED_KIND_LABEL_PLURAL.a2a_token, icon: Bot },
+  {
+    value: "acp_token",
+    label: ISSUED_KIND_LABEL_PLURAL.acp_token,
+    icon: Network,
+  },
 ]
 
 function getInitialSection(): CredentialsPageSection {
@@ -136,6 +166,7 @@ function CredentialsList() {
   const [section, setSection] =
     useState<CredentialsPageSection>(getInitialSection)
   const [issuedFilter, setIssuedFilter] = useState<IssuedFilter>("live")
+  const [issuedKind, setIssuedKind] = useState<IssuedKindFilter>("all")
   const [search, setSearch] = useState("")
   const searchRef = useRef<HTMLInputElement>(null)
   // Both clear controls unmount on click (the X and the no-match link), so
@@ -176,9 +207,13 @@ function CredentialsList() {
     queryFn: () => CredentialsService.getCredentialsSharedWithMe(),
   })
 
-  // Keys the caller gave other people: not their credentials, so a list of
-  // its own, beside the owned + shared one rather than merged into it.
-  const issued = useIssuedAgentApiKeys(workspaceFilter, issuedFilter === "all")
+  // Keys and tokens the caller issued for their agents: not their
+  // credentials, so a list of its own beside the owned + shared one.
+  const issued = useIssuedCredentials(
+    workspaceFilter,
+    issuedFilter === "all",
+    issuedKind,
+  )
 
   // Owned + shared as one list of row models, by name. The server-computed
   // `category` decides each row's section; the page never re-derives it.
@@ -288,13 +323,20 @@ function CredentialsList() {
           onChange={handleSectionChange}
           counts={counts}
         />
-        <div className="flex min-w-40 max-w-80 flex-1 items-center justify-end gap-2">
+        <div className="flex min-w-40 flex-1 flex-wrap items-center justify-end gap-2">
           {section === "issued" && (
             <FilterMenu
               options={ISSUED_FILTERS}
               value={issuedFilter}
               onChange={setIssuedFilter}
               allValue="live"
+              secondary={{
+                label: "Type",
+                options: ISSUED_KIND_FILTERS,
+                value: issuedKind,
+                onChange: setIssuedKind,
+                allValue: "all",
+              }}
             />
           )}
           <div className="relative min-w-40 max-w-64 flex-1">
@@ -306,7 +348,7 @@ function CredentialsList() {
               placeholder="Search"
               aria-label={
                 section === "issued"
-                  ? "Search issued keys by person, agent or key name"
+                  ? "Search issued keys and tokens by holder, agent, label or type"
                   : "Search credentials by name, notes, type or owner"
               }
               className="pl-9 pr-9"
@@ -362,8 +404,10 @@ function CredentialsList() {
       )}
 
       {section === "issued" ? (
-        <IssuedKeysSection
+        <IssuedCredentialsSection
           issued={issued}
+          kind={issuedKind}
+          onShowAllTypes={() => setIssuedKind("all")}
           query={query}
           search={search}
           onClearSearch={clearSearch}
