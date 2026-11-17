@@ -7,6 +7,7 @@ from sqlalchemy import Index, ForeignKeyConstraint, text
 from sqlalchemy.dialects.postgresql import JSON as PG_JSON
 
 from app.models.users.user import User
+from app.models.users.user_group import UserGroupRef
 from app.models.credentials.link_models import AgentCredentialLink
 
 if TYPE_CHECKING:
@@ -335,6 +336,15 @@ class CredentialPublic(CredentialBase):
     # Issued agent_api key rows only: the key's AgentApiKeyStatus value
     # ("active", "revoked_by_issuer", ...). None for every other credential.
     agent_api_key_status: str | None = None
+    # Shared rows only (set by the account CLI listing; the web routes keep
+    # the defaults): the caller's access level, the direct share's source
+    # ("direct", "bundle_install", ...; None for a group-only share) and the
+    # groups through which the caller holds the credential.
+    access_level: str | None = None
+    share_source: str | None = None
+    via_groups: list[UserGroupRef] = []
+    # The owner allows re-use inside bundles and the credential qualifies.
+    allow_bundle_reuse_effective: bool = False
 
 
 # Properties to return via API with decrypted data

@@ -2419,6 +2419,171 @@ plainly. \`\`body\`\` is the decoded text; \`\`is_json\`\` lets the CLI pretty-p
 without re-sniffing the content type.`
 } as const;
 
+export const AccountAgentApiConnectionSchema = {
+    properties: {
+        credential_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Credential Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        slot: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Slot'
+        },
+        is_shared: {
+            type: 'boolean',
+            title: 'Is Shared',
+            default: false
+        },
+        owner_email: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Owner Email'
+        },
+        producer_agent_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Producer Agent Id'
+        },
+        producer_agent_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Producer Agent Name'
+        },
+        base_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Base Url'
+        },
+        spec_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Spec Url'
+        },
+        improvement_requests_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Improvement Requests Url'
+        },
+        key_status: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Key Status'
+        },
+        scopes: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Scopes',
+            default: []
+        },
+        usable: {
+            type: 'boolean',
+            title: 'Usable'
+        },
+        unavailable_reason: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Unavailable Reason'
+        },
+        sdk_lookup: {
+            type: 'string',
+            title: 'Sdk Lookup'
+        }
+    },
+    type: 'object',
+    required: ['credential_id', 'name', 'usable', 'sdk_lookup'],
+    title: 'AccountAgentApiConnection',
+    description: `One \`\`agent_api\`\` credential linked to a consumer agent, as its env sees it.
+
+Never carries a token: the projection is built field by field from the
+linked credential, the bound token and the env-shaped URLs. \`\`base_url\`\` /
+\`\`spec_url\`\` / \`\`improvement_requests_url\`\` use the origin the env calls
+(\`\`AGENT_ENV_BACKEND_URL\`\`); \`\`improvement_requests_url\`\` is null when the
+connection is not usable. \`\`sdk_lookup\`\` is what a skill passes to the SDK
+to find this connection (the slot, else the credential id).`
+} as const;
+
+export const AccountAgentApiConnectionsPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/AccountAgentApiConnection'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'AccountAgentApiConnectionsPublic'
+} as const;
+
 export const AccountAgentApiEnableBodySchema = {
     properties: {
         agent_id: {
@@ -19960,6 +20125,41 @@ export const CredentialPublicSchema = {
                 }
             ],
             title: 'Agent Api Key Status'
+        },
+        access_level: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Access Level'
+        },
+        share_source: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Share Source'
+        },
+        via_groups: {
+            items: {
+                '$ref': '#/components/schemas/UserGroupRef'
+            },
+            type: 'array',
+            title: 'Via Groups',
+            default: []
+        },
+        allow_bundle_reuse_effective: {
+            type: 'boolean',
+            title: 'Allow Bundle Reuse Effective',
+            default: false
         }
     },
     type: 'object',
@@ -20590,6 +20790,41 @@ export const CredentialWithDataSchema = {
                 }
             ],
             title: 'Agent Api Key Status'
+        },
+        access_level: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Access Level'
+        },
+        share_source: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Share Source'
+        },
+        via_groups: {
+            items: {
+                '$ref': '#/components/schemas/UserGroupRef'
+            },
+            type: 'array',
+            title: 'Via Groups',
+            default: []
+        },
+        allow_bundle_reuse_effective: {
+            type: 'boolean',
+            title: 'Allow Bundle Reuse Effective',
+            default: false
         },
         credential_data: {
             additionalProperties: true,

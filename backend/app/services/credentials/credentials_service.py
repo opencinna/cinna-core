@@ -824,6 +824,34 @@ class CredentialsService:
         return rewritten
 
     @staticmethod
+    def agent_api_env_urls(
+        credential_data: dict, *, rewrite_origin: bool, usable: bool
+    ) -> dict:
+        """``base_url``/``spec_url`` as the env sees them, plus the derived
+        ``improvement_requests_url``.
+
+        The single source of the agent_api URL shape an env receives: used by
+        ``prepare_credentials_for_environment`` and by the account CLI's
+        connections listing, so both report the same URLs.
+
+        - ``rewrite_origin``: swap the origin for ``AGENT_ENV_BACKEND_URL``
+          (cloud envs; a Desktop keeps the public origin).
+        - ``usable``: only a usable entry gets ``improvement_requests_url``,
+          derived after the rewrite so it carries the same origin.
+
+        Returns a new dict; the input is never mutated.
+        """
+        if rewrite_origin and credential_data:
+            data = CredentialsService._rewrite_agent_api_urls_for_env(credential_data)
+        else:
+            data = dict(credential_data)
+        if usable and data.get("base_url"):
+            data["improvement_requests_url"] = (
+                str(data["base_url"]).rstrip("/") + AGENT_API_CAPABILITY_REQUESTS_PATH
+            )
+        return data
+
+    @staticmethod
     def filter_credential_data_for_agent_env(credential_type: str, credential_data: dict) -> dict:
         """
         Filter credential data using WHITELIST approach before exposing to agent environment.
@@ -1792,39 +1820,19 @@ If you need credentials for integrations (email, APIs, databases), ask the user 
                     blob.get("key_type", ""),
                 )
 
-        # Rewrite agent_api proxy URLs to the container-reachable backend origin.
-        # The stored credential keeps the PUBLIC URL (for UI display); inside the
-        # container the consumer must call the backend over the internal Docker
-        # network, not the public FRONTEND_HOST. Done before filtering so the
-        # whitelist (base_url/spec_url) and the README both carry the rewritten URL.
-        # Cloud only: a Desktop calls the public origin (D18).
-        for cred in credentials:
-            if (
-                desktop_owner is None
-                and cred["type"] == "agent_api"
-                and cred.get("credential_data")
-            ):
-                cred["credential_data"] = CredentialsService._rewrite_agent_api_urls_for_env(
-                    cred["credential_data"]
-                )
-
-        # Derived after the origin rewrite, so it carries the same origin as
-        # base_url. Only for usable entries: a token-less issued key gets none.
+        # Rewrite agent_api proxy URLs to the container-reachable backend origin
+        # (cloud only: a Desktop calls the public origin, D18) and derive
+        # improvement_requests_url for usable entries. Done before filtering so
+        # the whitelist (base_url/spec_url) and the README both carry the
+        # rewritten URL.
         for cred in credentials:
             data = cred.get("credential_data")
-            if (
-                cred["type"] == "agent_api"
-                and not cred.get("unavailable_reason")
-                and isinstance(data, dict)
-                and data.get("base_url")
-            ):
-                cred["credential_data"] = {
-                    **data,
-                    "improvement_requests_url": (
-                        str(data["base_url"]).rstrip("/")
-                        + AGENT_API_CAPABILITY_REQUESTS_PATH
-                    ),
-                }
+            if cred["type"] == "agent_api" and isinstance(data, dict):
+                cred["credential_data"] = CredentialsService.agent_api_env_urls(
+                    data,
+                    rewrite_origin=desktop_owner is None,
+                    usable=not cred.get("unavailable_reason"),
+                )
 
         # Filter out sensitive fields that should never be exposed to agent environment
         # (e.g., refresh tokens, client secrets for OAuth credentials)

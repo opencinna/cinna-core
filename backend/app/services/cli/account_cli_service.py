@@ -70,6 +70,9 @@ if TYPE_CHECKING:
     )
     from app.models.users.user_workspace import UserWorkspacesPublic
     from app.services.agents.agent_scheduler_service import ManualRunResult
+    from app.services.credentials.credential_share_service import (
+        ResolvedSharedCredential,
+    )
 
 from app.core.config import settings
 from app.models import Agent, AgentEnvironment, User
@@ -127,6 +130,14 @@ class WorkspaceNotFoundError(Exception):
 
 class CredentialDraftRefusedError(Exception):
     """This credential type is never drafted through the account CLI (400)."""
+
+
+class CredentialNotOwnerError(Exception):
+    """The credential is shared with the caller; only its owner may change it (403)."""
+
+    def __init__(self, owner_email: str) -> None:
+        super().__init__("Credential is shared with the caller")
+        self.owner_email = owner_email
 
 
 AGENT_API_DRAFT_REFUSAL = (
@@ -1909,23 +1920,34 @@ class AccountCLIService:
 
     @staticmethod
     def _credential_public(
-        db: Session, credential, key_states: dict | None = None
+        db: Session,
+        credential,
+        key_states: dict | None = None,
+        reusable_ids: set[uuid.UUID] | None = None,
     ) -> "CredentialPublic":
         """Project a ``Credential`` → ``CredentialPublic`` (no secret values).
 
         Mirrors the credentials route's owner projection: ``share_count`` +
         computed completeness ``status`` + the issued-key status of an
         ``agent_api`` credential (``key_states`` is the page's batched
-        ``key_states_by_credential``; omitted = resolve this one row). Decryption
+        ``key_states_by_credential``; omitted = resolve this one row) and
+        ``allow_bundle_reuse_effective`` (``reusable_ids`` is the page's batched
+        ``reuse_effective_ids``; omitted = resolve this one row). Decryption
         happens only to compute the status server-side; the plaintext never
         leaves this function.
         """
         from app.models.credentials.credential import CredentialPublic
         from app.services.agent_api.agent_api_key_status import key_status_value
+        from app.services.credentials.credential_reuse_policy import (
+            reuse_effective_ids,
+        )
         from app.services.credentials.credential_share_service import (
             CredentialShareService,
         )
         from app.services.credentials.credentials_service import CredentialsService
+
+        if reusable_ids is None:
+            reusable_ids = reuse_effective_ids(db, [credential])
 
         share_count = CredentialShareService.get_share_count_for_credential(
             session=db, credential_id=credential.id
@@ -1956,7 +1978,86 @@ class AccountCLIService:
             placeholder_source_id=credential.placeholder_source_id,
             status=status,
             agent_api_key_status=key_status_value(db, credential, key_states),
+            allow_bundle_reuse_effective=credential.id in reusable_ids,
         )
+
+    @staticmethod
+    def _shared_credential_public(
+        db: Session,
+        resolved: "ResolvedSharedCredential",
+        key_states: dict | None = None,
+    ) -> "CredentialPublic":
+        """Project a credential shared WITH the caller → ``CredentialPublic``.
+
+        The owner's metadata plus the share facts (``owner_email``,
+        ``access_level``, ``share_source``, ``via_groups``). ``user_workspace_id``
+        is None (the owner's workspace is not the caller's) and ``share_count``
+        is 0 (an owner concept). As in ``_credential_public``, decryption only
+        computes ``status`` server-side.
+        """
+        from app.models.credentials.credential import CredentialPublic
+        from app.services.agent_api.agent_api_key_status import key_status_value
+        from app.services.credentials.credentials_service import CredentialsService
+
+        credential = resolved.credential
+        credential_data = CredentialsService.decrypt_credential_data(
+            session=db, credential=credential
+        )
+        status = CredentialsService.check_credential_completeness(
+            credential_type=credential.type.value,
+            credential_data=credential_data,
+        )
+        return CredentialPublic(
+            id=credential.id,
+            name=credential.name,
+            type=credential.type,
+            notes=credential.notes,
+            allow_sharing=credential.allow_sharing,
+            allow_template_sharing=credential.allow_template_sharing,
+            allow_bundle_reuse=credential.allow_bundle_reuse,
+            service_uri=credential.service_uri,
+            template_private_fields=list(credential.template_private_fields or []),
+            owner_id=credential.owner_id,
+            user_workspace_id=None,
+            share_count=0,
+            is_shared=True,
+            owner_email=resolved.owner_email,
+            is_placeholder=credential.is_placeholder,
+            placeholder_source_id=credential.placeholder_source_id,
+            status=status,
+            category=CredentialsService.classify_credential_category(
+                is_owned=False,
+                credential_type=credential.type,
+                share_source=resolved.source,
+            ),
+            agent_api_key_status=key_status_value(db, credential, key_states),
+            access_level=resolved.access_level,
+            share_source=resolved.source,
+            via_groups=resolved.via_groups,
+            allow_bundle_reuse_effective=resolved.allow_bundle_reuse_effective,
+        )
+
+    @staticmethod
+    def _refuse_if_shared_with_caller(
+        db: Session, user: User, credential_id: uuid.UUID
+    ) -> None:
+        """Raise ``CredentialNotOwnerError`` when the caller holds a share of
+        someone else's credential. A foreign unshared or missing credential
+        falls through to the existing 400 / 404 paths.
+        """
+        from app.models.credentials.credential import Credential
+        from app.services.credentials.credential_share_service import (
+            CredentialShareService,
+        )
+
+        credential = db.get(Credential, credential_id)
+        if (
+            credential is not None
+            and credential.owner_id != user.id
+            and CredentialShareService.has_share(db, credential_id, user.id)
+        ):
+            owner = db.get(User, credential.owner_id)
+            raise CredentialNotOwnerError(owner.email if owner else "")
 
     @staticmethod
     def _required_fields_for(credential_type: str) -> list[str]:
@@ -1974,8 +2075,12 @@ class AccountCLIService:
     ) -> "CredentialsPublic":
         """List the account user's credentials (metadata only — no values).
 
-        Mirrors ``GET /credentials/`` workspace-filter semantics: ``None`` = all,
-        ``""`` = Default workspace (NULL), a UUID string = that workspace.
+        Owned rows first, then the credentials shared with the caller (direct
+        or through a group; ``is_shared=true``, read-only — see
+        ``CredentialNotOwnerError``), each block sorted by name. The workspace
+        filter mirrors ``GET /credentials/`` (``None`` = all, ``""`` = Default
+        workspace (NULL), a UUID string = that workspace) and applies to owned
+        rows only; shared rows are always listed.
         """
         from app.models.credentials.credential import (
             Credential,
@@ -1984,6 +2089,12 @@ class AccountCLIService:
         )
         from app.services.agent_api.agent_api_key_status import (
             key_states_by_credential,
+        )
+        from app.services.credentials.credential_reuse_policy import (
+            reuse_effective_ids,
+        )
+        from app.services.credentials.credential_share_service import (
+            CredentialShareService,
         )
 
         stmt = select(Credential).where(Credential.owner_id == user.id)
@@ -1997,13 +2108,40 @@ class AccountCLIService:
                     raise WorkspaceNotFoundError("Invalid workspace id")
                 stmt = stmt.where(Credential.user_workspace_id == ws)
 
-        credentials = list(db.exec(stmt).all())
-        key_states = key_states_by_credential(
-            db, [c.id for c in credentials if c.type == CredentialType.AGENT_API]
+        def by_name(credential: Credential) -> tuple[str, str]:
+            return (credential.name.lower(), str(credential.id))
+
+        owned = sorted(db.exec(stmt).all(), key=by_name)
+        # "Owned wins": a credential the caller owns is never listed as shared
+        # (the resolver skips owned rows; also drop any owned row filtered out
+        # by the workspace filter above).
+        owned_ids = set(
+            db.exec(select(Credential.id).where(Credential.owner_id == user.id)).all()
         )
+        shared = sorted(
+            (
+                row
+                for row in CredentialShareService.resolve_shared_with(db, user.id)
+                if row.credential.id not in owned_ids
+            ),
+            key=lambda row: by_name(row.credential),
+        )
+
+        key_states = key_states_by_credential(
+            db,
+            [
+                c.id
+                for c in [*owned, *(row.credential for row in shared)]
+                if c.type == CredentialType.AGENT_API
+            ],
+        )
+        reusable_ids = reuse_effective_ids(db, owned)
         data = [
-            AccountCLIService._credential_public(db, c, key_states)
-            for c in credentials
+            AccountCLIService._credential_public(db, c, key_states, reusable_ids)
+            for c in owned
+        ] + [
+            AccountCLIService._shared_credential_public(db, row, key_states)
+            for row in shared
         ]
         return CredentialsPublic(data=data, count=len(data))
 
@@ -2114,10 +2252,13 @@ class AccountCLIService:
         Builds a ``CredentialUpdate`` from the provided safe fields only and
         delegates to ``CredentialsService.update_credential`` (which re-syncs
         affected agent envs). Raises ``ValueError`` on missing/forbidden (route →
-        404/400).
+        404/400) and ``CredentialNotOwnerError`` (route → 403) for a credential
+        shared with the caller.
         """
         from app.models.credentials.credential import Credential, CredentialUpdate
         from app.services.credentials.credentials_service import CredentialsService
+
+        AccountCLIService._refuse_if_shared_with_caller(db, user, credential_id)
 
         provided = body.model_dump(exclude_unset=True)
         # Defensive: the account body has no credential_data field, but never let
@@ -2160,10 +2301,13 @@ class AccountCLIService:
         """Delete a credential (tier-gated, reuses the blast-radius guard).
 
         Propagates ``CredentialInUseError`` (route → 409 with impact) and
-        ``ValueError`` (route → 404/400). Emits the audit only after a successful
-        delete.
+        ``ValueError`` (route → 404/400) and ``CredentialNotOwnerError`` (route →
+        403) for a credential shared with the caller. Emits the audit only after
+        a successful delete.
         """
         from app.services.credentials.credentials_service import CredentialsService
+
+        AccountCLIService._refuse_if_shared_with_caller(db, user, credential_id)
 
         await CredentialsService.delete_credential(
             session=db,

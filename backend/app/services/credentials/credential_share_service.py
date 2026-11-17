@@ -3,6 +3,7 @@ Credential Share Service - Business logic for credential sharing operations.
 """
 import logging
 from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
@@ -39,6 +40,19 @@ from app.services.users.user_group_access import UserGroupAccess
 from app.services.users.user_service import UserService
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ResolvedSharedCredential:
+    """One credential held by a user through a direct and/or group share."""
+
+    credential: Credential
+    source: str | None  # CredentialShare.source; None for a group-only share
+    shared_at: datetime
+    access_level: str
+    owner_email: str  # "" when the owner row is gone
+    via_groups: list[UserGroupRef]
+    allow_bundle_reuse_effective: bool
 
 
 class CredentialGroupShareError(Exception):
@@ -656,38 +670,34 @@ class CredentialShareService:
         return agent_usages, direct_counts, local_usages
 
     @staticmethod
-    def get_credentials_shared_with_me(
-        session: Session,
-        user_id: UUID
-    ) -> list[SharedCredentialPublic]:
-        """
-        Get all credentials shared with a user.
+    def resolve_shared_with(
+        session: Session, user_id: UUID
+    ) -> list["ResolvedSharedCredential"]:
+        """Every credential ``user_id`` holds through a share, owner excluded.
 
-        Returns one SharedCredentialPublic per credential the user holds through
-        a direct ``CredentialShare`` and/or a group share. When both exist the
-        direct row's ``source`` / ``shared_at`` wins; a group-only row has
-        ``source=None`` (classifies as "mine") and the earliest group share's
-        ``shared_at``. ``via_groups`` names the groups either way.
+        The single resolver behind the web ``/credentials/shared-with-me`` list
+        and the account CLI's credential listing. One row per credential the
+        user holds through a direct ``CredentialShare`` and/or a group share.
+        When both exist the direct row's ``source`` / ``shared_at`` wins; a
+        group-only row has ``source=None`` and the earliest group share's
+        ``shared_at``. ``via_groups`` names the groups either way. Credentials
+        the user owns are skipped (the owner never holds a share of their own).
         """
-        # Query all shares where user is the recipient
-        statement = select(CredentialShare).where(
-            CredentialShare.shared_with_user_id == user_id
-        )
-        shares = session.exec(statement).all()
+        shares = session.exec(
+            select(CredentialShare).where(
+                CredentialShare.shared_with_user_id == user_id
+            )
+        ).all()
 
-        # Resolve all credentials first, then batch the agent-usage counts so we
-        # never issue a per-row count query (avoids the N+1 flagged in the plan).
         # A row is (source, shared_at, access_level, credential).
-        resolved: list[tuple[str | None, datetime, str, Credential]] = []
+        rows: list[tuple[str | None, datetime, str, Credential]] = []
         seen: set[UUID] = set()
         for share in shares:
             credential = session.get(Credential, share.credential_id)
-            if not credential:
-                continue  # Skip if credential was deleted
+            if not credential or credential.owner_id == user_id:
+                continue  # deleted, or the caller's own credential
             seen.add(credential.id)
-            resolved.append(
-                (share.source, share.shared_at, share.access_level, credential)
-            )
+            rows.append((share.source, share.shared_at, share.access_level, credential))
 
         group_rows = session.exec(
             select(Credential, func.min(CredentialGroupShare.shared_at))
@@ -707,24 +717,54 @@ class CredentialShareService:
             if credential.id in seen:
                 continue
             seen.add(credential.id)
-            resolved.append((None, shared_at, "read", credential))
+            rows.append((None, shared_at, "read", credential))
 
-        credential_ids = [credential.id for *_, credential in resolved]
+        if not rows:
+            return []
+
+        credentials = [credential for *_, credential in rows]
         groups_by_credential = CredentialShareService.via_groups(
-            session, user_id=user_id, credential_ids=credential_ids
+            session, user_id=user_id, credential_ids=[c.id for c in credentials]
         )
+        reusable_ids = reuse_effective_ids(session, credentials)
+        owner_ids = {credential.owner_id for credential in credentials}
+        owner_emails = dict(
+            session.exec(
+                select(User.id, User.email).where(col(User.id).in_(owner_ids))
+            ).all()
+        )
+        return [
+            ResolvedSharedCredential(
+                credential=credential,
+                source=source,
+                shared_at=shared_at,
+                access_level=access_level,
+                owner_email=owner_emails.get(credential.owner_id) or "",
+                via_groups=groups_by_credential.get(credential.id, []),
+                allow_bundle_reuse_effective=credential.id in reusable_ids,
+            )
+            for source, shared_at, access_level, credential in rows
+        ]
+
+    @staticmethod
+    def get_credentials_shared_with_me(
+        session: Session,
+        user_id: UUID
+    ) -> list[SharedCredentialPublic]:
+        """
+        Get all credentials shared with a user (web projection of
+        ``resolve_shared_with``), with recipient-scoped agent usage counts.
+        """
+        resolved = CredentialShareService.resolve_shared_with(session, user_id)
         usage_counts = CredentialsService.get_agent_usage_counts(
             session=session,
-            credential_ids=credential_ids,
+            credential_ids=[row.credential.id for row in resolved],
             owner_scope=user_id,  # recipient-scoped: agents *of mine* using it
         )
 
-        reusable_ids = reuse_effective_ids(
-            session, [credential for *_, credential in resolved]
-        )
         result = []
-        for source, shared_at, access_level, credential in resolved:
-            owner = session.get(User, credential.owner_id)
+        for row in resolved:
+            credential = row.credential
             # `agent_api_kind` is deliberately omitted: this projection is for
             # credentials shared WITH the caller, and a shared row's category
             # never depends on its type (the is_owned=False branch decides on
@@ -735,7 +775,7 @@ class CredentialShareService:
             category = CredentialsService.classify_credential_category(
                 is_owned=False,
                 credential_type=credential.type,
-                share_source=source,
+                share_source=row.source,
             )
             result.append(SharedCredentialPublic(
                 id=credential.id,
@@ -743,15 +783,15 @@ class CredentialShareService:
                 type=credential.type.value,
                 notes=credential.notes,
                 owner_id=credential.owner_id,
-                owner_email=owner.email if owner else "",
-                shared_at=shared_at,
-                access_level=access_level,
+                owner_email=row.owner_email,
+                shared_at=row.shared_at,
+                access_level=row.access_level,
                 category=category,
-                source=source,
+                source=row.source,
                 agent_usage_count=usage_counts.get(credential.id, 0),
                 used_in_bundle=False,
-                via_groups=groups_by_credential.get(credential.id, []),
-                allow_bundle_reuse_effective=credential.id in reusable_ids,
+                via_groups=row.via_groups,
+                allow_bundle_reuse_effective=row.allow_bundle_reuse_effective,
             ))
 
         return result

@@ -125,6 +125,39 @@ export type AccountAgentApiCallResult = {
 };
 
 /**
+ * One ``agent_api`` credential linked to a consumer agent, as its env sees it.
+ *
+ * Never carries a token: the projection is built field by field from the
+ * linked credential, the bound token and the env-shaped URLs. ``base_url`` /
+ * ``spec_url`` / ``improvement_requests_url`` use the origin the env calls
+ * (``AGENT_ENV_BACKEND_URL``); ``improvement_requests_url`` is null when the
+ * connection is not usable. ``sdk_lookup`` is what a skill passes to the SDK
+ * to find this connection (the slot, else the credential id).
+ */
+export type AccountAgentApiConnection = {
+    credential_id: string;
+    name: string;
+    slot?: (string | null);
+    is_shared?: boolean;
+    owner_email?: (string | null);
+    producer_agent_id?: (string | null);
+    producer_agent_name?: (string | null);
+    base_url?: (string | null);
+    spec_url?: (string | null);
+    improvement_requests_url?: (string | null);
+    key_status?: (string | null);
+    scopes?: Array<(string)>;
+    usable: boolean;
+    unavailable_reason?: (string | null);
+    sdk_lookup: string;
+};
+
+export type AccountAgentApiConnectionsPublic = {
+    data: Array<AccountAgentApiConnection>;
+    count: number;
+};
+
+/**
  * Toggle a producer agent's REST API on/off — ``cinna agent-api enable``.
  *
  * Mirrors the UI's ``PUT /agents/{id}`` ``agent_api_enabled`` toggle, but
@@ -4630,6 +4663,10 @@ export type CredentialPublic = {
     agent_usage_count?: number;
     used_in_bundle?: boolean;
     agent_api_key_status?: (string | null);
+    access_level?: (string | null);
+    share_source?: (string | null);
+    via_groups?: Array<UserGroupRef>;
+    allow_bundle_reuse_effective?: boolean;
 };
 
 /**
@@ -4778,6 +4815,10 @@ export type CredentialWithData = {
     agent_usage_count?: number;
     used_in_bundle?: boolean;
     agent_api_key_status?: (string | null);
+    access_level?: (string | null);
+    share_source?: (string | null);
+    via_groups?: Array<UserGroupRef>;
+    allow_bundle_reuse_effective?: boolean;
     credential_data: {
         [key: string]: unknown;
     };
@@ -12592,6 +12633,55 @@ export type CliAccountAgentApiSetScopesData = {
 };
 
 export type CliAccountAgentApiSetScopesResponse = (AccountAgentApiScopesResult);
+
+export type CliAccountListAgentApiConnectionsData = {
+    agentId: string;
+};
+
+export type CliAccountListAgentApiConnectionsResponse = (AccountAgentApiConnectionsPublic);
+
+export type CliAccountAgentApiConnectionSpecData = {
+    agentId: string;
+    credentialId: string;
+};
+
+export type CliAccountAgentApiConnectionSpecResponse = (unknown);
+
+export type CliAccountFileCapabilityRequestData = {
+    agentId: string;
+    credentialId: string;
+    requestBody: {
+        title: string;
+        need: string;
+        proposed_endpoint?: ({
+    method?: (string | null);
+    path?: (string | null);
+    params?: (Array<{
+    name: string;
+    in?: (string | null);
+    type?: (string | null);
+    description?: (string | null);
+}> | null);
+    response_fields?: (Array<{
+    name: string;
+    type?: (string | null);
+    description?: (string | null);
+}> | null);
+} | null);
+        example_request?: (string | null);
+        example_response?: (string | null);
+        spec_version_seen?: (string | null);
+    };
+};
+
+export type CliAccountFileCapabilityRequestResponse = (AgentApiCapabilityRequestPublic);
+
+export type CliAccountListCapabilityRequestsData = {
+    agentId: string;
+    credentialId: string;
+};
+
+export type CliAccountListCapabilityRequestsResponse = (AgentApiCapabilityRequestsPublic);
 
 export type CliAccountRestartEnvData = {
     agentId: string;

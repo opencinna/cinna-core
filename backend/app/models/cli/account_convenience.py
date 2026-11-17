@@ -409,3 +409,40 @@ class ContextPackageVersionPublic(SQLModel):
     """
 
     version: str
+
+
+class AccountAgentApiConnection(SQLModel):
+    """One ``agent_api`` credential linked to a consumer agent, as its env sees it.
+
+    Never carries a token: the projection is built field by field from the
+    linked credential, the bound token and the env-shaped URLs. ``base_url`` /
+    ``spec_url`` / ``improvement_requests_url`` use the origin the env calls
+    (``AGENT_ENV_BACKEND_URL``); ``improvement_requests_url`` is null when the
+    connection is not usable. ``sdk_lookup`` is what a skill passes to the SDK
+    to find this connection (the slot, else the credential id).
+    """
+
+    credential_id: uuid.UUID
+    name: str
+    slot: str | None = None
+    is_shared: bool = False
+    owner_email: str | None = None
+    producer_agent_id: uuid.UUID | None = None
+    producer_agent_name: str | None = None
+    base_url: str | None = None
+    spec_url: str | None = None
+    improvement_requests_url: str | None = None
+    # AgentApiKeyStatus value ("active", "revoked_by_issuer", "producer_removed",
+    # "api_disabled", ...); null when the credential never reaches the env.
+    key_status: str | None = None
+    scopes: list[str] = []
+    usable: bool
+    # "key_revoked" | "key_expired" | "key_paused" | "not_delivered" |
+    # "placeholder"; null when usable.
+    unavailable_reason: str | None = None
+    sdk_lookup: str
+
+
+class AccountAgentApiConnectionsPublic(SQLModel):
+    data: list[AccountAgentApiConnection]
+    count: int

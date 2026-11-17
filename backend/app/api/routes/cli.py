@@ -25,7 +25,12 @@ from fastapi import (
     WebSocket,
     status,
 )
-from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    JSONResponse,
+    PlainTextResponse,
+    StreamingResponse,
+)
 from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 
@@ -64,6 +69,7 @@ from app.models.cli.account_agent import AccountAgentsPublic
 from app.models.cli.cli_building_context import CLIBuildingContext
 from app.models.cli.account_convenience import (
     AccountAgentApiAccess,
+    AccountAgentApiConnectionsPublic,
     AccountAgentApiCallBody,
     AccountAgentApiCallResult,
     AccountAgentApiEnableBody,
@@ -113,6 +119,9 @@ from app.models.credentials.credential import (
 )
 from app.models.files.file_upload import FileUploadPublic
 from app.models.improvement.agent_improvement_request import (
+    CAPABILITY_REQUEST_BODY_SHAPE,
+    AgentApiCapabilityRequestPublic,
+    AgentApiCapabilityRequestsPublic,
     ImprovementRequestDetailPublic,
     ImprovementRequestUpdate,
     ImprovementRequestsPublic,
@@ -127,6 +136,7 @@ from app.services.cli.account_api_proxy_service import AccountApiProxyService
 from app.services.cli.account_cli_service import (
     AccountCLIService,
     CredentialDraftRefusedError,
+    CredentialNotOwnerError,
     WorkspaceNotFoundError,
 )
 from app.services.cli.cli_service import CLIService
@@ -138,6 +148,12 @@ from app.services.cli.device_login_service import (
 from app.services.artifacts.artifact_link_service import ArtifactLinkService
 from app.services.artifacts.artifact_service import ArtifactService
 from app.services.files.file_service import FileService
+from app.services.improvement.capability_request_body import (
+    CapabilityRequestBodyError,
+    capability_request_openapi_extra,
+    parse_capability_request_body,
+    reject_oversized_content_length,
+)
 from app.services.improvement.improvement_download_service import (
     archive_response as improvement_archive_response,
 )
@@ -1297,6 +1313,169 @@ async def account_agent_api_set_scopes(
         _raise_agent_api_coded(e)
 
 
+# ── Agent-API connections of a consumer agent (``cinna agent-api connections``,
+# ``cinna agent-api request``) ─────────────────────────────────────────────
+# What the consumer agent's env sees, from the account workspace: the linked
+# ``agent_api`` credentials (never a token), the producer's spec, and filing /
+# listing capability requests with the linked connection (server-side, same
+# service, limits and attribution as the env's ``_cinna`` route). Strictly the
+# caller's own consumer agents; every 404 is ``not_found`` (no leak); 409
+# ``connection_unusable`` when the connection would not work in the env.
+
+
+@router.get(
+    "/account/agents/{agent_id}/agent-api-connections",
+    response_model=AccountAgentApiConnectionsPublic,
+)
+def account_list_agent_api_connections(
+    agent_id: uuid.UUID,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """
+    The ``agent_api`` credentials linked to a consumer agent, as its env sees
+    them: URLs on the env's origin, ``improvement_requests_url`` (null when not
+    usable), status, the caller's live scopes and ``sdk_lookup``. Never a token.
+    """
+    from app.services.agent_api.agent_api_consumer_connection_service import (
+        AgentApiConsumerConnectionService,
+    )
+    from app.services.agent_api.agent_api_service import AgentApiError
+
+    try:
+        return AgentApiConsumerConnectionService.list_connections(
+            db, account_ctx.user, agent_id
+        )
+    except AgentApiError as e:
+        _raise_agent_api_coded(e)
+
+
+@router.get("/account/agents/{agent_id}/agent-api-connections/{credential_id}/spec")
+async def account_agent_api_connection_spec(
+    agent_id: uuid.UUID,
+    credential_id: uuid.UUID,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """
+    The producer's OpenAPI spec through the linked connection (raw JSON, as
+    ``spec_url`` serves it to the env). Refusals: 404 ``not_found``, 409
+    ``connection_unusable``, 403 ``spec_not_exposed``, 400 ``api_disabled``,
+    502 ``producer_error``, 503 ``env_unavailable``.
+    """
+    from app.services.agent_api.agent_api_consumer_connection_service import (
+        AgentApiConsumerConnectionService,
+    )
+    from app.services.agent_api.agent_api_service import AgentApiError
+
+    try:
+        spec = await AgentApiConsumerConnectionService.get_spec(
+            db, account_ctx.user, agent_id, credential_id
+        )
+    except AgentApiError as e:
+        _raise_agent_api_coded(e)
+    return JSONResponse(content=spec)
+
+
+def _raise_capability_body_coded(e: CapabilityRequestBodyError) -> NoReturn:
+    """The shared body parser's refusal as a coded detail (422 keeps the
+    public route's ``message`` / ``errors`` / ``expected``)."""
+    if e.status_code == 422:
+        detail: dict[str, Any] = {
+            "code": "invalid_capability_request",
+            "message": e.message,
+            "errors": e.errors,
+            "expected": CAPABILITY_REQUEST_BODY_SHAPE,
+        }
+    elif e.status_code == 413:
+        detail = {"code": "too_large", "message": e.message}
+    else:
+        detail = {"code": "invalid_request", "message": e.message}
+    raise HTTPException(status_code=e.status_code, detail=detail)
+
+
+@router.post(
+    "/account/agents/{agent_id}/agent-api-connections/{credential_id}/capability-requests",
+    response_model=AgentApiCapabilityRequestPublic,
+    status_code=201,
+    openapi_extra=capability_request_openapi_extra(),
+)
+async def account_file_capability_request(
+    agent_id: uuid.UUID,
+    credential_id: uuid.UUID,
+    request: Request,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """
+    File a capability request on the connection's producer, as the consumer
+    agent's env would (``AgentApiCapabilityRequestCreate``, read raw after
+    auth). Developer-gated. Shares the env's per-requester rate limit (429
+    ``rate_limited`` with ``Retry-After``). Refusals: 404 ``not_found``, 409
+    ``connection_unusable``, 413 ``too_large``, 422
+    ``invalid_capability_request``.
+    """
+    from app.services.agent_api.agent_api_consumer_connection_service import (
+        AgentApiConsumerConnectionService,
+    )
+    from app.services.agent_api.agent_api_service import AgentApiError
+
+    _require_developer_account(account_ctx)
+    try:
+        resolved = AgentApiConsumerConnectionService.resolve_connection(
+            db, account_ctx.user, agent_id, credential_id
+        )
+    except AgentApiError as e:
+        _raise_agent_api_coded(e)
+
+    try:
+        reject_oversized_content_length(request.headers.get("content-length"))
+        body = parse_capability_request_body(await request.body())
+    except CapabilityRequestBodyError as e:
+        _raise_capability_body_coded(e)
+
+    try:
+        return await AgentApiConsumerConnectionService.file_capability_request(
+            db, account_ctx.user, resolved, body
+        )
+    except ImprovementRequestDenied as e:
+        headers = (
+            {"Retry-After": str(e.retry_after)} if e.retry_after is not None else None
+        )
+        raise HTTPException(
+            status_code=e.status_code,
+            detail={"code": e.reason, "message": e.message},
+            headers=headers,
+        )
+
+
+@router.get(
+    "/account/agents/{agent_id}/agent-api-connections/{credential_id}/capability-requests",
+    response_model=AgentApiCapabilityRequestsPublic,
+)
+def account_list_capability_requests(
+    agent_id: uuid.UUID,
+    credential_id: uuid.UUID,
+    db: SessionDep,
+    account_ctx: AccountCLIContextDep,
+) -> Any:
+    """
+    The caller's own capability requests on the connection's producer, newest
+    first (≤ 50). Refusals: 404 ``not_found``, 409 ``connection_unusable``.
+    """
+    from app.services.agent_api.agent_api_consumer_connection_service import (
+        AgentApiConsumerConnectionService,
+    )
+    from app.services.agent_api.agent_api_service import AgentApiError
+
+    try:
+        return AgentApiConsumerConnectionService.list_capability_requests(
+            db, account_ctx.user, agent_id, credential_id
+        )
+    except AgentApiError as e:
+        _raise_agent_api_coded(e)
+
+
 @router.post(
     "/account/agents/{agent_id}/restart-env",
     response_model=AccountRestartEnvResult,
@@ -1759,6 +1938,20 @@ def account_list_credential_types(
     return AccountCLIService.list_credential_types()
 
 
+def _raise_not_owner(e: CredentialNotOwnerError) -> NoReturn:
+    """403 for a write on a credential someone shared with the caller."""
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={
+            "code": "not_owner",
+            "message": (
+                f"This credential is shared with you by {e.owner_email}; "
+                "only the owner can change it."
+            ),
+        },
+    )
+
+
 @router.get("/account/credentials", response_model=CredentialsPublic)
 def account_list_credentials(
     db: SessionDep,
@@ -1766,12 +1959,18 @@ def account_list_credentials(
     user_workspace_id: str | None = None,
 ) -> Any:
     """
-    List the account user's credentials (metadata only — no secret values).
+    List the account user's credentials (metadata only — no secret values):
+    the ones they own, then the ones shared with them (direct or through a
+    group), each block sorted by name.
 
-    ``user_workspace_id`` follows the standard filter semantics: omitted = all,
-    ``""`` = Default workspace, a UUID = that workspace. Each row carries a
-    ``status`` (``complete`` / ``incomplete``) so the orchestrator can see which
-    drafts still need the user to fill them.
+    ``user_workspace_id`` follows the standard filter semantics (omitted = all,
+    ``""`` = Default workspace, a UUID = that workspace) and filters owned rows
+    only; shared rows are always listed. A shared row has ``is_shared=true``,
+    ``owner_email``, ``access_level``, ``share_source`` (null for a group-only
+    share), ``via_groups`` and ``user_workspace_id=null``; it is read-only
+    (PUT / DELETE answer 403 ``not_owner``). Each row carries a ``status``
+    (``complete`` / ``incomplete``) so the orchestrator can see which drafts
+    still need the user to fill them.
     """
     try:
         return AccountCLIService.list_credentials(
@@ -1819,7 +2018,7 @@ async def account_update_credential(
     Update a credential's metadata only (never its secret value).
 
     ``require_developer``-gated. 404 if the credential doesn't exist or isn't
-    owned by the caller.
+    owned by the caller; 403 ``not_owner`` if it is shared with the caller.
     """
     _require_developer_account(account_ctx)
     try:
@@ -1830,6 +2029,8 @@ async def account_update_credential(
             body=body,
             request=request,
         )
+    except CredentialNotOwnerError as e:
+        _raise_not_owner(e)
     except ValueError as e:
         _raise_credential_value_error(e)
 
@@ -1847,7 +2048,8 @@ async def account_delete_credential(
 
     ``require_developer``-gated. 409 (with the structured deletion impact) when
     the credential is publisher-provided in a published bundle with active
-    foreign installs, unless ``?force=true``. 404 if missing / not owned.
+    foreign installs, unless ``?force=true``. 404 if missing / not owned;
+    403 ``not_owner`` if it is shared with the caller.
     """
     from app.services.credentials.credentials_service import CredentialInUseError
 
@@ -1861,6 +2063,8 @@ async def account_delete_credential(
             request=request,
         )
         return Message(message="Credential deleted successfully")
+    except CredentialNotOwnerError as e:
+        _raise_not_owner(e)
     except CredentialInUseError as e:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

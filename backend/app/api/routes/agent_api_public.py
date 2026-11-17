@@ -31,14 +31,11 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import ValidationError
 
 from app.api.deps import SessionDep
 from app.models import Agent, AgentApiToken, AgentApiTokenKind, User
 from app.models.improvement.agent_improvement_request import (
     CAPABILITY_REQUEST_BODY_SHAPE,
-    MAX_CAPABILITY_REQUEST_BODY_BYTES,
-    AgentApiCapabilityRequestCreate,
     AgentApiCapabilityRequestPublic,
     AgentApiCapabilityRequestsPublic,
 )
@@ -58,6 +55,12 @@ from app.services.agent_api.agent_api_service import (
 )
 from app.services.agent_api.agent_api_token_service import AgentApiTokenService
 from app.services.environments.environment_service import EnvironmentService
+from app.services.improvement.capability_request_body import (
+    CapabilityRequestBodyError,
+    capability_request_openapi_extra,
+    parse_capability_request_body,
+    reject_oversized_content_length,
+)
 from app.services.improvement.improvement_request_service import (
     ImprovementRequestDenied,
     ImprovementRequestService,
@@ -199,56 +202,11 @@ _CAPABILITY_REQUESTS_ROUTE = "improvement-requests"
 _CAPABILITY_REQUESTS_METHODS = ("GET", "POST")
 
 
-def _inline_json_schema(model: type) -> dict:
-    """The model's JSON schema with its ``$defs`` inlined.
-
-    The body is read raw (so FastAPI does not document it); this schema goes
-    into ``openapi_extra``, where a ``#/$defs/...`` reference would not resolve.
-    The capability-request models are not recursive.
-    """
-    schema = model.model_json_schema(by_alias=True)
-    defs = schema.pop("$defs", {})
-
-    def _resolve(node):
-        if isinstance(node, dict):
-            ref = node.get("$ref")
-            if isinstance(ref, str) and ref.startswith("#/$defs/"):
-                return _resolve(defs[ref.split("/")[-1]])
-            return {k: _resolve(v) for k, v in node.items()}
-        if isinstance(node, list):
-            return [_resolve(v) for v in node]
-        return node
-
-    return _resolve(schema)
-
-
-def _reject_oversized_content_length(request: Request) -> None:
-    """413 from the declared length alone, before any body is read."""
-    declared = request.headers.get("content-length")
-    if declared is None:
-        return
-    try:
-        too_large = int(declared) > MAX_CAPABILITY_REQUEST_BODY_BYTES
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid Content-Length")
-    if too_large:
-        raise HTTPException(status_code=413, detail="Request body too large")
-
-
 @router.post(
     "/_cinna/improvement-requests",
     response_model=AgentApiCapabilityRequestPublic,
     status_code=201,
-    openapi_extra={
-        "requestBody": {
-            "required": True,
-            "content": {
-                "application/json": {
-                    "schema": _inline_json_schema(AgentApiCapabilityRequestCreate)
-                }
-            },
-        }
-    },
+    openapi_extra=capability_request_openapi_extra(),
 )
 async def consumer_create_capability_request(
     agent_id: uuid.UUID,
@@ -264,29 +222,20 @@ async def consumer_create_capability_request(
     """
     caller = await _resolve_identified_caller(session, request, agent_id)
 
-    _reject_oversized_content_length(request)
-    raw = await request.body()
-    # Also checked on the bytes read: chunked uploads carry no Content-Length.
-    if len(raw) > MAX_CAPABILITY_REQUEST_BODY_BYTES:
-        raise HTTPException(status_code=413, detail="Request body too large")
     try:
-        body = AgentApiCapabilityRequestCreate.model_validate_json(raw or b"{}")
-    except ValidationError as e:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "message": (
-                    "Invalid capability request body. Unknown keys are rejected; "
-                    "send only the fields in `expected`."
-                ),
-                "errors": jsonable_encoder(
-                    e.errors(
-                        include_url=False, include_context=False, include_input=False
-                    )
-                ),
-                "expected": CAPABILITY_REQUEST_BODY_SHAPE,
-            },
-        )
+        reject_oversized_content_length(request.headers.get("content-length"))
+        body = parse_capability_request_body(await request.body())
+    except CapabilityRequestBodyError as e:
+        if e.status_code == 422:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "message": e.message,
+                    "errors": e.errors,
+                    "expected": CAPABILITY_REQUEST_BODY_SHAPE,
+                },
+            )
+        raise HTTPException(status_code=e.status_code, detail=e.message)
 
     try:
         row = await ImprovementRequestService.create_from_agent_api(

@@ -72,6 +72,24 @@ def key_status(
     return AgentApiKeyStatus.ACTIVE
 
 
+def connection_status(
+    token: AgentApiToken, agent: Agent | None
+) -> AgentApiKeyStatus:
+    """Status of a ``kind="connection"`` token, on the same vocabulary.
+
+    Connections never expire and the external-access kill switch does not
+    apply to them (see ``AgentApiTokenService.validate_token``), so only
+    revocation, a removed producer and a disabled API are checked.
+    """
+    if token.revoked_at is not None or not token.is_active:
+        return AgentApiKeyStatus.REVOKED_BY_ISSUER
+    if token.agent_id is None or agent is None:
+        return AgentApiKeyStatus.PRODUCER_REMOVED
+    if not agent.agent_api_enabled:
+        return AgentApiKeyStatus.API_DISABLED
+    return AgentApiKeyStatus.ACTIVE
+
+
 def is_terminal(status: AgentApiKeyStatus) -> bool:
     """Terminal statuses never recover; rotate / reveal / spec refuse them."""
     return status in TERMINAL_KEY_STATUSES
