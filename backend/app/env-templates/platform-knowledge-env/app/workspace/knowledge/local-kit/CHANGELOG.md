@@ -16,6 +16,15 @@ folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
 
+## 1.24.2 — the CLI reaches agent API connections
+
+Wording only. Every 1.x folder stays valid.
+
+- **`guides/04-credentials.md`** — a note that capability requests and agent
+  API connections can also be reached through `cinna agent-api connections` and
+  `cinna agent-api request file|list`, which use the account CLI routes under
+  `/cli/account/agents/{agent_id}/agent-api-connections`.
+
 ## 1.24.1 — the capability request body, stated exactly
 
 Wording, plus a richer 422 `detail`. Every 1.x folder stays valid.
