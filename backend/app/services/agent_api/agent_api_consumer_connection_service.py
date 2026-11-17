@@ -263,13 +263,15 @@ class AgentApiConsumerConnectionService:
                 (stored.get("credential_data") or {}).get("producer_agent_id")
             )
 
+        # ``scopes`` = what a call from this env holds right now (the env's
+        # identity is the consumer agent's owner): grant ∪ connection scopes.
+        # ``connection_scopes`` is configuration, reported even when unusable.
         scopes: list[str] = []
-        if usable and producer is not None and AgentApiService.resolve_identity_enabled(
-            producer, token
-        ):
-            scopes = AgentApiGrantService.resolve_scopes_for_caller(
-                db, producer.id, agent.owner_id
+        if usable and producer is not None:
+            scopes = AgentApiGrantService.effective_scopes_for_call(
+                db, producer, token, agent.owner_id
             )
+        connection_scopes = AgentApiGrantService.connection_scopes(token)
 
         is_shared = credential.owner_id != user.id
         slot = credential.service_uri or None
@@ -286,6 +288,7 @@ class AgentApiConsumerConnectionService:
             improvement_requests_url=urls.get("improvement_requests_url"),
             key_status=key_status,
             scopes=list(scopes),
+            connection_scopes=connection_scopes,
             usable=usable,
             unavailable_reason=None if usable else reason,
             sdk_lookup=(

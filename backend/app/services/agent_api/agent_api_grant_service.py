@@ -34,6 +34,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
 from app.models import (
+    Agent,
     AgentApiAccessGrant,
     AgentApiAccessGrantCreate,
     AgentApiAccessGrantUpdate,
@@ -47,6 +48,7 @@ from app.models import (
     UserGroup,
     UserGroupMember,
 )
+from app.models.agent_api.agent_api_token import AgentApiToken, AgentApiTokenKind
 from app.models.events.security_event import (
     AGENT_API_GRANT_CREATED,
     AGENT_API_GRANT_DELETED,
@@ -145,7 +147,7 @@ class AgentApiGrantService:
         grant = AgentApiAccessGrant(
             producer_agent_id=producer_agent_id,
             user_id=data.user_id,
-            scopes=_sanitize_scopes(data.scopes),
+            scopes=sanitize_scopes(data.scopes),
             created_by=owner_user_id,
         )
         session.add(grant)
@@ -208,7 +210,7 @@ class AgentApiGrantService:
             grant = AgentApiAccessGrant(
                 producer_agent_id=producer_agent_id,
                 user_id=subject_user_id,
-                scopes=_sanitize_scopes(scopes),
+                scopes=sanitize_scopes(scopes),
                 created_by=owner_user_id,
             )
             event_type = AGENT_API_GRANT_CREATED
@@ -218,7 +220,7 @@ class AgentApiGrantService:
                 # than bumping updated_at and auditing a change that never
                 # happened.
                 return grant
-            grant.scopes = _sanitize_scopes(scopes)
+            grant.scopes = sanitize_scopes(scopes)
             grant.updated_at = datetime.now(UTC)
             event_type = AGENT_API_GRANT_UPDATED
 
@@ -253,7 +255,7 @@ class AgentApiGrantService:
         )
 
         if data.scopes is not None:
-            grant.scopes = _sanitize_scopes(data.scopes)
+            grant.scopes = sanitize_scopes(data.scopes)
         grant.updated_at = datetime.now(UTC)
         session.add(grant)
         session.commit()
@@ -366,7 +368,7 @@ class AgentApiGrantService:
         grant = AgentApiAccessGroupGrant(
             producer_agent_id=producer_agent_id,
             group_id=data.group_id,
-            scopes=_sanitize_scopes(data.scopes),
+            scopes=sanitize_scopes(data.scopes),
             created_by=owner_user_id,
         )
         session.add(grant)
@@ -409,7 +411,7 @@ class AgentApiGrantService:
             session, producer_agent_id, grant_id
         )
         if data.scopes is not None:
-            grant.scopes = _sanitize_scopes(data.scopes)
+            grant.scopes = sanitize_scopes(data.scopes)
         grant.updated_at = datetime.now(UTC)
         session.add(grant)
         session.commit()
@@ -516,6 +518,18 @@ class AgentApiGrantService:
             scopes=_catalog_from_parsed_policy(policy.get("scopes"))
         )
 
+    @staticmethod
+    def declared_scope_names(session: Session, producer: Agent) -> list[str]:
+        """Names of the scopes the producer's cached policy declares.
+
+        No ownership check (callers already hold producer authority). An empty
+        list when the policy declares none or is not harvested yet.
+        """
+        policy = AgentApiService.get_effective_policy(session, producer)
+        return [
+            scope.name for scope in _catalog_from_parsed_policy(policy.get("scopes"))
+        ]
+
     # ------------------------------------------------------------------ #
     # Live per-call scope resolution (used by the proxy)                 #
     # ------------------------------------------------------------------ #
@@ -592,6 +606,49 @@ class AgentApiGrantService:
                 owner_user_id,
             )
             return []
+
+    @staticmethod
+    def connection_scopes(token: AgentApiToken | None) -> list[str]:
+        """The owner-chosen scopes a CONNECTION token carries (``[]`` otherwise).
+
+        External keys never carry scopes on the token: theirs live on the grant.
+        """
+        if token is None or token.kind != AgentApiTokenKind.CONNECTION.value:
+            return []
+        return [str(scope) for scope in (token.scopes or [])]
+
+    @staticmethod
+    def effective_scopes_for_call(
+        session: Session,
+        producer: Agent,
+        token: AgentApiToken | None,
+        caller_user_id: uuid.UUID | None,
+    ) -> list[str]:
+        """The single resolver for "which scopes does this call hold".
+
+        ``grant ∪ connection``: the caller's own grant scopes first (only when a
+        caller is identified AND identity applies to this call, the producer's
+        switch / an external key), then the connection's scopes not already
+        present. Connection scopes apply ALWAYS for a connection token, also
+        with identity off and for anonymous callers: the producer owner set
+        them deliberately. Used by the consumer proxy and the CLI C2 row; any
+        future scope gate must call this. Never raises.
+        """
+        scopes: list[str] = []
+        if caller_user_id is not None and AgentApiService.resolve_identity_enabled(
+            producer, token
+        ):
+            scopes = list(
+                AgentApiGrantService.resolve_scopes_for_caller(
+                    session, producer.id, caller_user_id
+                )
+            )
+        seen = set(scopes)
+        for name in AgentApiGrantService.connection_scopes(token):
+            if name not in seen:
+                seen.add(name)
+                scopes.append(name)
+        return scopes
 
     # ------------------------------------------------------------------ #
     # Public projection                                                  #
@@ -731,7 +788,7 @@ class AgentApiGrantService:
             )
 
 
-def _sanitize_scopes(scopes: list[str] | None) -> list[str]:
+def sanitize_scopes(scopes: list[str] | None) -> list[str]:
     """Normalize a grant's scope list to opaque, space-free, de-duplicated names.
 
     Scope names are transported in the space-separated ``X-Cinna-Caller-Scopes``

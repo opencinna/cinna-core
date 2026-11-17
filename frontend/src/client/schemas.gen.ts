@@ -2532,6 +2532,14 @@ export const AccountAgentApiConnectionSchema = {
             title: 'Scopes',
             default: []
         },
+        connection_scopes: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Connection Scopes',
+            default: []
+        },
         usable: {
             type: 'boolean',
             title: 'Usable'
@@ -3517,6 +3525,15 @@ export const AccountConnectAgentApiBodySchema = {
                 }
             ],
             title: 'Service Uri'
+        },
+        scopes: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            maxItems: 100,
+            title: 'Scopes',
+            default: []
         }
     },
     type: 'object',
@@ -6355,6 +6372,19 @@ export const AgentApiConnectionInfoSchema = {
             },
             type: 'array',
             title: 'Consumer Agents'
+        },
+        connection_scopes: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Connection Scopes',
+            default: []
+        },
+        can_edit_scopes: {
+            type: 'boolean',
+            title: 'Can Edit Scopes',
+            default: false
         }
     },
     type: 'object',
@@ -6364,6 +6394,54 @@ export const AgentApiConnectionInfoSchema = {
 detail page. \`\`producer_agent_name\`\` is best-effort (None if the producer
 agent is no longer accessible); \`\`consumer_agents\`\` are the agents the
 credential is currently linked to.`
+} as const;
+
+export const AgentApiConnectionScopesPublicSchema = {
+    properties: {
+        credential_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Credential Id'
+        },
+        producer_agent_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Producer Agent Id'
+        },
+        token_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Token Id'
+        },
+        scopes: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Scopes'
+        }
+    },
+    type: 'object',
+    required: ['credential_id', 'producer_agent_id', 'token_id', 'scopes'],
+    title: 'AgentApiConnectionScopesPublic',
+    description: "A connection's scopes after an update."
+} as const;
+
+export const AgentApiConnectionScopesUpdateSchema = {
+    properties: {
+        scopes: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            maxItems: 100,
+            title: 'Scopes'
+        }
+    },
+    type: 'object',
+    required: ['scopes'],
+    title: 'AgentApiConnectionScopesUpdate',
+    description: "Replace a connection's scopes (producer owner only). ``[]`` clears."
 } as const;
 
 export const AgentApiGrantUserSchema = {
@@ -7065,6 +7143,14 @@ export const AgentApiProducerConnectionSchema = {
             },
             type: 'array',
             title: 'Consumer Agents'
+        },
+        connection_scopes: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Connection Scopes',
+            default: []
         },
         created_at: {
             type: 'string',
@@ -18988,6 +19074,15 @@ export const ConnectAgentApiRequestSchema = {
                 }
             ],
             title: 'Service Uri'
+        },
+        scopes: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            maxItems: 100,
+            title: 'Scopes',
+            default: []
         }
     },
     type: 'object',
@@ -19034,6 +19129,14 @@ export const ConnectAgentApiResponseSchema = {
                 }
             ],
             title: 'Linked Consumer Agent Id'
+        },
+        scopes: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Scopes',
+            default: []
         }
     },
     type: 'object',
@@ -20126,6 +20229,20 @@ export const CredentialPublicSchema = {
             ],
             title: 'Agent Api Key Status'
         },
+        agent_api_connection_scopes: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Agent Api Connection Scopes'
+        },
         access_level: {
             anyOf: [
                 {
@@ -20790,6 +20907,20 @@ export const CredentialWithDataSchema = {
                 }
             ],
             title: 'Agent Api Key Status'
+        },
+        agent_api_connection_scopes: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Agent Api Connection Scopes'
         },
         access_level: {
             anyOf: [
@@ -37654,6 +37785,20 @@ export const SharedCredentialPublicSchema = {
             type: 'boolean',
             title: 'Allow Bundle Reuse Effective',
             default: false
+        },
+        agent_api_connection_scopes: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Agent Api Connection Scopes'
         }
     },
     type: 'object',

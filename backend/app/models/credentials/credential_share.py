@@ -231,6 +231,9 @@ class SharedCredentialPublic(SQLModel):
     # (sharing on, type re-usable, not restricted): the caller may embed it as
     # publisher-provided in their own bundles and skills.
     allow_bundle_reuse_effective: bool = False
+    # Agent API connection rows only: the owner-chosen scopes every call
+    # through the connection holds. None for anything that is not a connection.
+    agent_api_connection_scopes: list[str] | None = None
 
 
 class SharedCredentialsPublic(SQLModel):

@@ -15,7 +15,11 @@ from sqlmodel import Session, col, delete, func, select, and_, or_
 from app.models.agents.agent import Agent
 from app.models.bundles.agent_bundle import AgentBundle
 from app.models.catalog.catalog_local_install import CatalogLocalInstall
-from app.models.credentials.credential import Credential, CredentialSkillUsage
+from app.models.credentials.credential import (
+    Credential,
+    CredentialSkillUsage,
+    CredentialType,
+)
 from app.models.credentials.credential_share import (
     CredentialShare,
     CredentialShareAgentUsage,
@@ -755,11 +759,24 @@ class CredentialShareService:
         Get all credentials shared with a user (web projection of
         ``resolve_shared_with``), with recipient-scoped agent usage counts.
         """
+        from app.services.agent_api.agent_api_key_status import (
+            connection_scopes_by_credential,
+            connection_scopes_value,
+        )
+
         resolved = CredentialShareService.resolve_shared_with(session, user_id)
         usage_counts = CredentialsService.get_agent_usage_counts(
             session=session,
             credential_ids=[row.credential.id for row in resolved],
             owner_scope=user_id,  # recipient-scoped: agents *of mine* using it
+        )
+        connection_scopes = connection_scopes_by_credential(
+            session,
+            [
+                row.credential.id
+                for row in resolved
+                if row.credential.type == CredentialType.AGENT_API
+            ],
         )
 
         result = []
@@ -792,6 +809,9 @@ class CredentialShareService:
                 used_in_bundle=False,
                 via_groups=row.via_groups,
                 allow_bundle_reuse_effective=row.allow_bundle_reuse_effective,
+                agent_api_connection_scopes=connection_scopes_value(
+                    session, credential, connection_scopes
+                ),
             ))
 
         return result

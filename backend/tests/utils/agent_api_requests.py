@@ -1,7 +1,12 @@
 """Shared setup helpers for Agent-API capability request (``_cinna/``) tests."""
+import uuid
+from contextlib import contextmanager
+
 from fastapi.testclient import TestClient
+from sqlmodel import Session, select
 
 from app.core.config import settings
+from app.models import AgentEnvironment
 from app.services.environments.environment_service import EnvironmentService
 from tests.stubs.environment_adapter_stub import EnvironmentTestAdapter
 from tests.utils.agent import create_agent_via_api
@@ -104,3 +109,51 @@ def file_request(
     r = client.post(requests_url(producer_id), headers=headers, json=valid_body(**body_overrides))
     assert r.status_code == 201, r.text
     return r.json()
+
+
+def scoped_policy() -> dict:
+    """Policy with ``btc.read`` gating ``GET /btc-rate`` and a doc-only ``btc.admin``."""
+    return {
+        "read_only": False,
+        "auth": "required",
+        "max_body_bytes": 10 * 1024 * 1024,
+        "rate_limit": "600/min",
+        "expose_spec": True,
+        "allowed_paths": ["*"],
+        "scopes": [
+            {
+                "name": "btc.read",
+                "description": "Read the BTC rate",
+                "requires": [{"method": "GET", "path": "/btc-rate"}],
+            },
+            {"name": "btc.admin", "description": "Administer", "requires": []},
+        ],
+    }
+
+
+def set_policy_cache(db: Session, agent_id: str, policy: dict) -> None:
+    """Force the producer env's parsed ``agent_api_policy_cache`` (documented DB seam:
+    the real env sync that fills it is stubbed in the suite)."""
+    env = db.exec(
+        select(AgentEnvironment).where(AgentEnvironment.agent_id == uuid.UUID(agent_id))
+    ).first()
+    assert env is not None, f"No environment for agent {agent_id}"
+    env.agent_api_policy_cache = policy
+    db.add(env)
+    db.commit()
+
+
+@contextmanager
+def capture_proxy():
+    """Swap the env adapter for a recording stub; yields it.
+
+    Forwarded calls land in ``adapter.agent_api_proxy_calls`` (each with ``headers``).
+    """
+    adapter = EnvironmentTestAdapter()
+    lm = EnvironmentService._lifecycle_manager
+    original = lm.get_adapter
+    lm.get_adapter = lambda env: adapter
+    try:
+        yield adapter
+    finally:
+        lm.get_adapter = original

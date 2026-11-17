@@ -1,4 +1,3 @@
-import { ServiceUriField } from "@/components/Credentials/CredentialFields/ServiceUriField"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
@@ -9,8 +8,10 @@ import { z } from "zod"
 import type { CredentialPublic, CredentialWithData } from "@/client"
 import { CredentialsService } from "@/client"
 import NotFound from "@/components/Common/NotFound"
+import { AgentApiConnectionScopesCard } from "@/components/Credentials/AgentApiConnectionScopesCard"
 import { AgentApiCredentialDetail } from "@/components/Credentials/AgentApiCredentialDetail"
 import { OAuthCredentialFields } from "@/components/Credentials/CredentialFields"
+import { ServiceUriField } from "@/components/Credentials/CredentialFields/ServiceUriField"
 import {
   ApiTokenCredentialForm,
   GenericCredentialForm,
@@ -202,6 +203,16 @@ function SharedCredentialView({
             </div>
           </CardContent>
         </Card>
+
+        {credential.type === "agent_api" &&
+          credential.agent_api_connection_scopes != null && (
+            <AgentApiConnectionScopesCard
+              scopes={credential.agent_api_connection_scopes}
+              description={`Set by ${credential.owner_email || "its owner"}; read-only here.`}
+              reach="Your agents call with these, on top of your own scopes."
+              emptyText="No scopes. Your agents get only the scopes your own grant gives you."
+            />
+          )}
 
         {isReusableType && <CredentialResharesCard credential={credential} />}
       </div>

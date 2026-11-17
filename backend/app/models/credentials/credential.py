@@ -336,6 +336,9 @@ class CredentialPublic(CredentialBase):
     # Issued agent_api key rows only: the key's AgentApiKeyStatus value
     # ("active", "revoked_by_issuer", ...). None for every other credential.
     agent_api_key_status: str | None = None
+    # Agent API connection rows only: the owner-chosen scopes every call
+    # through the connection holds. None for anything that is not a connection.
+    agent_api_connection_scopes: list[str] | None = None
     # Shared rows only (set by the account CLI listing; the web routes keep
     # the defaults): the caller's access level, the direct share's source
     # ("direct", "bundle_install", ...; None for a group-only share) and the

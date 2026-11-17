@@ -1,9 +1,12 @@
 import { useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
+import { useMemo, useState } from "react"
 
 import type { CredentialWithData } from "@/client"
-import { CredentialsService } from "@/client"
+import { AgentApiService, CredentialsService } from "@/client"
 import { QueryErrorAlert } from "@/components/Common/QueryErrorAlert"
+import { AgentApiConnectionScopesCard } from "@/components/Credentials/AgentApiConnectionScopesCard"
+import { AgentApiConnectionScopesDialog } from "@/components/Credentials/AgentApiConnectionScopesDialog"
 import { AgentApiConnectionView } from "@/components/Credentials/AgentApiConnectionView"
 import { AgentApiKeyView } from "@/components/Credentials/AgentApiKeyView"
 import { CredentialSharing } from "@/components/Credentials/CredentialSharing"
@@ -81,13 +84,16 @@ export function AgentApiCredentialDetail({
     <div className="space-y-6">
       <AgentApiConnectionView credential={credential} />
 
-      {/* Sharing stays half-width (left), matching the Template-card layout of
-          other types. The right half is intentionally empty — agent_api
-          connections have no Template-sharing card. */}
+      {/* Sharing half-width (left), matching the Template-card layout of
+          other types; the connection's scopes take the right half. */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
         <CredentialSharing
           credential={credential}
           hint={<ConnectionSharingHint credentialId={credential.id} />}
+        />
+        <ConnectionScopes
+          credentialId={credential.id}
+          connectionName={credential.name}
         />
       </div>
     </div>
@@ -126,5 +132,75 @@ function ConnectionSharingHint({ credentialId }: { credentialId: string }) {
         Open API access
       </Link>
     </p>
+  )
+}
+
+/**
+ * S2 — the connection's scopes, and the editor when the viewer owns the
+ * producer (``can_edit_scopes``). Shares the connection view's query; the
+ * catalog is fetched only for an editor, to mark scopes the API dropped.
+ */
+function ConnectionScopes({
+  credentialId,
+  connectionName,
+}: {
+  credentialId: string
+  connectionName: string
+}) {
+  const [editOpen, setEditOpen] = useState(false)
+  const connectionQuery = useQuery({
+    queryKey: ["agentApiConnection", credentialId],
+    queryFn: () =>
+      CredentialsService.readAgentApiConnection({ id: credentialId }),
+  })
+  const connection = connectionQuery.data
+  const scopes = connection?.connection_scopes ?? []
+  const producerId = connection?.producer_agent_id ?? null
+  const editable = !!connection?.can_edit_scopes && !!producerId
+
+  const catalogQuery = useQuery({
+    queryKey: ["agentApiScopeCatalog", producerId],
+    queryFn: () =>
+      AgentApiService.getAgentApiScopeCatalog({
+        agentId: producerId as string,
+      }),
+    enabled: editable,
+  })
+  const undeclaredCount = useMemo(() => {
+    if (!catalogQuery.data) return 0
+    const declared = new Set(catalogQuery.data.scopes.map((s) => s.name))
+    return scopes.filter((s) => !declared.has(s)).length
+  }, [catalogQuery.data, scopes])
+
+  return (
+    <>
+      <AgentApiConnectionScopesCard
+        scopes={scopes}
+        description={
+          !connection
+            ? "The scopes every agent using this connection calls with."
+            : editable
+              ? "Every agent using this connection calls with these, on top of its owner's own scopes."
+              : "Set by the producer's owner; read-only here."
+        }
+        reach="This includes people it's shared with and bundles that embed it."
+        emptyText="No scopes. Callers get only the scopes their own grant gives them."
+        onEdit={editable ? () => setEditOpen(true) : undefined}
+        undeclaredCount={undeclaredCount}
+        isLoading={connectionQuery.isLoading}
+        error={connectionQuery.isError ? connectionQuery.error : undefined}
+        onRetry={() => connectionQuery.refetch()}
+      />
+      {editable && producerId && (
+        <AgentApiConnectionScopesDialog
+          open={editOpen}
+          onOpenChange={setEditOpen}
+          credentialId={credentialId}
+          producerAgentId={producerId}
+          connectionName={connectionName}
+          scopes={scopes}
+        />
+      )}
+    </>
   )
 }

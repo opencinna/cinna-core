@@ -70,6 +70,8 @@ class AccountConnectAgentApiBody(SQLModel):
     read_only_override: bool = False
     # Optional slot id; normalized by ``ConnectAgentApiRequest`` (blank -> None).
     service_uri: str | None = Field(default=None, max_length=255)
+    # Optional connection scopes (see ``ConnectAgentApiRequest.scopes``).
+    scopes: list[str] = Field(default=[], max_length=100)
 
 
 class AccountAgentApiEnableBody(SQLModel):
@@ -435,7 +437,12 @@ class AccountAgentApiConnection(SQLModel):
     # AgentApiKeyStatus value ("active", "revoked_by_issuer", "producer_removed",
     # "api_disabled", ...); null when the credential never reaches the env.
     key_status: str | None = None
+    # Effective scopes a call from this env holds now: the caller's grant ∪
+    # the connection's scopes ([] when not usable).
     scopes: list[str] = []
+    # Owner-chosen scopes carried by the connection itself (configuration;
+    # reported also when not usable; [] for issued keys).
+    connection_scopes: list[str] = []
     usable: bool
     # "key_revoked" | "key_expired" | "key_paused" | "not_delivered" |
     # "placeholder"; null when usable.

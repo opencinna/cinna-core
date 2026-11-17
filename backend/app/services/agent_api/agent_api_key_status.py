@@ -193,3 +193,46 @@ def key_status_value(
         key_states = key_states_by_credential(session, [credential.id])
     state = key_states.get(credential.id)
     return state.status.value if state is not None else None
+
+
+def connection_scopes_by_credential(
+    session: Session, credential_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, list[str]]:
+    """Batch-resolve the scopes connection credentials carry (one query).
+
+    Only credentials bound to a ``kind="connection"`` token are present; issued
+    keys, unbound and non-``agent_api`` credentials are absent.
+    """
+    if not credential_ids:
+        return {}
+    rows = session.exec(
+        select(AgentApiToken.credential_id, AgentApiToken.scopes).where(
+            AgentApiToken.credential_id.in_(credential_ids),
+            AgentApiToken.kind == AgentApiTokenKind.CONNECTION.value,
+        )
+    ).all()
+    return {
+        credential_id: [str(scope) for scope in (scopes or [])]
+        for credential_id, scopes in rows
+        if credential_id is not None
+    }
+
+
+def connection_scopes_value(
+    session: Session,
+    credential: Credential,
+    scopes_by_credential: dict[uuid.UUID, list[str]] | None = None,
+) -> list[str] | None:
+    """The connection scopes of an ``agent_api`` connection credential, else None.
+
+    ``scopes_by_credential`` is a page-level ``connection_scopes_by_credential``
+    result; when omitted the one credential is resolved on its own. Issued
+    keys and non-``agent_api`` credentials answer None.
+    """
+    if credential.type != CredentialType.AGENT_API:
+        return None
+    if scopes_by_credential is None:
+        scopes_by_credential = connection_scopes_by_credential(
+            session, [credential.id]
+        )
+    return scopes_by_credential.get(credential.id)

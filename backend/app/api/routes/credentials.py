@@ -42,6 +42,8 @@ from app.services.agent_api.agent_api_key_service import (
 from app.services.agent_api.agent_api_service import AgentApiError
 from app.services.agent_api.agent_api_key_status import (
     KeyState,
+    connection_scopes_by_credential,
+    connection_scopes_value,
     key_states_by_credential,
     key_status_value,
 )
@@ -77,6 +79,7 @@ def _credential_to_public(
     category: str = "mine",
     key_states: dict[uuid.UUID, KeyState] | None = None,
     share_counts: tuple[dict[uuid.UUID, int], dict[uuid.UUID, int]] | None = None,
+    connection_scopes: dict[uuid.UUID, list[str]] | None = None,
 ) -> CredentialPublic:
     """Convert a Credential model to CredentialPublic with share_count and status.
 
@@ -85,7 +88,8 @@ def _credential_to_public(
     so this helper never issues a per-row usage query. ``key_states`` is the
     batched issued-key lookup; when omitted, an ``agent_api`` row is resolved
     on its own. ``share_counts`` is the batched ``(direct, group)`` share
-    counts; when omitted, an owned row counts its own.
+    counts; when omitted, an owned row counts its own. ``connection_scopes``
+    is the batched connection-scope lookup; when omitted, resolved per row.
     """
     share_count = 0
     group_share_count = 0
@@ -133,6 +137,9 @@ def _credential_to_public(
         used_in_bundle=used_in_bundle,
         mcp_consumer_agent_id=credential.mcp_consumer_agent_id,
         agent_api_key_status=_agent_api_key_status(session, credential, key_states),
+        agent_api_connection_scopes=connection_scopes_value(
+            session, credential, connection_scopes
+        ),
     )
 
 
@@ -214,10 +221,9 @@ def read_credentials(
     # their bound token's kind — connections are "Automatic", external keys are
     # "My Credentials").
     categories = CredentialsService.classify_owned_credentials(session, credentials)
-    key_states = key_states_by_credential(
-        session,
-        [c.id for c in credentials if c.type == CredentialType.AGENT_API],
-    )
+    agent_api_ids = [c.id for c in credentials if c.type == CredentialType.AGENT_API]
+    key_states = key_states_by_credential(session, agent_api_ids)
+    connection_scopes = connection_scopes_by_credential(session, agent_api_ids)
 
     share_counts = CredentialShareService.share_counts_by_credential(
         session, credential_ids
@@ -233,6 +239,7 @@ def read_credentials(
             category=categories.get(c.id, "mine"),
             key_states=key_states,
             share_counts=share_counts,
+            connection_scopes=connection_scopes,
         )
         for c in credentials
     ]

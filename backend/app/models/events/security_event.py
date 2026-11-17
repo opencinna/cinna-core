@@ -146,6 +146,10 @@ CLI_DEVICE_LOGIN_REJECTED = "CLI_DEVICE_LOGIN_REJECTED"
 AGENT_API_GRANT_CREATED = "AGENT_API_GRANT_CREATED"
 AGENT_API_GRANT_UPDATED = "AGENT_API_GRANT_UPDATED"
 AGENT_API_GRANT_DELETED = "AGENT_API_GRANT_DELETED"
+# The producer owner changed the scopes a shareable agent API connection
+# carries (``AgentApiTokenService.update_connection_scopes``). Details carry
+# scope names and the 8-char token display prefix only, never the value.
+AGENT_API_CONNECTION_SCOPES_UPDATED = "AGENT_API_CONNECTION_SCOPES_UPDATED"
 
 # ── Agent-API external keys ───────────────────────────────────────────
 # Emitted by ``AgentApiKeyService``. An external key is a copy-pasteable,

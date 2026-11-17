@@ -32,6 +32,8 @@ from app.models import (
     AgentApiAccessGroupGrantsPublic,
     AgentApiAccessGroupGrantUpdate,
     AgentApiAccessList,
+    AgentApiConnectionScopesPublic,
+    AgentApiConnectionScopesUpdate,
     AgentApiKeyCreate,
     AgentApiKeyCreated,
     AgentApiKeyPublic,
@@ -66,8 +68,11 @@ def _handle_agent_api_error(e: AgentApiError) -> None:
 
 
 def _handle_token_error(e: AgentApiTokenError) -> None:
-    """Convert connect-helper service exceptions to HTTP exceptions."""
-    raise HTTPException(status_code=e.status_code, detail=e.message)
+    """Convert connect-helper service exceptions to HTTP exceptions.
+
+    Coded errors carry ``{"code", "message"}``; the rest a plain string.
+    """
+    raise HTTPException(status_code=e.status_code, detail=e.http_detail)
 
 
 @router.get("/_status")
@@ -306,6 +311,34 @@ def list_agent_api_connections(
             is_superuser=current_user.is_superuser,
         )
         return AgentApiProducerConnections(data=connections, count=len(connections))
+    except AgentApiTokenError as e:
+        _handle_token_error(e)
+
+
+@router.put(
+    "/connections/{credential_id}/scopes",
+    response_model=AgentApiConnectionScopesPublic,
+)
+async def update_agent_api_connection_scopes(
+    agent_id: uuid.UUID,
+    credential_id: uuid.UUID,
+    body: AgentApiConnectionScopesUpdate,
+    session: SessionDep,
+    current_user: CurrentUser,
+):
+    """
+    Replace the scopes a shareable connection (``agent_api`` credential) carries.
+
+    Every call through the connection holds these scopes on top of the caller's
+    own grant, from the next call on. Producer owner or superuser only; ``[]``
+    clears. Coded errors: 400 ``unknown_scope`` / ``not_a_connection``, 403
+    ``not_owner`` (a holder of the credential who does not own the producer),
+    404 ``not_found``, 409 ``producer_removed``.
+    """
+    try:
+        return await AgentApiTokenService.update_connection_scopes(
+            session, agent_id, credential_id, current_user, body.scopes
+        )
     except AgentApiTokenError as e:
         _handle_token_error(e)
 

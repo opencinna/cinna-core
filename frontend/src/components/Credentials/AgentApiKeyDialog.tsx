@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 import { useMemo, useState } from "react"
 
-import type { AgentPublic } from "@/client"
+import type { AgentPublic, ApiError } from "@/client"
 import { AgentApiService, AgentsService } from "@/client"
 import type { AgentOption } from "@/components/Common/AgentSelectorDialog"
 import type { UserSelectValue } from "@/components/Common/UserSelectField"
@@ -21,6 +21,7 @@ import {
   type IssuedToOther,
 } from "@/components/Credentials/AgentApiKeyIssuedPanel"
 import { AgentApiProducerField } from "@/components/Credentials/AgentApiProducerField"
+import { unknownScopeMessage } from "@/components/Credentials/agentApiConnectionScopes"
 import { AGENT_API_KEY_LABEL } from "@/components/Credentials/agentApiKeyCopy"
 import { stashMintedAgentApiKey } from "@/components/Credentials/agentApiKeyMintHandoff"
 import { Button } from "@/components/ui/button"
@@ -74,8 +75,9 @@ interface AgentApiKeyDialogProps {
  * response). Issued to someone else, the issuer never sees the value
  * (``token`` is ``null``), so the dialog ends on a success panel instead.
  *
- * Scopes are a convenience that upserts the ``(producer, recipient)`` grant;
- * they live there, never on the key. Expiry, name and slot have defaults and
+ * A key's scopes are a convenience that upserts the ``(producer, recipient)``
+ * grant; they live there, never on the key. A connection's scopes live on the
+ * connection itself and reach everyone who calls through it. Expiry, name and slot have defaults and
  * wait behind one Advanced disclosure. The slot is sent ``null`` when left
  * empty so the server's default (plan D23) stays the one source of the slug;
  * the placeholder only shows it.
@@ -112,6 +114,8 @@ export function AgentApiKeyDialog({
   const [scopes, setScopes] = useState<string[]>([])
   const [expiry, setExpiry] = useState("never")
   const [issued, setIssued] = useState<IssuedToOther | null>(null)
+  // A connection's `unknown_scope` refusal, shown under its scope editor.
+  const [scopesError, setScopesError] = useState<string | null>(null)
 
   // Reset on every open so a second visit never inherits the first one's
   // recipient or scopes. Keyed on `open` so a close→open transition re-fires.
@@ -127,6 +131,7 @@ export function AgentApiKeyDialog({
       setScopes([])
       setExpiry("never")
       setIssued(null)
+      setScopesError(null)
     }
   }
 
@@ -139,6 +144,12 @@ export function AgentApiKeyDialog({
   if (producerId !== lastProducerId) {
     setLastProducerId(producerId)
     setScopes([])
+    setScopesError(null)
+  }
+
+  const handleScopesChange = (next: string[]) => {
+    setScopes(next)
+    setScopesError(null)
   }
 
   const agentsQuery = useQuery({
@@ -171,12 +182,24 @@ export function AgentApiKeyDialog({
     : producers.find((a) => a.id === producerId)
   const producerName = producer?.name || ""
 
-  const { data: catalogData } = useQuery({
+  const catalogQuery = useQuery({
     queryKey: ["agentApiScopeCatalog", producerId],
     queryFn: () =>
       AgentApiService.getAgentApiScopeCatalog({ agentId: producerId }),
     enabled: open && !!producerId,
   })
+  const catalogData = catalogQuery.data
+  const catalogLoaded = catalogQuery.isSuccess
+  // A connection takes catalog names only (the server is strict). Scopes typed
+  // in key mode carry over on a mode switch, so they are marked here and
+  // block Create until removed.
+  const declaredScopes = useMemo(
+    () =>
+      catalogData ? new Set(catalogData.scopes.map((s) => s.name)) : undefined,
+    [catalogData],
+  )
+  const hasUndeclaredScopes =
+    !!declaredScopes && scopes.some((s) => !declaredScopes.has(s))
 
   const recipientIsMe = !!recipient && recipient.userId === currentUser?.id
   const recipientName = recipient?.label || "They"
@@ -239,6 +262,8 @@ export function AgentApiKeyDialog({
           credential_label:
             label.trim() || defaultAgentApiConnectionName(producerName),
           service_uri: slot.trim() || null,
+          // Always sent: `[]` is a connection with no scopes of its own.
+          scopes,
         },
       }),
     onSuccess: (created) => {
@@ -255,7 +280,11 @@ export function AgentApiKeyDialog({
         params: { credentialId: created.credential_id },
       })
     },
-    onError: handleError.bind(showErrorToast),
+    onError: (err) => {
+      const message = unknownScopeMessage(err)
+      if (message) setScopesError(message)
+      else handleError.call(showErrorToast, err as ApiError)
+    },
   })
 
   const isPending = createMutation.isPending || connectMutation.isPending
@@ -273,6 +302,9 @@ export function AgentApiKeyDialog({
     // access must be known before a key is offered.
     !!producer &&
     (isConnection || !!recipient) &&
+    !(isConnection && hasUndeclaredScopes) &&
+    // Scopes can't be checked until the catalog loads; none selected needs no check.
+    !(isConnection && scopes.length > 0 && !catalogLoaded) &&
     !externalAccessOff &&
     !isPending
 
@@ -341,6 +373,19 @@ export function AgentApiKeyDialog({
 
               {isConnection ? (
                 <AgentApiConnectionFields
+                  scopes={scopes}
+                  onScopesChange={handleScopesChange}
+                  catalogScopes={catalogData?.scopes ?? []}
+                  catalogEmpty={
+                    catalogLoaded && (catalogData?.scopes ?? []).length === 0
+                  }
+                  scopesDisabled={!producerId}
+                  scopesError={scopesError}
+                  declaredScopes={declaredScopes}
+                  catalogError={
+                    catalogQuery.isError ? catalogQuery.error : undefined
+                  }
+                  onRetryCatalog={() => catalogQuery.refetch()}
                   name={label}
                   onNameChange={setLabel}
                   slot={slot}

@@ -7,8 +7,13 @@ webapp share token: only a SHA256 hash is stored; the first 8 chars are kept as
 a display prefix.
 
 Unlike A2A tokens, these are NOT JWTs — they are plain ``secrets.token_urlsafe``
-opaque tokens validated by hash lookup. A token may only ever *narrow* the
-producer's policy (``read_only_override``), never widen it.
+opaque tokens validated by hash lookup. ``read_only_override`` may only ever
+*narrow* the producer's policy, never widen it.
+
+A ``connection`` token additionally carries owner-chosen ``scopes`` that
+**widen** what a caller holds: the effective scopes of a call through the
+connection are the caller's own grant (when identity applies) united with the
+connection's scopes (``AgentApiGrantService.effective_scopes_for_call``).
 
 ``kind`` is the single source of truth for the two modes this table serves:
 
@@ -46,7 +51,7 @@ from typing import Any, Literal
 
 import sqlalchemy as sa
 from pydantic import field_validator
-from sqlmodel import Field, SQLModel
+from sqlmodel import Column, Field, SQLModel
 
 from app.models.credentials.credential import normalize_service_uri
 
@@ -120,6 +125,13 @@ class AgentApiToken(AgentApiTokenBase, table=True):
     expires_at: datetime | None = Field(
         default=None, sa_type=sa.DateTime(timezone=True), nullable=True
     )
+    # Owner-chosen scope names for CONNECTION tokens only (never set on
+    # ``kind="external"``: an issued key's scopes live on the grant). Read live
+    # by the proxy on every call, so a change applies from the next call.
+    scopes: list = Field(
+        default_factory=list,
+        sa_column=Column(sa.JSON, nullable=False, server_default=sa.text("'[]'")),
+    )
     is_active: bool = Field(default=True)
     # Soft revoke by the issuer. Only "revoked_by_issuer" is ever stored.
     revoked_at: datetime | None = Field(
@@ -188,6 +200,11 @@ class ConnectAgentApiRequest(SQLModel):
     # key, a connection has no ``<slug>-api`` fallback (two connections with
     # one slot linked to one agent would collide). Empty / blank = no slot.
     service_uri: str | None = Field(default=None, max_length=255)
+    # Owner-chosen scopes the connection carries: every call through it holds
+    # them on top of the caller's own grant. Validated strictly against the
+    # producer's declared scopes (400 ``unknown_scope``) before anything is
+    # minted; sanitized (trimmed, de-duplicated, space-free) by the service.
+    scopes: list[str] = Field(default=[], max_length=100)
 
     @field_validator("service_uri", mode="before")
     @classmethod
@@ -203,6 +220,23 @@ class ConnectAgentApiResponse(SQLModel):
     base_url: str
     spec_url: str
     linked_consumer_agent_id: uuid.UUID | None = None
+    # The connection scopes as stored (after sanitization).
+    scopes: list[str] = []
+
+
+class AgentApiConnectionScopesUpdate(SQLModel):
+    """Replace a connection's scopes (producer owner only). ``[]`` clears."""
+
+    scopes: list[str] = Field(max_length=100)
+
+
+class AgentApiConnectionScopesPublic(SQLModel):
+    """A connection's scopes after an update."""
+
+    credential_id: uuid.UUID
+    producer_agent_id: uuid.UUID
+    token_id: uuid.UUID
+    scopes: list[str]
 
 
 # ── Connection info (for the agent_api credential detail view) ────────────────
@@ -240,6 +274,11 @@ class AgentApiConnectionInfo(SQLModel):
     spec_url: str
     read_only: bool
     consumer_agents: list[AgentApiConnectedAgent]
+    # Owner-chosen scopes the connection carries ([] for issued keys / none).
+    connection_scopes: list[str] = []
+    # True when the bound token is a connection and the viewer owns the
+    # producer (or is superuser): the only people who may change the scopes.
+    can_edit_scopes: bool = False
 
 
 # ── Producer-side view: who is consuming my API ──────────────────────────────
@@ -260,6 +299,8 @@ class AgentApiProducerConnection(SQLModel):
     token_prefix: str
     read_only: bool
     consumer_agents: list[AgentApiConnectedAgent]
+    # Owner-chosen scopes this connection grants every caller.
+    connection_scopes: list[str] = []
     created_at: datetime
 
 

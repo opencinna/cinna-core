@@ -1081,7 +1081,7 @@ async def account_connect_agent_api(
             db=db, user=account_ctx.user, body=body, request=request
         )
     except AgentApiTokenError as e:
-        raise HTTPException(status_code=e.status_code, detail=e.message)
+        raise HTTPException(status_code=e.status_code, detail=e.http_detail)
 
 
 # ── Account CLI agent-api producer management ────────────────────────────────

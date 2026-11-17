@@ -168,7 +168,8 @@ async def _resolve_identified_caller(
     subject is used verbatim and the identity header is never consulted; a
     CONNECTION token takes identity from the verified identity header. These
     routes act on behalf of a person, so an anonymous caller is a 401.
-    Never touches the producer env.
+    Never touches the producer env. These ``_cinna`` routes have no scope
+    gate; any future one must use ``AgentApiGrantService.effective_scopes_for_call``.
     """
     creds: HTTPAuthorizationCredentials | None = await _bearer(request)
     try:
@@ -376,22 +377,30 @@ async def consumer_proxy(
             caller_headers = AgentApiIdentityService.resolve_caller_headers(
                 session, request.headers.get(IDENTITY_HEADER)
             )
-        # When the caller was attributed AND identity applies to this call,
-        # resolve the live grant. The user id is read back from the just-set
-        # attribution header (single source of truth — no second resolution).
-        # Identity ATTRIBUTION is honored regardless of the flag (backward
-        # compatible); only SCOPES (and the optional edge enforcement) follow
-        # `resolve_identity_enabled` — the producer's opt-in OR an external key,
-        # which is self-evidently intentional (plan D3).
+        # Effective scopes = the caller's live grant (only when attributed AND
+        # identity applies: the producer's opt-in OR an external key, plan D3)
+        # ∪ the connection's owner-chosen scopes (the bearer matched a
+        # kind="connection" token row; nothing the caller sends names it).
+        # The user id is read back from the just-set attribution header (single
+        # source of truth). Invariants:
+        #  * Identity off: connection scopes only; the grant stays gated by the
+        #    producer's switch; no edge deny (enforcement gate unchanged).
+        #  * Identity on, identity header absent/invalid/expired: anonymous
+        #    caller holding the connection scopes; edge enforcement uses them.
+        #  * Inbound X-Cinna-Caller-* headers are stripped below (rule 3), so a
+        #    forged scopes header adds nothing.
+        #  * External key: no connection scopes, behaviour unchanged.
+        #  * `token` is read fresh by validate_token per request: a scope change
+        #    applies from the next call.
         resolved_user_id = caller_headers.get(CALLER_USER_ID_HEADER)
-        identity_enabled = AgentApiService.resolve_identity_enabled(agent, token)
-        caller_scopes: list[str] = []
-        if resolved_user_id and identity_enabled:
-            caller_scopes = AgentApiGrantService.resolve_scopes_for_caller(
-                session, agent_id, uuid.UUID(resolved_user_id)
-            )
-            if caller_scopes:
-                caller_headers[CALLER_SCOPES_HEADER] = " ".join(caller_scopes)
+        caller_scopes = AgentApiGrantService.effective_scopes_for_call(
+            session,
+            agent,
+            token,
+            uuid.UUID(resolved_user_id) if resolved_user_id else None,
+        )
+        if caller_scopes:
+            caller_headers[CALLER_SCOPES_HEADER] = " ".join(caller_scopes)
 
         # Single auditable orchestration: enforce policy BEFORE env resolution so
         # a 405/413/429/403 never wakes a suspended env; returns the propagated

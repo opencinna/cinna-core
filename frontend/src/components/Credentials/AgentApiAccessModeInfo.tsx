@@ -39,7 +39,7 @@ export function AgentApiAccessModeInfo({
           <span className="font-medium text-foreground">A connection</span> is
           what you share with other people, so their agents — and bundles they
           publish, if you allow re-use — can call this API. Each caller is still
-          identified.
+          identified, and gets the scopes you set on the connection.
         </p>
         <Button
           type="button"

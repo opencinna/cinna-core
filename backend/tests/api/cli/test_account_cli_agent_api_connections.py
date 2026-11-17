@@ -29,6 +29,8 @@ from tests.utils.agent_api_requests import (
     connected_consumer,
     file_request,
     requests_url,
+    scoped_policy,
+    set_policy_cache,
     valid_body,
 )
 from tests.utils.background_tasks import drain_tasks
@@ -46,7 +48,7 @@ _BASE = f"{API}/cli/account/agents"
 _ROW_KEYS = {
     "credential_id", "name", "slot", "is_shared", "owner_email",
     "producer_agent_id", "producer_agent_name", "base_url", "spec_url",
-    "improvement_requests_url", "key_status", "scopes", "usable",
+    "improvement_requests_url", "key_status", "scopes", "connection_scopes", "usable",
     "unavailable_reason", "sdk_lookup",
 }
 
@@ -594,3 +596,66 @@ def test_not_found_messages_distinguish_agent_from_connection_but_not_foreign_fr
         _assert_not_found(r, _not_linked(unlinked["id"]))
         assert unlinked["id"] == unlinked["id"].lower()
         assert unlinked["id"] in r.json()["detail"]["message"]
+
+
+def test_c2_row_reports_connection_scopes_and_cli_connect_with_scopes(
+    client: TestClient, superuser_token_headers: dict[str, str], db
+) -> None:
+    """
+    V15: the recipient's C2 row lists effective ``scopes`` (grant first, then the
+    connection's) plus ``connection_scopes``; an unusable connection reports no
+    ``scopes`` but still its ``connection_scopes``; CLI connect accepts scopes.
+    """
+    su = superuser_token_headers
+    _, oh = make_developer(client, su)
+    rec, rh = make_developer(client, su)
+    producer = setup_producer(client, oh, name="Scoped C2 Producer", identity_enabled=True)
+    pid = producer["id"]
+    set_policy_cache(db, pid, scoped_policy())
+
+    oacc = _acc(client, oh)
+    # ── CLI connect: unknown refused, known stored ──
+    r = client.post(
+        f"{API}/cli/account/connect/agent-api", headers=oacc,
+        json={"producer_agent_id": pid, "scopes": ["nope"]},
+    )
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"]["code"] == "unknown_scope"
+    r = client.post(
+        f"{API}/cli/account/connect/agent-api", headers=oacc,
+        json={"producer_agent_id": pid, "scopes": ["btc.read"]},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["scopes"] == ["btc.read"]
+    cred_id = r.json()["credential_id"]
+
+    update_credential(client, oh, cred_id, allow_sharing=True)
+    share_credential_via_api(client, oh, cred_id, rec["email"])
+    agent = create_agent_via_api(client, rh, name="Scoped C2 Recipient")
+    drain_tasks()
+    link_credential_to_agent(client, rh, agent["id"], cred_id)
+    drain_tasks()
+    acc = _acc(client, rh)
+
+    # ── no grant ──
+    row = _rows(client, acc, agent["id"])[cred_id]
+    assert set(row) == _ROW_KEYS
+    assert row["scopes"] == ["btc.read"]
+    assert row["connection_scopes"] == ["btc.read"]
+
+    # ── personal grant: grant scopes first ──
+    r = client.post(
+        f"{API}/agents/{pid}/agent-api/grants", headers=oh,
+        json={"user_id": rec["id"], "scopes": ["btc.admin"]},
+    )
+    assert r.status_code == 200, r.text
+    row = _rows(client, acc, agent["id"])[cred_id]
+    assert row["scopes"] == ["btc.admin", "btc.read"]
+    assert row["connection_scopes"] == ["btc.read"]
+
+    # ── unusable (producer API disabled): scopes empty, connection_scopes kept ──
+    update_agent(client, oh, pid, agent_api_enabled=False)
+    row = _rows(client, acc, agent["id"])[cred_id]
+    assert row["usable"] is False
+    assert row["scopes"] == []
+    assert row["connection_scopes"] == ["btc.read"]

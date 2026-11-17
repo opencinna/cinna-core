@@ -147,6 +147,7 @@ export type AccountAgentApiConnection = {
     improvement_requests_url?: (string | null);
     key_status?: (string | null);
     scopes?: Array<(string)>;
+    connection_scopes?: Array<(string)>;
     usable: boolean;
     unavailable_reason?: (string | null);
     sdk_lookup: string;
@@ -411,6 +412,7 @@ export type AccountConnectAgentApiBody = {
     credential_label?: (string | null);
     read_only_override?: boolean;
     service_uri?: (string | null);
+    scopes?: Array<(string)>;
 };
 
 /**
@@ -1196,6 +1198,25 @@ export type AgentApiConnectionInfo = {
     spec_url: string;
     read_only: boolean;
     consumer_agents: Array<AgentApiConnectedAgent>;
+    connection_scopes?: Array<(string)>;
+    can_edit_scopes?: boolean;
+};
+
+/**
+ * A connection's scopes after an update.
+ */
+export type AgentApiConnectionScopesPublic = {
+    credential_id: string;
+    producer_agent_id: string;
+    token_id: string;
+    scopes: Array<(string)>;
+};
+
+/**
+ * Replace a connection's scopes (producer owner only). ``[]`` clears.
+ */
+export type AgentApiConnectionScopesUpdate = {
+    scopes: Array<(string)>;
 };
 
 export type AgentApiGrantUser = {
@@ -1349,6 +1370,7 @@ export type AgentApiProducerConnection = {
     token_prefix: string;
     read_only: boolean;
     consumer_agents: Array<AgentApiConnectedAgent>;
+    connection_scopes?: Array<(string)>;
     created_at: string;
 };
 
@@ -4355,6 +4377,7 @@ export type ConnectAgentApiRequest = {
     read_only_override?: boolean;
     consumer_agent_id?: (string | null);
     service_uri?: (string | null);
+    scopes?: Array<(string)>;
 };
 
 /**
@@ -4367,6 +4390,7 @@ export type ConnectAgentApiResponse = {
     base_url: string;
     spec_url: string;
     linked_consumer_agent_id?: (string | null);
+    scopes?: Array<(string)>;
 };
 
 /**
@@ -4663,6 +4687,7 @@ export type CredentialPublic = {
     agent_usage_count?: number;
     used_in_bundle?: boolean;
     agent_api_key_status?: (string | null);
+    agent_api_connection_scopes?: (Array<(string)> | null);
     access_level?: (string | null);
     share_source?: (string | null);
     via_groups?: Array<UserGroupRef>;
@@ -4815,6 +4840,7 @@ export type CredentialWithData = {
     agent_usage_count?: number;
     used_in_bundle?: boolean;
     agent_api_key_status?: (string | null);
+    agent_api_connection_scopes?: (Array<(string)> | null);
     access_level?: (string | null);
     share_source?: (string | null);
     via_groups?: Array<UserGroupRef>;
@@ -8888,6 +8914,7 @@ export type SharedCredentialPublic = {
     used_in_bundle?: boolean;
     via_groups?: Array<UserGroupRef>;
     allow_bundle_reuse_effective?: boolean;
+    agent_api_connection_scopes?: (Array<(string)> | null);
 };
 
 /**
@@ -10994,6 +11021,14 @@ export type AgentApiListAgentApiConnectionsData = {
 };
 
 export type AgentApiListAgentApiConnectionsResponse = (AgentApiProducerConnections);
+
+export type AgentApiUpdateAgentApiConnectionScopesData = {
+    agentId: string;
+    credentialId: string;
+    requestBody: AgentApiConnectionScopesUpdate;
+};
+
+export type AgentApiUpdateAgentApiConnectionScopesResponse = (AgentApiConnectionScopesPublic);
 
 export type AgentApiDeleteAgentApiConnectionData = {
     agentId: string;

@@ -36,6 +36,7 @@ from app.models import (
     Agent,
     AgentApiConnectedAgent,
     AgentApiConnectionInfo,
+    AgentApiConnectionScopesPublic,
     AgentApiProducerConnection,
     AgentApiToken,
     AgentApiTokenCreate,
@@ -45,20 +46,36 @@ from app.models import (
     ConnectAgentApiRequest,
     ConnectAgentApiResponse,
     CredentialCreate,
+    SecurityEventCreate,
 )
 from app.models.credentials.credential import Credential, CredentialType
+from app.models.events.security_event import AGENT_API_CONNECTION_SCOPES_UPDATED
 from app.models.users.user import User
 
 logger = logging.getLogger(__name__)
 
 
 class AgentApiTokenError(Exception):
-    """Base exception for agent API token errors."""
+    """Base exception for agent API token errors.
 
-    def __init__(self, message: str, status_code: int = 400):
+    ``code`` (optional) is a stable machine-readable reason; when set, the
+    route emits ``{"detail": {"code", "message"}}`` instead of a plain string.
+    """
+
+    def __init__(
+        self, message: str, status_code: int = 400, code: str | None = None
+    ):
         self.message = message
         self.status_code = status_code
+        self.code = code
         super().__init__(message)
+
+    @property
+    def http_detail(self) -> str | dict[str, str]:
+        """The HTTP ``detail``: coded dict when ``code`` is set, else the message."""
+        if self.code is None:
+            return self.message
+        return {"code": self.code, "message": self.message}
 
 
 class AgentApiTokenNotFoundError(AgentApiTokenError):
@@ -170,12 +187,14 @@ class AgentApiTokenService:
         user_id: uuid.UUID,
         data: AgentApiTokenCreate,
         is_superuser: bool = False,
+        scopes: list[str] | None = None,
     ) -> AgentApiTokenCreated:
         """
-        Mint a new opaque token for the producer agent.
+        Mint a new opaque (connection) token for the producer agent.
 
         Returns the token value (once), plus base_url + spec_url so the owner can
-        build an ``agent_api`` credential.
+        build an ``agent_api`` credential. ``scopes`` must already be validated
+        (``_validate_connection_scopes``).
         """
         AgentApiTokenService._verify_agent_ownership(
             session, agent_id, user_id, is_superuser
@@ -192,6 +211,7 @@ class AgentApiTokenService:
             token_prefix=token_prefix,
             label=data.label,
             read_only_override=data.read_only_override,
+            scopes=list(scopes or []),
             is_active=True,
         )
         session.add(token)
@@ -244,6 +264,11 @@ class AgentApiTokenService:
                 "Agent REST API is disabled for this producer agent", status_code=400
             )
 
+        # Before minting: a 400 here leaves no token and no credential.
+        scopes = AgentApiTokenService._validate_connection_scopes(
+            session, agent, data.scopes
+        )
+
         label = data.credential_label or f"{agent.name} API"
 
         # Derive the credential's workspace so it lands in the same workspace
@@ -282,6 +307,7 @@ class AgentApiTokenService:
                 read_only_override=data.read_only_override,
             ),
             is_superuser=is_superuser,
+            scopes=scopes,
         )
 
         # 2. Create the agent_api credential owned by the caller.
@@ -342,6 +368,178 @@ class AgentApiTokenService:
             base_url=created.base_url,
             spec_url=created.spec_url,
             linked_consumer_agent_id=linked_consumer_agent_id,
+            scopes=scopes,
+        )
+
+    # ------------------------------------------------------------------ #
+    # Connection scopes                                                    #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _validate_connection_scopes(
+        session: Session, producer: Agent, scopes: list[str] | None
+    ) -> list[str]:
+        """Sanitize and strictly validate scopes against the producer's catalog.
+
+        ``[]`` (after sanitization) is always valid and clears. Any name the
+        producer's cached policy does not declare is a 400 ``unknown_scope``
+        (an empty / not-yet-harvested catalog rejects every name).
+        """
+        from app.services.agent_api.agent_api_grant_service import (
+            AgentApiGrantService,
+            sanitize_scopes,
+        )
+
+        cleaned = sanitize_scopes(scopes)
+        if not cleaned:
+            return []
+        declared = AgentApiGrantService.declared_scope_names(session, producer)
+        declared_set = set(declared)
+        unknown = [name for name in cleaned if name not in declared_set]
+        if unknown:
+            if declared:
+                message = (
+                    f"Unknown scope(s) for {producer.name}: {', '.join(unknown)}. "
+                    f"Declared: {', '.join(declared)}"
+                )
+            else:
+                message = (
+                    f"Unknown scope(s) for {producer.name}: {', '.join(unknown)}. "
+                    "This API declares no scopes"
+                )
+            raise AgentApiTokenError(message, status_code=400, code="unknown_scope")
+        return cleaned
+
+    @staticmethod
+    async def update_connection_scopes(
+        session: Session,
+        agent_id: uuid.UUID,
+        credential_id: uuid.UUID,
+        user: User,
+        scopes: list[str],
+    ) -> AgentApiConnectionScopesPublic:
+        """Replace the scopes a connection carries (producer owner / superuser).
+
+        Visibility (else 404 ``not_found``, no existence leak): the caller is a
+        superuser, holds the credential (owner or direct/group share), or owns
+        the producer the connection points at. A holder who is not the producer
+        owner gets 403 ``not_owner``. No token rotation, no credential change,
+        no env resync: the proxy reads the token row fresh on every call.
+        """
+        from app.services.credentials.credential_share_service import (
+            CredentialShareService,
+        )
+        from app.services.events.security_event_service import (
+            SecurityEventService,
+        )
+
+        def not_found() -> AgentApiTokenError:
+            return AgentApiTokenError(
+                "Connection not found", status_code=404, code="not_found"
+            )
+
+        credential = session.get(Credential, credential_id)
+        if credential is None:
+            raise not_found()
+
+        token: AgentApiToken | None = None
+        if credential.type == CredentialType.AGENT_API:
+            token = session.exec(
+                select(AgentApiToken).where(
+                    AgentApiToken.credential_id == credential_id
+                )
+            ).first()
+
+        is_holder = user.is_superuser or CredentialShareService.can_user_access_credential(
+            session, credential_id, user.id
+        )
+        owns_producer = False
+        if token is not None and token.agent_id == agent_id:
+            producer_row = session.get(Agent, agent_id)
+            owns_producer = (
+                producer_row is not None and producer_row.owner_id == user.id
+            )
+        if not (is_holder or owns_producer):
+            raise not_found()
+
+        if token is None or token.kind != AgentApiTokenKind.CONNECTION.value:
+            raise AgentApiTokenError(
+                "Not an agent API connection. Issued keys take scopes from the "
+                "person's grant.",
+                status_code=400,
+                code="not_a_connection",
+            )
+        if token.agent_id is None:
+            raise AgentApiTokenError(
+                "The producer agent of this connection was removed",
+                status_code=409,
+                code="producer_removed",
+            )
+        if token.agent_id != agent_id:
+            raise not_found()
+        producer = session.get(Agent, agent_id)
+        if producer is None:
+            raise AgentApiTokenError(
+                "The producer agent of this connection was removed",
+                status_code=409,
+                code="producer_removed",
+            )
+        if producer.owner_id != user.id and not user.is_superuser:
+            raise AgentApiTokenError(
+                f"Only the owner of {producer.name} can change this "
+                "connection's scopes.",
+                status_code=403,
+                code="not_owner",
+            )
+
+        cleaned = AgentApiTokenService._validate_connection_scopes(
+            session, producer, scopes
+        )
+        scopes_before = list(token.scopes or [])
+        if list(cleaned) == scopes_before:
+            # Nothing to write: skip the updated_at bump and the audit event
+            # for a change that never happened.
+            return AgentApiConnectionScopesPublic(
+                credential_id=credential_id,
+                producer_agent_id=producer.id,
+                token_id=token.id,
+                scopes=scopes_before,
+            )
+        token.scopes = cleaned
+        token.updated_at = datetime.now(UTC)
+        session.add(token)
+        session.commit()
+        session.refresh(token)
+
+        try:
+            await SecurityEventService.create_event(
+                session=session,
+                user_id=user.id,
+                data=SecurityEventCreate(
+                    agent_id=producer.id,
+                    event_type=AGENT_API_CONNECTION_SCOPES_UPDATED,
+                    severity="medium",
+                    details={
+                        "producer_agent_id": str(producer.id),
+                        "credential_id": str(credential_id),
+                        "token_prefix": token.token_prefix,
+                        "scopes_before": scopes_before,
+                        "scopes_after": list(cleaned),
+                    },
+                ),
+            )
+        except Exception:
+            logger.exception(
+                "Failed to write SecurityEvent %s for credential %s",
+                AGENT_API_CONNECTION_SCOPES_UPDATED,
+                credential_id,
+            )
+
+        return AgentApiConnectionScopesPublic(
+            credential_id=credential_id,
+            producer_agent_id=producer.id,
+            token_id=token.id,
+            scopes=list(cleaned),
         )
 
     @staticmethod
@@ -379,6 +577,7 @@ class AgentApiTokenService:
         producer_agent_name: str | None = None
         producer_ui_color_preset: str | None = None
         producer_owned_by_viewer = False
+        producer: Agent | None = None
         if producer_agent_id is not None:
             producer = session.get(Agent, producer_agent_id)
             if producer is not None:
@@ -393,8 +592,19 @@ class AgentApiTokenService:
                 AgentApiToken.credential_id == credential_id
             )
         ).first()
+        connection_scopes: list[str] = []
+        can_edit_scopes = False
         if token is not None:
             read_only = token.read_only_override
+            if token.kind == AgentApiTokenKind.CONNECTION.value:
+                connection_scopes = list(token.scopes or [])
+                # Editable only through a live producer the viewer owns (or as
+                # superuser) — the same gate update_connection_scopes applies.
+                can_edit_scopes = (
+                    producer is not None
+                    and token.agent_id == producer.id
+                    and (producer.owner_id == user_id or is_superuser)
+                )
 
         consumer_agent_ids = CredentialsService.get_affected_agents(
             session, credential_id
@@ -416,6 +626,8 @@ class AgentApiTokenService:
             spec_url=data.get("spec_url", ""),
             read_only=read_only,
             consumer_agents=consumer_agents,
+            connection_scopes=connection_scopes,
+            can_edit_scopes=can_edit_scopes,
         )
 
     @staticmethod
@@ -477,6 +689,7 @@ class AgentApiTokenService:
                     token_prefix=token.token_prefix,
                     read_only=token.read_only_override,
                     consumer_agents=consumer_agents,
+                    connection_scopes=list(token.scopes or []),
                     created_at=token.created_at,
                 )
             )

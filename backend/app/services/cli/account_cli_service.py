@@ -810,6 +810,7 @@ class AccountCLIService:
                 read_only_override=body.read_only_override,
                 consumer_agent_id=body.consumer_agent_id,
                 service_uri=body.service_uri,
+                scopes=body.scopes,
             ),
             is_superuser=user.is_superuser,
         )
@@ -825,6 +826,7 @@ class AccountCLIService:
                     "producer_agent_id": str(body.producer_agent_id),
                     "credential_id": str(result.credential_id),
                     "token_prefix": result.token_prefix,
+                    "scopes": list(result.scopes),
                     "ip": client_ip(request),
                 },
             ),
@@ -1924,6 +1926,7 @@ class AccountCLIService:
         credential,
         key_states: dict | None = None,
         reusable_ids: set[uuid.UUID] | None = None,
+        connection_scopes: dict | None = None,
     ) -> "CredentialPublic":
         """Project a ``Credential`` → ``CredentialPublic`` (no secret values).
 
@@ -1932,12 +1935,17 @@ class AccountCLIService:
         ``agent_api`` credential (``key_states`` is the page's batched
         ``key_states_by_credential``; omitted = resolve this one row) and
         ``allow_bundle_reuse_effective`` (``reusable_ids`` is the page's batched
-        ``reuse_effective_ids``; omitted = resolve this one row). Decryption
+        ``reuse_effective_ids``; omitted = resolve this one row) and the
+        connection scopes (``connection_scopes`` is the page's batched
+        ``connection_scopes_by_credential``; omitted = this one row). Decryption
         happens only to compute the status server-side; the plaintext never
         leaves this function.
         """
         from app.models.credentials.credential import CredentialPublic
-        from app.services.agent_api.agent_api_key_status import key_status_value
+        from app.services.agent_api.agent_api_key_status import (
+            connection_scopes_value,
+            key_status_value,
+        )
         from app.services.credentials.credential_reuse_policy import (
             reuse_effective_ids,
         )
@@ -1978,6 +1986,9 @@ class AccountCLIService:
             placeholder_source_id=credential.placeholder_source_id,
             status=status,
             agent_api_key_status=key_status_value(db, credential, key_states),
+            agent_api_connection_scopes=connection_scopes_value(
+                db, credential, connection_scopes
+            ),
             allow_bundle_reuse_effective=credential.id in reusable_ids,
         )
 
@@ -1986,6 +1997,7 @@ class AccountCLIService:
         db: Session,
         resolved: "ResolvedSharedCredential",
         key_states: dict | None = None,
+        connection_scopes: dict | None = None,
     ) -> "CredentialPublic":
         """Project a credential shared WITH the caller → ``CredentialPublic``.
 
@@ -1996,7 +2008,10 @@ class AccountCLIService:
         computes ``status`` server-side.
         """
         from app.models.credentials.credential import CredentialPublic
-        from app.services.agent_api.agent_api_key_status import key_status_value
+        from app.services.agent_api.agent_api_key_status import (
+            connection_scopes_value,
+            key_status_value,
+        )
         from app.services.credentials.credentials_service import CredentialsService
 
         credential = resolved.credential
@@ -2031,6 +2046,9 @@ class AccountCLIService:
                 share_source=resolved.source,
             ),
             agent_api_key_status=key_status_value(db, credential, key_states),
+            agent_api_connection_scopes=connection_scopes_value(
+                db, credential, connection_scopes
+            ),
             access_level=resolved.access_level,
             share_source=resolved.source,
             via_groups=resolved.via_groups,
@@ -2088,6 +2106,7 @@ class AccountCLIService:
             CredentialType,
         )
         from app.services.agent_api.agent_api_key_status import (
+            connection_scopes_by_credential,
             key_states_by_credential,
         )
         from app.services.credentials.credential_reuse_policy import (
@@ -2127,20 +2146,23 @@ class AccountCLIService:
             key=lambda row: by_name(row.credential),
         )
 
-        key_states = key_states_by_credential(
-            db,
-            [
-                c.id
-                for c in [*owned, *(row.credential for row in shared)]
-                if c.type == CredentialType.AGENT_API
-            ],
-        )
+        agent_api_ids = [
+            c.id
+            for c in [*owned, *(row.credential for row in shared)]
+            if c.type == CredentialType.AGENT_API
+        ]
+        key_states = key_states_by_credential(db, agent_api_ids)
+        connection_scopes = connection_scopes_by_credential(db, agent_api_ids)
         reusable_ids = reuse_effective_ids(db, owned)
         data = [
-            AccountCLIService._credential_public(db, c, key_states, reusable_ids)
+            AccountCLIService._credential_public(
+                db, c, key_states, reusable_ids, connection_scopes
+            )
             for c in owned
         ] + [
-            AccountCLIService._shared_credential_public(db, row, key_states)
+            AccountCLIService._shared_credential_public(
+                db, row, key_states, connection_scopes
+            )
             for row in shared
         ]
         return CredentialsPublic(data=data, count=len(data))
