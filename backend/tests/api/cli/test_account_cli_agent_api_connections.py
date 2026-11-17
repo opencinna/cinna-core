@@ -321,3 +321,122 @@ def test_cli_filing_shares_the_per_requester_rate_limit_with_the_env_route(
     assert int(r.headers["Retry-After"]) >= 1
     assert r.json()["detail"]["code"] == "rate_limited"
     assert client.get(url, headers=acc).json()["count"] == 10
+
+
+def _spec_url(agent_id, credential_id) -> str:
+    return f"{_list_url(agent_id)}/{credential_id}/spec"
+
+
+def test_connection_spec_success_and_coded_producer_refusals(
+    client: TestClient, superuser_token_headers: dict[str, str], monkeypatch
+) -> None:
+    """C3: raw spec on success; each producer-side refusal maps to its code."""
+    from app.services.agent_api.agent_api_service import (
+        AgentApiDisabledError,
+        AgentApiError,
+        AgentApiNotRunningError,
+        AgentApiService,
+    )
+
+    su = superuser_token_headers
+    _, h = make_developer(client, su)
+    pid = setup_producer(client, h, name="Spec Producer")["id"]
+    c = connected_consumer(client, h, pid, name="Spec Consumer")
+    url = _spec_url(c["agent"]["id"], c["connection"]["credential_id"])
+    acc = _acc(client, h)
+
+    env = object()
+    state: dict = {"policy": {"expose_spec": True}, "spec": {}, "resolve_exc": None}
+    spec = {"openapi": "3.1.0", "info": {"title": "Producer", "version": "9.9"}, "paths": {}}
+    state["spec"] = spec
+
+    async def fake_resolve(db, producer):
+        if state["resolve_exc"]:
+            raise state["resolve_exc"]
+        return env
+
+    async def fake_policy(db, environment):
+        return state["policy"]
+
+    async def fake_spec(db, environment, **kw):
+        if isinstance(state["spec"], Exception):
+            raise state["spec"]
+        return state["spec"]
+
+    monkeypatch.setattr(AgentApiService, "resolve_running_producer_env", staticmethod(fake_resolve))
+    monkeypatch.setattr(AgentApiService, "load_policy", staticmethod(fake_policy))
+    monkeypatch.setattr(AgentApiService, "get_spec", staticmethod(fake_spec))
+    monkeypatch.setattr(
+        AgentApiService, "update_last_activity", staticmethod(lambda db, e: None)
+    )
+
+    # ── success: raw producer spec, no token ──
+    r = client.get(url, headers=acc)
+    assert r.status_code == 200, r.text
+    assert r.json() == spec
+    assert c["connection"]["token"] not in r.text
+
+    # ── 403 spec_not_exposed ──
+    state["policy"] = {"expose_spec": False}
+    r = client.get(url, headers=acc)
+    assert r.status_code == 403, r.text
+    assert r.json()["detail"]["code"] == "spec_not_exposed"
+    assert r.json()["detail"]["message"]
+    state["policy"] = {"expose_spec": True}
+
+    # ── 400 api_disabled ──
+    state["resolve_exc"] = AgentApiDisabledError()
+    r = client.get(url, headers=acc)
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"]["code"] == "api_disabled"
+    assert r.json()["detail"]["message"]
+
+    # ── 503 env_unavailable ──
+    state["resolve_exc"] = AgentApiNotRunningError()
+    r = client.get(url, headers=acc)
+    assert r.status_code == 503, r.text
+    assert r.json()["detail"]["code"] == "env_unavailable"
+    assert r.json()["detail"]["message"]
+    state["resolve_exc"] = None
+
+    # ── 502 producer_error ──
+    state["spec"] = AgentApiError("Spec harvest failed", status_code=502)
+    r = client.get(url, headers=acc)
+    assert r.status_code == 502, r.text
+    assert r.json()["detail"] == {"code": "producer_error", "message": "Spec harvest failed"}
+
+    # ── auth still required ──
+    assert client.get(url, headers=h).status_code == 401
+
+
+def test_capability_request_malformed_inputs_400_vs_422(
+    client: TestClient, superuser_token_headers: dict[str, str]
+) -> None:
+    """C4: only an invalid Content-Length is 400 invalid_request; bad bodies are 422."""
+    su = superuser_token_headers
+    _, h = make_developer(client, su)
+    pid = setup_producer(client, h, name="Malformed Producer")["id"]
+    c = connected_consumer(client, h, pid, name="Malformed Consumer")
+    acc = _acc(client, h)
+    url = _cap_url(c["agent"]["id"], c["connection"]["credential_id"])
+
+    # ── invalid Content-Length header -> 400 invalid_request ──
+    r = client.post(
+        url,
+        headers={**acc, "Content-Type": "application/json", "Content-Length": "abc"},
+        content=json.dumps(valid_body()),
+    )
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"]["code"] == "invalid_request"
+    assert r.json()["detail"]["message"]
+
+    # ── non-JSON and non-object bodies -> 422 invalid_capability_request ──
+    for content in (b"not json", b"[1, 2]", b'"str"', b""):
+        r = client.post(
+            url, headers={**acc, "Content-Type": "application/json"}, content=content
+        )
+        assert r.status_code == 422, (content, r.text)
+        assert r.json()["detail"]["code"] == "invalid_capability_request"
+
+    # nothing was filed by the refused attempts
+    assert client.get(url, headers=acc).json()["count"] == 0
