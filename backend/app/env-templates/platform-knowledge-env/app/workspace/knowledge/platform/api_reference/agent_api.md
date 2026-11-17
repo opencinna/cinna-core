@@ -37,6 +37,7 @@ Auto-generated from OpenAPI spec. Tag: `agent-api`
   - `read_only_override`: boolean
   - `consumer_agent_id`: string | null
   - `service_uri`: string | null
+  - `scopes`: string[]
 
 **Response:** `ConnectAgentApiResponse`
 
@@ -49,6 +50,20 @@ Auto-generated from OpenAPI spec. Tag: `agent-api`
 - `agent_id`: uuid
 
 **Response:** `AgentApiProducerConnections`
+
+---
+
+## PUT `/api/v1/agents/{agent_id}/agent-api/connections/{credential_id}/scopes`
+**Update Agent Api Connection Scopes**
+
+**Path parameters:**
+- `agent_id`: uuid
+- `credential_id`: uuid
+
+**Request body** (`AgentApiConnectionScopesUpdate`):
+  - `scopes`: string[] (required)
+
+**Response:** `AgentApiConnectionScopesPublic`
 
 ---
 

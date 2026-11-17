@@ -38,6 +38,7 @@ Every call to `/api/v1/agent-api/{agent_id}/*` is authenticated by one opaque `a
 | Credential owner | the consumer's owner | the **recipient** (`subject_user_id`), never the issuer |
 | Token | never shown, machine-only | revealed **to the recipient only**, from their credential; the issuer never sees a key issued to someone else |
 | Identity | anonymous by default; the separate `owner_identity_token` is injected into the consumer container | **bound to the key** (the recipient); the proxy ignores any caller-identity header |
+| Scopes | **owner-chosen scopes on the connection itself** (optional at creation, editable later by the producer owner); every caller through it holds them | none on the token; scopes live on the recipient's grant |
 | Revoke | delete credential → token cascade | issuer: **soft revoke** (credential survives, shows why); recipient: delete credential → cascade |
 | Credentials-page tab | Automatic Credentials | **My Credentials** |
 | `CredentialShare` | allowed (safe — anonymous, narrowed proxy) | **forced off** — identity-bound |
@@ -201,6 +202,20 @@ A **bundle publisher** who consumes one or more identity-enabled producers via l
 - **No grant ⇒ no scopes.** An attributed-but-unscoped (or anonymous) caller arrives with an empty scope list; the producer decides what such a caller may do.
 - **The producer is the primary enforcer.** It reads `caller.scopes` (capability level) and does the **data-level** authorization the platform cannot know ("user-E may touch archive-E, not archive-F"). The platform can *optionally* hard-deny scope-gated endpoints at the edge (see below), but that is defense-in-depth, not a replacement.
 - **Scopes opt-in.** Scope injection (and the optional edge enforcement) only happen when the producer turns on the per-user-scopes switch (`agent_api_identity_enabled`). Identity *attribution* (`X-Cinna-Caller-User-Id/-Email/-Username`) is honored regardless of the flag — only scopes are gated by it, keeping the change backward-compatible.
+
+### Connection scopes
+
+A **connection** can carry its own scopes, chosen by the producer's owner, so "whoever uses this connection may read btc data" works without a per-person grant.
+
+- **Effective scopes = the caller's grant plus the connection's scopes** (grant first, de-duplicated). A connection with no scopes behaves exactly as before; adding scopes can only turn a refusal into a pass. One resolver (`AgentApiGrantService.effective_scopes_for_call`) serves the proxy and the CLI connections listing.
+- **They apply regardless of identity.** A call through a scoped connection carries the connection's scopes even when the caller is anonymous and even when the producer has per-user scopes switched off; only the caller's own grant stays gated by that switch. The edge-enforcement gate is unchanged, so nothing is narrower than before. Issued keys carry no connection scopes.
+- **The connection is identified only from the bearer token** (a `kind="connection"` token row). Nothing the caller sends names it, and inbound `X-Cinna-Caller-*` headers are stripped.
+- **Same for every holder:** direct and group recipients, bundle installers (same token path) and the owner's own agents.
+- **Only the producer owner (or a superuser) sets them**: optionally on create (the Connect request, the web create dialog, `POST /cli/account/connect/agent-api` take `scopes`), and later through `PUT /agents/{producer}/agent-api/connections/{credential}/scopes`, effective on the next call without rotating the token. `[]` clears. Names must be declared in the producer's `policy.yaml` catalog (strict: an empty catalog rejects any name). Lists are capped at 100 items. Setting the same list again changes nothing and records no event.
+- **Refusals** (`{"detail": {"code", "message"}}`): `unknown_scope` 400, `not_a_connection` 400 (issued keys take scopes from the grant), `not_owner` 403 (a holder who does not own the producer), `not_found` 404 (also for strangers), `producer_removed` 409.
+- **Audit:** security event `AGENT_API_CONNECTION_SCOPES_UPDATED` (producer, credential, 8-char token prefix, scopes before and after; never a token value).
+- **Seeing them:** `GET /credentials/{id}/agent-api-connection` stays owner-only; recipients read `agent_api_connection_scopes` from `SharedCredentialPublic` / `CredentialPublic` (null for non-connections). The web connection page shows a **Connection scopes** card (owner: edit dialog limited to the producer's catalog; recipient: read-only) and the create dialog has a scope picker.
+- **Producer code:** a producer that treats `me.is_anonymous` as "no scopes" now sees scoped anonymous callers; authorize on `me.has_scope(...)`. A 403 "requires the '<scope>' scope" through a connection means: ask the producer's owner to add the scope to the connection, or to grant you.
 
 ### How the producer reads it (SDK `caller`)
 
@@ -495,6 +510,8 @@ Plan item 10 proposed an optional producer-facing `/introspect` endpoint (an OAu
 ---
 
 ## Changelog
+
+- **2026-11-17 — Connection scopes.** A connection carries owner-chosen scopes on its token; a call's effective scopes are the caller's grant plus the connection's, also for anonymous callers and with identity off. Owner-only update route, coded refusals, security event, web card and picker.
 
 - **2026-10-19 — Group scope grants.** Scopes can be granted to user groups; effective scopes are a live union of personal and active-group scopes.
 

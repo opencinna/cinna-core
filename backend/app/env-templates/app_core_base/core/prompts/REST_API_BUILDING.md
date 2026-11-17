@@ -101,6 +101,12 @@ caller's identity and strips any client-forged values before your code runs):
 - `me.scopes` — the **list of capability scopes** the platform resolved for this
   caller (see *Per-user scopes* under Policy). Empty when the caller has no grant
   or you haven't enabled per-user access.
+  They are the caller's grant **plus** the scopes of the connection the call came
+  through. A call through a scoped connection carries those scopes even when the
+  caller is anonymous (`me.is_anonymous`) or per-user access is off, so authorize on
+  `me.has_scope(...)`, not on identity presence. If a caller hits your 403
+  "requires the '<scope>' scope" through a connection, the fix is for your owner to
+  add the scope to that connection (or grant the caller).
 - `me.has_scope("orders.write")` — convenience check against `me.scopes`.
 
 **You are the primary authorizer.** `caller` tells you *who* and *what scopes*;

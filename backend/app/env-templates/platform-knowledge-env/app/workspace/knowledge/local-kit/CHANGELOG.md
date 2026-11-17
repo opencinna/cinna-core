@@ -16,6 +16,17 @@ folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
 
+## 1.25.0 — agent API connections carry scopes
+
+Additive. Every 1.x folder stays valid.
+
+- **`guides/04-credentials.md`** — a connection can carry owner-chosen scopes that
+  every caller through it holds, on top of their own grant, also when the caller
+  is anonymous. A 403 "requires the '<scope>' scope" through a connection means
+  asking the producer's owner to add the scope to the connection, or to grant
+  you. `cinna agent-api connections` reports the effective `scopes` and, separately,
+  `connection_scopes`.
+
 ## 1.24.2 — the CLI reaches agent API connections
 
 Wording only. Every 1.x folder stays valid.

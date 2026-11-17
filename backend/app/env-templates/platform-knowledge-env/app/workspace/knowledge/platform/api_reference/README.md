@@ -23,7 +23,7 @@ Routes marked *Not available via `cinna api`* are refused by the account CLI esc
 | Admin Llm Providers | [admin_llm_providers.md](./admin_llm_providers.md) | 7 |
 | Admin Routing | [admin_routing.md](./admin_routing.md) | 6 |
 | Admin User Groups | [admin_user_groups.md](./admin_user_groups.md) | 13 |
-| Agent Api | [agent_api.md](./agent_api.md) | 18 |
+| Agent Api | [agent_api.md](./agent_api.md) | 19 |
 | Agent Api Public | [agent_api_public.md](./agent_api_public.md) | 3 |
 | Agent Api Requests | [agent_api_requests.md](./agent_api_requests.md) | 3 |
 | Agent Artifacts | [agent_artifacts.md](./agent_artifacts.md) | 1 |

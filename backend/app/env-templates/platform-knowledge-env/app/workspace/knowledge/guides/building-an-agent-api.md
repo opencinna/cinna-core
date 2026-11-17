@@ -68,6 +68,13 @@ The essentials:
   `me.has_scope("orders.write")`. **You are the primary authorizer** — branch on
   `me.scopes` / `me.user_id` and enforce your own rules. Anonymous callers
   (`me.user_id is None`) must be handled explicitly.
+  `me.scopes` is the caller's grant plus the scopes of the **connection** the call
+  came through, so an anonymous caller (or any call when per-user scopes are off)
+  can hold scopes: check `me.has_scope(...)`, not identity presence. A 403
+  "requires the '<scope>' scope" through a connection means: ask the producer's
+  owner to add the scope to the connection (owners set them on the connection's
+  credential page or with `PUT agents/<id>/agent-api/connections/<credential>/scopes`),
+  or to grant you.
 
 Scaffold a running starter (`orders.py` + `policy.yaml`) from a building session:
 

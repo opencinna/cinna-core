@@ -317,6 +317,7 @@ Auto-generated from OpenAPI spec. Tag: `cli`
   - `credential_label`: string | null
   - `read_only_override`: boolean
   - `service_uri`: string | null
+  - `scopes`: string[]
 
 **Response:** `ConnectAgentApiResponse`
 

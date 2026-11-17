@@ -244,6 +244,11 @@ the Settings pages.
    and the `ConnectAgentApiResponse` is returned (credential_id, token_prefix,
    base_url, spec_url, linked_consumer_agent_id).
 4. `CLI_ACCOUNT_CONNECT_AGENT_API` security event is written.
+   The body may carry `scopes` (owner-chosen connection scopes, validated against the
+   producer's `policy.yaml` catalog before anything is minted; `unknown_scope` 400
+   leaves no token or credential). The response echoes `scopes`. The event also records
+   them. Later changes: `cinna api PUT agents/<p>/agent-api/connections/<c>/scopes`
+   (producer owner only; no dedicated CLI verb yet).
 5. Requires `agent-developer` role.
 
 **Connect MCP Provider (`cinna connect mcp`):**
@@ -282,6 +287,8 @@ linked):
   `unavailable_reason` when not, and `sdk_lookup` (what to pass to `agent_api_session(...)`:
   the slot, or the credential id when there is no slot or another linked credential carries
   the same slot, since the SDK would pick the first match). `improvement_requests_url` is null when not usable.
+  Each row's `scopes` is the **effective** set (the agent owner's grant plus the connection's
+  scopes) and `connection_scopes` reports the connection's own scopes separately (also when not usable; `[]` for issued keys).
 - **Spec** of the producer through a connection (raw JSON).
 - **File** and **list** capability requests with the linked connection, server-side, so the
   token never leaves core. Same validation, 64 KiB cap and per-requester rate limit as the
