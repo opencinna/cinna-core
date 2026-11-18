@@ -16,6 +16,14 @@ folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
 
+## 1.25.1 — the agent API CLI verbs are released
+
+Wording only. Every 1.x folder stays valid.
+
+- **`guides/04-credentials.md`** — `cinna agent-api request file|list` is no
+  longer described as planned verb names for a future CLI; these verbs need
+  cinna-cli 0.7.0 or newer.
+
 ## 1.25.0 — agent API connections carry scopes
 
 Additive. Every 1.x folder stays valid.

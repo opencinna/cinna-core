@@ -346,10 +346,9 @@ filed = api.file_capability_request(
    `resolution_note`. When one is `completed`, re-read the spec before using the
    new capability.
 
-From the account workspace (CLI >= next release) a builder can also file and list
-these through the consumer agent's linked connection, without the token:
-`cinna agent-api connections <agent>` then `cinna agent-api request file|list`
-(planned verb names).
+From the account workspace (cinna-cli 0.7.0 or newer) a builder can also file and
+list these through the consumer agent's linked connection, without the token:
+`cinna agent-api connections <agent>` then `cinna agent-api request file|list`.
 
 Limits: the caller must be **identified** (an anonymous call is a 401); at most
 10 requests per producer and 30 overall per rolling 24 hours (429 with

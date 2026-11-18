@@ -127,8 +127,8 @@ the API:
    From the account workspace you can instead use the CLI, which files with the linked
    connection so the token stays on the platform: `cinna agent-api connections <agent>`
    shows each connection's `improvement_requests_url` and `sdk_lookup`, and
-   `cinna agent-api request file|list` files or lists requests (planned verb names,
-   CLI >= next release).
+   `cinna agent-api request file|list` files or lists requests (these verbs need
+   cinna-cli 0.7.0 or newer).
    A 403 "requires the '<scope>' scope" through a shared connection means the
    producer's owner must add that scope to the connection (they can choose scopes on
    it), or grant you; the `scopes` the connections listing reports are the effective

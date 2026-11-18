@@ -272,8 +272,8 @@ the producer (consistent with the UI), not on the stricter `can_build` predicate
 (which additionally bars foreign installs). A foreign install the user owns can
 still be the target of a connect operation from the CLI.
 
-**Using a connection from the CLI (`cinna agent-api connections` / `request`; planned verb
-names, CLI >= next release).** A builder working on a *consumer* agent can see and use the
+**Using a connection from the CLI (`cinna agent-api connections` / `request`; needs
+cinna-cli 0.7.0 or newer).** A builder working on a *consumer* agent can see and use the
 `agent_api` connections that agent holds without ever seeing the token. All four routes are
 under `/cli/account/agents/{id}/agent-api-connections`, strictly for agents the caller owns
 (every miss is 404 `not_found`: "Agent not found" for a missing agent and for someone else's
